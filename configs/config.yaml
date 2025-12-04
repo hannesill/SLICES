@@ -1,0 +1,26 @@
+defaults:
+  - data: mimic_iv
+  - model: transformer
+  - _self_
+
+# Project info
+project_name: slices
+
+# General settings
+seed: 42
+output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Training settings
+training:
+  max_epochs: 100
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  early_stopping_patience: 10
+
+# Logging
+logging:
+  wandb_project: slices
+  wandb_entity: null  # Set in environment
+  log_every_n_steps: 50
+
