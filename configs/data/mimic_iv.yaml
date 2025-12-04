@@ -1,0 +1,25 @@
+# MIMIC-IV data configuration
+# User must set data_dir to their local MIMIC-IV Parquet files
+
+name: mimic_iv
+
+# Path to local MIMIC-IV Parquet files (user must set this)
+# Expected structure:
+#   ${data_dir}/hosp/patients.parquet
+#   ${data_dir}/hosp/admissions.parquet
+#   ${data_dir}/icu/icustays.parquet
+#   ${data_dir}/icu/chartevents.parquet
+#   etc.
+data_dir: ???  # REQUIRED - set via command line: data.data_dir=/path/to/mimic-iv
+
+# Output directory for processed data
+output_dir: data/processed/mimic_iv
+
+# Extraction settings
+seq_length_hours: 48
+feature_set: core  # core | extended
+
+# Processing settings
+hourly_aggregation: mean  # mean | median | last
+min_stay_hours: 6  # Minimum ICU stay length to include
+

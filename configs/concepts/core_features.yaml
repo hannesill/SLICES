@@ -1,0 +1,76 @@
+# Core feature set: ~35 variables that exist across MIMIC-IV, eICU, HiRID
+# Format: canonical_name -> dataset-specific extraction rules
+
+vitals:
+  heart_rate:
+    mimic_iv:
+      source: chartevents
+      itemid: [220045]
+      value_col: valuenum
+    units: bpm
+    
+  sbp:
+    mimic_iv:
+      source: chartevents
+      itemid: [220050, 220179]  # Arterial, Non-invasive
+      value_col: valuenum
+    units: mmHg
+    
+  dbp:
+    mimic_iv:
+      source: chartevents
+      itemid: [220051, 220180]
+      value_col: valuenum
+    units: mmHg
+    
+  map:
+    mimic_iv:
+      source: chartevents
+      itemid: [220052, 220181, 225312]
+      value_col: valuenum
+    units: mmHg
+    
+  resp_rate:
+    mimic_iv:
+      source: chartevents
+      itemid: [220210, 224690]
+      value_col: valuenum
+    units: breaths/min
+    
+  spo2:
+    mimic_iv:
+      source: chartevents
+      itemid: [220277]
+      value_col: valuenum
+    units: '%'
+    
+  temperature:
+    mimic_iv:
+      source: chartevents
+      itemid: [223761, 223762]  # F, C
+      value_col: valuenum
+      transform: to_celsius  # Convert F to C
+    units: celsius
+
+labs:
+  glucose:
+    mimic_iv:
+      source: labevents
+      itemid: [50931, 50809]  # Glucose, Glucose (whole blood)
+      value_col: valuenum
+    units: mg/dL
+    
+  creatinine:
+    mimic_iv:
+      source: labevents
+      itemid: [50912]
+      value_col: valuenum
+    units: mg/dL
+    
+  # TODO: Add remaining lab features
+  # bun, sodium, potassium, chloride, bicarbonate
+  # ph, pao2, paco2, lactate, base_excess
+  # hemoglobin, hematocrit, wbc, platelets
+  # bilirubin, alt, ast, albumin
+  # inr, ptt
+
