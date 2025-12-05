@@ -1,7 +1,7 @@
 """Entry point for SSL pretraining.
 
 Example usage:
-    python scripts/pretrain.py data.data_dir=/path/to/mimic-iv
+    python scripts/pretrain.py data.parquet_root=/path/to/mimic-iv-parquet
 """
 
 import hydra

@@ -1,19 +1,38 @@
 # MIMIC-IV data configuration
-# User must set data_dir to their local MIMIC-IV Parquet files
 
 name: mimic_iv
 
-# Path to local MIMIC-IV Parquet files (user must set this)
-# Expected structure:
-#   ${data_dir}/hosp/patients.parquet
-#   ${data_dir}/hosp/admissions.parquet
-#   ${data_dir}/icu/icustays.parquet
-#   ${data_dir}/icu/chartevents.parquet
-#   etc.
-data_dir: ???  # REQUIRED - set via command line: data.data_dir=/path/to/mimic-iv
+# ============================================================================
+# DATA SOURCE PATHS
+# ============================================================================
 
-# Output directory for processed data
-output_dir: data/processed/mimic_iv
+# Optional: Path to raw CSV.gz files (only needed if starting from CSVs)
+# If provided, run convert_csv_to_parquet.py first to generate Parquet files
+# Expected structure:
+#   ${csv_root}/hosp/patients.csv.gz
+#   ${csv_root}/hosp/admissions.csv.gz
+#   ${csv_root}/icu/icustays.csv.gz
+#   ${csv_root}/icu/chartevents.csv.gz
+#   etc.
+csv_root: data/raw/mimic-iv-demo # default to demo data
+
+# Required: Path to Parquet files (used by extraction pipeline)
+# - If starting with CSVs: this will be created by convert_csv_to_parquet.py
+# - If starting with Parquet: point this to your existing Parquet directory
+# Expected structure:
+#   ${parquet_root}/hosp/patients.parquet
+#   ${parquet_root}/hosp/admissions.parquet
+#   ${parquet_root}/icu/icustays.parquet
+#   ${parquet_root}/icu/chartevents.parquet 
+#   etc.
+parquet_root: data/parquet/mimic-iv-demo # default to demo data
+
+# ============================================================================
+# OUTPUT PATHS
+# ============================================================================
+
+# Output directory for extracted/processed features
+output_dir: data/processed/mimic-iv-demo # default to demo data
 
 # Extraction settings
 seq_length_hours: 48

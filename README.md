@@ -6,12 +6,13 @@ A benchmark framework for learning universal patient embeddings from unlabeled I
 
 SLICES provides a complete pipeline for:
 
-1. **Data Extraction**: Extract ICU time-series data from local MIMIC-IV Parquet files using DuckDB
-2. **Preprocessing**: Convert raw events into hourly-binned dense tensors with observation masks
-3. **SSL Pretraining**: Train self-supervised models (MAE, JEPA, contrastive) on unlabeled data
-4. **Downstream Evaluation**: Fine-tune and evaluate on clinical prediction tasks
+1. **Data Conversion** (optional): Convert CSV.gz files to Parquet format for efficient queries
+2. **Feature Extraction**: Extract ICU time-series data from local MIMIC-IV Parquet files using DuckDB
+3. **Preprocessing**: Convert raw events into hourly-binned dense tensors with observation masks
+4. **SSL Pretraining**: Train self-supervised models (MAE, JEPA, contrastive) on unlabeled data
+5. **Downstream Evaluation**: Fine-tune and evaluate on clinical prediction tasks
 
-**Key Design Choice**: Users only need to specify their `data_dir` path pointing to local MIMIC-IV Parquet files. No cloud credentials or API keys required.
+**Key Design Choice**: Works entirely with local files. Users can start with either CSV or Parquet files. No cloud credentials or API keys required.
 
 ## Installation
 
@@ -47,24 +48,47 @@ python -c "from slices.data.extractors.base import BaseExtractor; print('Import 
 
 ## Quick Start
 
-### 1. Extract MIMIC-IV Data
+SLICES supports two starting points: **CSV files** or **Parquet files**.
 
-First, ensure you have MIMIC-IV Parquet files locally. Then run:
+### Option A: Starting with CSV Files (Two-Step Process)
 
+If you have MIMIC-IV in CSV.gz format from PhysioNet:
+
+**Step 1: Convert CSV to Parquet**
 ```bash
-python scripts/extract_mimic_iv.py data.data_dir=/path/to/mimic-iv
+python scripts/convert_csv_to_parquet.py \
+    data.csv_root=/path/to/mimic-iv-3.0 \
+    data.parquet_root=/path/to/mimic-iv-parquet
 ```
 
-This will extract and preprocess ICU stays into the format needed for training.
-
-### 2. Pretrain SSL Model
-
+**Step 2: Extract Features**
 ```bash
-python scripts/pretrain.py data.data_dir=/path/to/mimic-iv
+python scripts/extract_mimic_iv.py \
+    data.parquet_root=/path/to/mimic-iv-parquet
 ```
 
-### 3. Fine-tune on Downstream Task
+**Convenience shortcut** (runs both steps):
+```bash
+python scripts/setup_mimic_iv.py data.csv_root=/path/to/mimic-iv-3.0
+```
 
+### Option B: Starting with Parquet Files (Direct Extraction)
+
+If you already have MIMIC-IV in Parquet format:
+
+```bash
+python scripts/extract_mimic_iv.py \
+    data.parquet_root=/path/to/mimic-iv-parquet
+```
+
+### Next Steps
+
+**Pretrain SSL Model**
+```bash
+python scripts/pretrain.py data.parquet_root=/path/to/mimic-iv-parquet
+```
+
+**Fine-tune on Downstream Task**
 ```bash
 python scripts/finetune.py task=mortality checkpoint=/path/to/pretrained.ckpt
 ```
@@ -100,7 +124,9 @@ slices/                          # Repository root
 │   └── concepts/
 │       └── core_features.yaml    # Concept dictionary
 ├── scripts/                       # Entry points (outside src/)
-│   ├── extract_mimic_iv.py
+│   ├── convert_csv_to_parquet.py # Convert CSV.gz to Parquet
+│   ├── setup_mimic_iv.py         # Convenience: convert + extract
+│   ├── extract_mimic_iv.py       # Extract features from Parquet
 │   ├── pretrain.py
 │   └── finetune.py
 └── tests/                         # Tests (outside src/)
@@ -122,17 +148,52 @@ ICU stays are stored as Parquet files with the following schema:
 
 SLICES uses [Hydra](https://hydra.cc/) for configuration management. All configs are in the `configs/` directory.
 
-### Setting Data Directory
+### Data Paths Configuration
 
-The data directory must be set via command line:
+Edit `configs/data/mimic_iv.yaml` or override via command line:
 
+```yaml
+# Optional: Path to raw CSV.gz files (if starting from CSVs)
+csv_root: null  # e.g., /data/mimic-iv-3.0
+
+# Required: Path to Parquet files (used by extraction)
+parquet_root: data/parquet/mimic-iv-demo
+
+# Output for extracted features
+output_dir: data/processed/mimic-iv-demo
+```
+
+**Command-line overrides:**
 ```bash
-python scripts/extract_mimic_iv.py data.data_dir=/path/to/mimic-iv
+# Convert CSVs
+python scripts/convert_csv_to_parquet.py \
+    data.csv_root=/path/to/csv \
+    data.parquet_root=/path/to/parquet
+
+# Extract from Parquet
+python scripts/extract_mimic_iv.py \
+    data.parquet_root=/path/to/parquet
 ```
 
-Expected MIMIC-IV structure:
+### Expected Directory Structures
+
+**CSV format** (from PhysioNet):
 ```
-mimic-iv/
+mimic-iv-3.0/
+├── hosp/
+│   ├── patients.csv.gz
+│   ├── admissions.csv.gz
+│   └── labevents.csv.gz
+├── icu/
+│   ├── icustays.csv.gz
+│   ├── chartevents.csv.gz
+│   └── inputevents.csv.gz
+└── ...
+```
+
+**Parquet format** (after conversion or if pre-converted):
+```
+mimic-iv-parquet/
 ├── hosp/
 │   ├── patients.parquet
 │   ├── admissions.parquet
@@ -142,6 +203,21 @@ mimic-iv/
 │   ├── chartevents.parquet
 │   └── inputevents.parquet
 └── ...
+```
+
+### Environment Variables for Conversion
+
+Fine-tune CSV-to-Parquet conversion performance:
+
+```bash
+# Maximum parallel workers (default: 4)
+export SLICES_CONVERT_MAX_WORKERS=8
+
+# DuckDB memory limit per worker (default: 3GB)
+export SLICES_DUCKDB_MEM=4GB
+
+# DuckDB threads per worker (default: 2)
+export SLICES_DUCKDB_THREADS=4
 ```
 
 ## Development

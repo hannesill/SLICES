@@ -1,7 +1,7 @@
 """Abstract base class for ICU data extractors.
 
 Reads from local Parquet files using DuckDB for efficient SQL queries.
-Users only need to specify data_dir pointing to their local data.
+Users specify parquet_root pointing to their local Parquet files.
 """
 
 from abc import ABC, abstractmethod
@@ -17,10 +17,10 @@ import polars as pl
 class ExtractorConfig:
     """Configuration for data extraction.
     
-    Users only need to specify data_dir - the path to their local Parquet files.
+    Users must specify parquet_root - the path to their local Parquet files.
     """
 
-    data_dir: str  # Path to raw MIMIC-IV (or other) Parquet files
+    parquet_root: str
     output_dir: str = "data/processed"
     seq_length_hours: int = 48
     feature_set: str = "core"  # core | extended
@@ -30,26 +30,26 @@ class BaseExtractor(ABC):
     """Abstract base class for ICU data extractors.
     
     Reads from local Parquet files using DuckDB for efficient SQL queries.
-    Users only need to specify data_dir pointing to their local data.
+    Users specify parquet_root pointing to their local Parquet files.
     """
 
     def __init__(self, config: ExtractorConfig) -> None:
         """Initialize extractor with configuration.
         
         Args:
-            config: Extractor configuration containing data_dir and other settings.
+            config: Extractor configuration containing parquet_root and other settings.
             
         Raises:
-            ValueError: If data directory does not exist.
+            ValueError: If parquet directory does not exist.
         """
         self.config = config
-        self.data_dir = Path(config.data_dir)
+        self.parquet_root = Path(config.parquet_root)
         self.output_dir = Path(config.output_dir)
         self.conn = duckdb.connect()  # In-memory DuckDB for queries
 
-        # Validate data directory exists
-        if not self.data_dir.exists():
-            raise ValueError(f"Data directory not found: {self.data_dir}")
+        # Validate parquet directory exists
+        if not self.parquet_root.exists():
+            raise ValueError(f"Parquet directory not found: {self.parquet_root}")
 
     def _query(self, sql: str) -> pl.DataFrame:
         """Execute SQL query on local Parquet files and return Polars DataFrame.
@@ -63,7 +63,7 @@ class BaseExtractor(ABC):
         return self.conn.execute(sql).pl()
 
     def _parquet_path(self, schema: str, table: str) -> Path:
-        """Get path to a Parquet file: {data_dir}/{schema}/{table}.parquet.
+        """Get path to a Parquet file: {parquet_root}/{schema}/{table}.parquet.
         
         Args:
             schema: Schema/directory name (e.g., 'hosp', 'icu').
@@ -72,7 +72,7 @@ class BaseExtractor(ABC):
         Returns:
             Path to the Parquet file.
         """
-        return self.data_dir / schema / f"{table}.parquet"
+        return self.parquet_root / schema / f"{table}.parquet"
 
     @abstractmethod
     def extract_stays(self) -> pl.DataFrame:

@@ -213,6 +213,6 @@ __marimo__/
 notes/
 
 # SLICES-specific
-data/
+/data/
 outputs/
 wandb/

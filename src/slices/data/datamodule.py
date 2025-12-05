@@ -20,7 +20,7 @@ class ICUDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        data_dir: str,
+        processed_dir: str,
         batch_size: int = 64,
         num_workers: int = 4,
         seq_length: int = 48,
@@ -28,13 +28,13 @@ class ICUDataModule(pl.LightningDataModule):
         """Initialize DataModule.
         
         Args:
-            data_dir: Directory containing preprocessed Parquet files.
+            processed_dir: Directory containing preprocessed/extracted features.
             batch_size: Batch size for training.
             num_workers: Number of data loading workers.
             seq_length: Maximum sequence length in hours.
         """
         super().__init__()
-        self.data_dir = data_dir
+        self.processed_dir = processed_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.seq_length = seq_length
