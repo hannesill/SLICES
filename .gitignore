@@ -211,6 +211,7 @@ __marimo__/
 
 # Notes
 notes/
+docs/
 
 # SLICES-specific
 /data/
