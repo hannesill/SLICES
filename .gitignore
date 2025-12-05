@@ -213,6 +213,6 @@ __marimo__/
 notes/
 
 # SLICES-specific
-data/                    # Raw and processed data
-outputs/                 # Training outputs
-wandb/                   # Weights & Biases logs
+data/
+outputs/
+wandb/
