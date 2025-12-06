@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from slices.data.tasks import TaskBuilder, TaskBuilderFactory, TaskConfig
+from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 console = Console()
 
@@ -217,14 +217,14 @@ class BaseExtractor(ABC):
             "3. Ensure configs/tasks exists relative to source tree"
         )
 
-    def _load_task_configs(self, task_names: List[str]) -> List[TaskConfig]:
+    def _load_task_configs(self, task_names: List[str]) -> List[LabelConfig]:
         """Load task configurations from YAML files.
         
         Args:
             task_names: List of task names to load (e.g., ['mortality_24h']).
             
         Returns:
-            List of TaskConfig instances.
+            List of LabelConfig instances.
         """
         tasks_path = self._get_tasks_path()
         task_configs = []
@@ -238,7 +238,7 @@ class BaseExtractor(ABC):
             with open(config_file) as f:
                 config_dict = yaml.safe_load(f)
             
-            task_configs.append(TaskConfig(**config_dict))
+            task_configs.append(LabelConfig(**config_dict))
         
         return task_configs
 
@@ -477,7 +477,7 @@ class BaseExtractor(ABC):
         """Extract raw data for a specific source (e.g., 'mortality_info', 'creatinine').
         
         This is a low-level method that extracts raw clinical data without computing labels.
-        TaskBuilders call this to get the data they need.
+        LabelBuilders call this to get the data they need.
         
         Args:
             source_name: Name of data source to extract (e.g., 'mortality_info', 
@@ -495,14 +495,14 @@ class BaseExtractor(ABC):
     def extract_labels(
         self, 
         stay_ids: List[int], 
-        task_configs: List[TaskConfig]
+        task_configs: List[LabelConfig]
     ) -> pl.DataFrame:
         """Extract labels for multiple downstream tasks.
         
         This is a framework method that orchestrates label extraction:
         1. Identifies all required data sources from task configs
         2. Extracts raw data for each source (via extract_data_source)
-        3. Uses TaskBuilders to compute labels from raw data
+        3. Uses LabelBuilders to compute labels from raw data
         4. Combines labels into a single DataFrame
         
         Args:
@@ -535,8 +535,8 @@ class BaseExtractor(ABC):
         # Step 3: Build labels for each task
         all_labels = []
         for task_config in task_configs:
-            # Create appropriate TaskBuilder
-            builder: TaskBuilder = TaskBuilderFactory.create(task_config)
+            # Create appropriate LabelBuilder
+            builder: LabelBuilder = LabelBuilderFactory.create(task_config)
             
             # Compute labels
             task_labels = builder.build_labels(raw_data)

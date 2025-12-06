@@ -36,10 +36,10 @@ class TestPackageStructure:
     def test_data_subpackage_importable(self) -> None:
         """Test that data subpackage can be imported."""
         from slices.data import extractors
-        from slices.data import tasks
+        from slices.data import labels
 
         assert extractors is not None
-        assert tasks is not None
+        assert labels is not None
 
     def test_core_classes_importable(self) -> None:
         """Test that core classes can be imported from expected locations."""
@@ -47,8 +47,8 @@ class TestPackageStructure:
         from slices.data.extractors.mimic_iv import MIMICIVExtractor
         from slices.data.dataset import ICUDataset
         from slices.data.datamodule import ICUDataModule, icu_collate_fn
-        from slices.data.tasks import TaskConfig, TaskBuilder, TaskBuilderFactory
-        from slices.data.tasks.mortality import MortalityTaskBuilder
+        from slices.data.labels import LabelConfig, LabelBuilder, LabelBuilderFactory
+        from slices.data.labels.mortality import MortalityLabelBuilder
 
         # Verify classes exist and are the right type
         assert isinstance(BaseExtractor, type)
@@ -57,10 +57,10 @@ class TestPackageStructure:
         assert isinstance(ICUDataset, type)
         assert isinstance(ICUDataModule, type)
         assert callable(icu_collate_fn)
-        assert isinstance(TaskConfig, type)
-        assert isinstance(TaskBuilder, type)
-        assert isinstance(TaskBuilderFactory, type)
-        assert isinstance(MortalityTaskBuilder, type)
+        assert isinstance(LabelConfig, type)
+        assert isinstance(LabelBuilder, type)
+        assert isinstance(LabelBuilderFactory, type)
+        assert isinstance(MortalityLabelBuilder, type)
 
     def test_data_io_importable(self) -> None:
         """Test that data_io module imports successfully."""
@@ -76,11 +76,11 @@ class TestPackageStructure:
         assert issubclass(MIMICIVExtractor, BaseExtractor)
 
     def test_mortality_builder_inherits_base(self) -> None:
-        """Test that MortalityTaskBuilder properly inherits from TaskBuilder."""
-        from slices.data.tasks.base import TaskBuilder
-        from slices.data.tasks.mortality import MortalityTaskBuilder
+        """Test that MortalityLabelBuilder properly inherits from LabelBuilder."""
+        from slices.data.labels.base import LabelBuilder
+        from slices.data.labels.mortality import MortalityLabelBuilder
 
-        assert issubclass(MortalityTaskBuilder, TaskBuilder)
+        assert issubclass(MortalityLabelBuilder, LabelBuilder)
 
     def test_datamodule_inherits_lightning(self) -> None:
         """Test that ICUDataModule inherits from LightningDataModule."""

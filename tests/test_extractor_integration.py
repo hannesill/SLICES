@@ -6,7 +6,7 @@ import polars as pl
 from datetime import datetime
 
 from slices.data.extractors.mimic_iv import MIMICIVExtractor, ExtractorConfig
-from slices.data.tasks import TaskConfig
+from slices.data.labels import LabelConfig
 
 
 class TestExtractorIntegration:
@@ -80,7 +80,7 @@ class TestExtractorIntegration:
         })
         
         # Create task config
-        task_config = TaskConfig(
+        task_config = LabelConfig(
             task_name="mortality_24h",
             task_type="binary_classification",
             prediction_window_hours=24,
@@ -137,19 +137,19 @@ class TestExtractorIntegration:
         
         # Create MULTIPLE task configs (this is the critical test case)
         task_configs = [
-            TaskConfig(
+            LabelConfig(
                 task_name="mortality_24h",
                 task_type="binary_classification",
                 prediction_window_hours=24,
                 label_sources=["stays", "mortality_info"],
             ),
-            TaskConfig(
+            LabelConfig(
                 task_name="mortality_48h",
                 task_type="binary_classification",
                 prediction_window_hours=48,
                 label_sources=["stays", "mortality_info"],
             ),
-            TaskConfig(
+            LabelConfig(
                 task_name="mortality_hospital",
                 task_type="binary_classification",
                 prediction_window_hours=None,
@@ -255,7 +255,7 @@ class TestEdgeCases:
             "discharge_location": [],
         }).cast({"stay_id": pl.Int64, "hospital_expire_flag": pl.Int32})
         
-        task_config = TaskConfig(
+        task_config = LabelConfig(
             task_name="mortality_24h",
             task_type="binary_classification",
             prediction_window_hours=24,
@@ -326,7 +326,7 @@ class TestEdgeCases:
             "discharge_location": ["HOME"] * 3,
         })
         
-        task_config = TaskConfig(
+        task_config = LabelConfig(
             task_name="mortality_hospital",
             task_type="binary_classification",
             prediction_window_hours=None,
@@ -371,7 +371,7 @@ class TestEdgeCases:
         
         # Create 10 different task configs
         task_configs = [
-            TaskConfig(
+            LabelConfig(
                 task_name=f"mortality_task_{i}",
                 task_type="binary_classification",
                 prediction_window_hours=24 * i if i > 0 else None,
