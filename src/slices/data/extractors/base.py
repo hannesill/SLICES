@@ -442,21 +442,6 @@ class BaseExtractor(ABC):
         
         return combined
 
-    def bin_to_hourly(self, df: pl.DataFrame, stay_info: pl.DataFrame) -> pl.DataFrame:
-        """Bin raw events to hourly resolution.
-        
-        Args:
-            df: Raw event DataFrame.
-            stay_info: DataFrame with stay metadata (stay_id, intime, etc.).
-            
-        Returns:
-            DataFrame with hourly-binned data.
-            
-        Raises:
-            NotImplementedError: Method not yet implemented.
-        """
-        # TODO: Implement hourly binning logic
-        raise NotImplementedError
 
     def run(self) -> None:
         """Execute full extraction pipeline.
@@ -470,7 +455,7 @@ class BaseExtractor(ABC):
         stay_ids = stays["stay_id"].to_list()
 
         timeseries = self.extract_timeseries(stay_ids)
-        labels = self.extract_labels(stay_ids)
+        labels = self.extract_labels(stay_ids, [])
 
         # TODO: Combine and save to Parquet
         raise NotImplementedError
