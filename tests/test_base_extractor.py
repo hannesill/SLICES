@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from slices.data.extractors.base import BaseExtractor, ExtractorConfig
-from slices.data.tasks import TaskConfig
+from slices.data.labels import LabelConfig
 
 
 class MockExtractor(BaseExtractor):

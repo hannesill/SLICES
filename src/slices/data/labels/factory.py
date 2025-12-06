@@ -1,34 +1,34 @@
-"""Factory for creating task builders from configurations."""
+"""Factory for creating label builders from configurations."""
 
 from typing import Dict, Type
 
-from .base import TaskBuilder, TaskConfig
-from .mortality import MortalityTaskBuilder
+from .base import LabelBuilder, LabelConfig
+from .mortality import MortalityLabelBuilder
 
 
-class TaskBuilderFactory:
-    """Factory for creating TaskBuilder instances from configurations.
+class LabelBuilderFactory:
+    """Factory for creating LabelBuilder instances from configurations.
     
     Usage:
-        config = TaskConfig(task_name='mortality_24h', ...)
-        builder = TaskBuilderFactory.create(config)
+        config = LabelConfig(task_name='mortality_24h', ...)
+        builder = LabelBuilderFactory.create(config)
         labels = builder.build_labels(raw_data)
     """
 
     # Registry mapping task categories to builder classes
-    _REGISTRY: Dict[str, Type[TaskBuilder]] = {
-        "mortality": MortalityTaskBuilder,
+    _REGISTRY: Dict[str, Type[LabelBuilder]] = {
+        "mortality": MortalityLabelBuilder,
     }
 
     @classmethod
-    def create(cls, config: TaskConfig) -> TaskBuilder:
-        """Create a TaskBuilder instance from configuration.
+    def create(cls, config: LabelConfig) -> LabelBuilder:
+        """Create a LabelBuilder instance from configuration.
         
         Args:
-            config: Task configuration.
+            config: Label configuration.
             
         Returns:
-            Instantiated TaskBuilder for the specified task.
+            Instantiated LabelBuilder for the specified task.
             
         Raises:
             ValueError: If task name doesn't match any registered builder.
@@ -38,7 +38,7 @@ class TaskBuilderFactory:
         
         if task_category not in cls._REGISTRY:
             raise ValueError(
-                f"No TaskBuilder registered for task category '{task_category}'. "
+                f"No LabelBuilder registered for task category '{task_category}'. "
                 f"Available categories: {list(cls._REGISTRY.keys())}"
             )
         
@@ -46,12 +46,12 @@ class TaskBuilderFactory:
         return builder_class(config)
 
     @classmethod
-    def register(cls, category: str, builder_class: Type[TaskBuilder]) -> None:
-        """Register a new TaskBuilder class for a task category.
+    def register(cls, category: str, builder_class: Type[LabelBuilder]) -> None:
+        """Register a new LabelBuilder class for a task category.
         
         Args:
             category: Task category name (e.g., 'aki', 'sepsis').
-            builder_class: TaskBuilder subclass to register.
+            builder_class: LabelBuilder subclass to register.
         """
         cls._REGISTRY[category] = builder_class
 
@@ -72,8 +72,8 @@ class TaskBuilderFactory:
         return task_name.split("_")[0]
 
     @classmethod
-    def list_available(cls) -> Dict[str, Type[TaskBuilder]]:
-        """List all registered task builders.
+    def list_available(cls) -> Dict[str, Type[LabelBuilder]]:
+        """List all registered label builders.
         
         Returns:
             Dictionary mapping categories to builder classes.

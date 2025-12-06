@@ -1,4 +1,4 @@
-"""Base classes for task label extraction."""
+"""Base classes for label extraction."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -8,11 +8,11 @@ import polars as pl
 
 
 @dataclass
-class TaskConfig:
-    """Configuration for a downstream prediction task.
+class LabelConfig:
+    """Configuration for a downstream prediction task label.
     
     This defines WHAT to predict, not HOW to predict it.
-    Separates task definition from extraction logic and model architecture.
+    Separates label definition from extraction logic and model architecture.
     """
 
     task_name: str  # Unique identifier (e.g., 'mortality_24h', 'aki_kdigo')
@@ -37,18 +37,18 @@ class TaskConfig:
     positive_class: Optional[str] = None  # For binary tasks
 
 
-class TaskBuilder(ABC):
+class LabelBuilder(ABC):
     """Abstract base class for building task labels from raw extracted data.
     
-    TaskBuilders implement the logic to convert raw clinical data
+    LabelBuilders implement the logic to convert raw clinical data
     (e.g., mortality flags, creatinine values) into prediction labels.
     """
 
-    def __init__(self, config: TaskConfig) -> None:
-        """Initialize task builder with configuration.
+    def __init__(self, config: LabelConfig) -> None:
+        """Initialize label builder with configuration.
         
         Args:
-            config: Task configuration specifying label definition.
+            config: Label configuration specifying label definition.
         """
         self.config = config
 

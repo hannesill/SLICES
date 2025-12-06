@@ -1,13 +1,13 @@
-"""Mortality prediction task builders."""
+"""Mortality prediction label builders."""
 
 from typing import Dict
 
 import polars as pl
 
-from .base import TaskBuilder, TaskConfig
+from .base import LabelBuilder, LabelConfig
 
 
-class MortalityTaskBuilder(TaskBuilder):
+class MortalityLabelBuilder(LabelBuilder):
     """Build mortality prediction labels with configurable time windows.
     
     Supports multiple prediction windows:
