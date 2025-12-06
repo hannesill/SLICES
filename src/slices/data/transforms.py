@@ -18,6 +18,7 @@ def create_random_mask(
     shape: Tuple[int, ...],
     mask_ratio: float,
     device: torch.device,
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """Create random binary mask.
     
@@ -25,11 +26,12 @@ def create_random_mask(
         shape: Shape of mask tensor.
         mask_ratio: Fraction of elements to mask (set to False).
         device: Device to create mask on.
+        generator: Optional random generator for reproducibility.
         
     Returns:
         Boolean mask where False indicates masked positions.
     """
-    mask = torch.rand(shape, device=device) > mask_ratio
+    mask = torch.rand(shape, device=device, generator=generator) > mask_ratio
     return mask
 
 
@@ -39,10 +41,12 @@ def create_block_mask(
     min_block_size: int = 3,
     max_block_size: int = 10,
     device: torch.device = None,
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """Create block-wise time masking.
     
     Masks contiguous blocks of timesteps to encourage learning temporal structure.
+    Block sizes are capped to not exceed the target mask ratio.
     
     Args:
         shape: Shape (B, T, D) of input.
@@ -50,6 +54,7 @@ def create_block_mask(
         min_block_size: Minimum block size.
         max_block_size: Maximum block size.
         device: Device to create mask on.
+        generator: Optional random generator for reproducibility.
         
     Returns:
         Boolean mask where False indicates masked positions.
@@ -65,19 +70,28 @@ def create_block_mask(
         target_masked = int(T * mask_ratio)
         
         while masked_count < target_masked:
-            # Random block size
-            block_size = torch.randint(min_block_size, max_block_size + 1, (1,)).item()
+            # Calculate remaining budget
+            remaining = target_masked - masked_count
+            
+            # Cap block size to not exceed remaining budget
+            actual_max = min(max_block_size, remaining)
+            if actual_max < min_block_size:
+                # Can't add another block without exceeding target
+                break
+            
+            # Random block size within allowed range
+            block_size = torch.randint(
+                min_block_size, actual_max + 1, (1,), generator=generator
+            ).item()
             # Random start position
-            start = torch.randint(0, max(1, T - block_size + 1), (1,)).item()
+            start = torch.randint(
+                0, max(1, T - block_size + 1), (1,), generator=generator
+            ).item()
             end = min(start + block_size, T)
             
             # Mask the block across all features
             mask[b, start:end, :] = False
             masked_count += (end - start)
-            
-            # Avoid infinite loop if we can't reach exact ratio
-            if masked_count >= T:
-                break
     
     return mask
 
@@ -86,6 +100,7 @@ def create_timestep_mask(
     shape: Tuple[int, int, int],  # (B, T, D)
     mask_ratio: float,
     device: torch.device = None,
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """Create timestep-wise masking (mask entire timesteps across all features).
     
@@ -93,6 +108,7 @@ def create_timestep_mask(
         shape: Shape (B, T, D) of input.
         mask_ratio: Fraction of timesteps to mask.
         device: Device to create mask on.
+        generator: Optional random generator for reproducibility.
         
     Returns:
         Boolean mask where False indicates masked positions.
@@ -102,7 +118,7 @@ def create_timestep_mask(
         device = torch.device("cpu")
     
     # Create mask for timesteps only
-    timestep_mask = torch.rand(B, T, device=device) > mask_ratio  # (B, T)
+    timestep_mask = torch.rand(B, T, device=device, generator=generator) > mask_ratio
     # Broadcast to all features
     mask = timestep_mask.unsqueeze(-1).expand(B, T, D)  # (B, T, D)
     
@@ -113,6 +129,7 @@ def create_feature_mask(
     shape: Tuple[int, int, int],  # (B, T, D)
     mask_ratio: float,
     device: torch.device = None,
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """Create feature-wise masking (mask entire features across all timesteps).
     
@@ -120,6 +137,7 @@ def create_feature_mask(
         shape: Shape (B, T, D) of input.
         mask_ratio: Fraction of features to mask.
         device: Device to create mask on.
+        generator: Optional random generator for reproducibility.
         
     Returns:
         Boolean mask where False indicates masked positions.
@@ -129,7 +147,7 @@ def create_feature_mask(
         device = torch.device("cpu")
     
     # Create mask for features only
-    feature_mask = torch.rand(B, D, device=device) > mask_ratio  # (B, D)
+    feature_mask = torch.rand(B, D, device=device, generator=generator) > mask_ratio
     # Broadcast to all timesteps
     mask = feature_mask.unsqueeze(1).expand(B, T, D)  # (B, T, D)
     
@@ -162,6 +180,7 @@ def create_ssl_mask(
     min_block_size: int = 3,
     max_block_size: int = 10,
     device: torch.device = None,
+    generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """Create SSL mask using specified strategy.
     
@@ -176,6 +195,7 @@ def create_ssl_mask(
         min_block_size: Min block size for block masking.
         max_block_size: Max block size for block masking.
         device: Device to create mask on.
+        generator: Optional random generator for reproducibility.
         
     Returns:
         Boolean mask where False indicates positions to mask for SSL.
@@ -185,15 +205,15 @@ def create_ssl_mask(
     
     # Create base mask based on strategy
     if strategy == "random":
-        ssl_mask = create_random_mask(shape, mask_ratio, device)
+        ssl_mask = create_random_mask(shape, mask_ratio, device, generator)
     elif strategy == "block":
         ssl_mask = create_block_mask(
-            shape, mask_ratio, min_block_size, max_block_size, device
+            shape, mask_ratio, min_block_size, max_block_size, device, generator
         )
     elif strategy == "timestep":
-        ssl_mask = create_timestep_mask(shape, mask_ratio, device)
+        ssl_mask = create_timestep_mask(shape, mask_ratio, device, generator)
     elif strategy == "feature":
-        ssl_mask = create_feature_mask(shape, mask_ratio, device)
+        ssl_mask = create_feature_mask(shape, mask_ratio, device, generator)
     else:
         raise ValueError(
             f"Unknown masking strategy '{strategy}'. "

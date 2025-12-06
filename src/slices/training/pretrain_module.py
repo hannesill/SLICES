@@ -265,8 +265,8 @@ class SSLPretrainModule(pl.LightningModule):
             
             def lr_lambda(epoch: int) -> float:
                 if epoch < warmup_epochs:
-                    # Linear warmup
-                    return float(epoch) / float(max(1, warmup_epochs))
+                    # Linear warmup: start at lr/warmup_epochs, reach lr at end
+                    return float(epoch + 1) / float(max(1, warmup_epochs))
                 else:
                     # Cosine decay
                     progress = float(epoch - warmup_epochs) / float(

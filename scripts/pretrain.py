@@ -47,9 +47,10 @@ def setup_callbacks(cfg: DictConfig) -> list:
     callbacks = []
     
     # Model checkpointing
+    # Note: Lightning sanitizes metric names for filenames (val/loss -> val_loss)
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename="ssl-{epoch:03d}-{val/loss:.4f}",
+        filename="ssl-{epoch:03d}-{val_loss:.4f}",
         monitor="val/loss",
         mode="min",
         save_top_k=3,

@@ -496,5 +496,132 @@ class TestMAEIntegration:
             assert abs(actual_ratio - mask_ratio) < 0.15
 
 
+class TestBugFixes:
+    """Tests for bug fixes in the pretraining pipeline."""
+    
+    def test_block_masking_respects_max_ratio(self):
+        """Test that block masking doesn't exceed target mask ratio significantly."""
+        from slices.data.transforms import create_block_mask
+        
+        shape = (8, 48, 35)
+        mask_ratio = 0.15
+        
+        # Run multiple times to check consistency
+        for _ in range(10):
+            mask = create_block_mask(
+                shape,
+                mask_ratio=mask_ratio,
+                min_block_size=3,
+                max_block_size=10,
+                device=torch.device("cpu"),
+            )
+            
+            # Count masked positions (False = masked)
+            actual_ratio = (~mask[:, :, 0]).float().mean().item()  # Check first feature
+            
+            # Should not exceed target by more than max_block_size/T
+            max_overshoot = 10 / 48  # max_block_size / T
+            assert actual_ratio <= mask_ratio + max_overshoot, (
+                f"Block masking exceeded target ratio: {actual_ratio:.3f} > "
+                f"{mask_ratio + max_overshoot:.3f}"
+            )
+    
+    def test_validation_mask_determinism(self):
+        """Test that validation masks are deterministic."""
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+        
+        config = MAEConfig(
+            mask_ratio=0.15,
+            mask_strategy="random",
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+        
+        # Set to eval mode (validation)
+        mae.eval()
+        
+        x = torch.randn(4, 10, 35)
+        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
+        
+        # Run twice and check that metrics are identical
+        with torch.no_grad():
+            loss1, metrics1 = mae(x, obs_mask)
+            loss2, metrics2 = mae(x, obs_mask)
+        
+        # Loss should be identical (same masks)
+        assert torch.allclose(loss1, loss2), (
+            "Validation masks are not deterministic: "
+            f"loss1={loss1.item():.6f}, loss2={loss2.item():.6f}"
+        )
+    
+    def test_training_mask_varies(self):
+        """Test that training masks vary between forward passes."""
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+        
+        config = MAEConfig(
+            mask_ratio=0.15,
+            mask_strategy="random",
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+        
+        # Set to train mode
+        mae.train()
+        
+        x = torch.randn(4, 10, 35)
+        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
+        
+        # Run multiple times and check that losses vary
+        losses = []
+        for _ in range(5):
+            loss, _ = mae(x, obs_mask)
+            losses.append(loss.item())
+        
+        # At least some losses should be different (random masks)
+        unique_losses = len(set(f"{l:.6f}" for l in losses))
+        assert unique_losses > 1, "Training masks should vary but all losses were identical"
+    
+    def test_norm_target_raises_error(self):
+        """Test that norm_target=True raises NotImplementedError."""
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+        
+        config = MAEConfig(
+            mask_ratio=0.15,
+            norm_target=True,  # This should cause error
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+        
+        x = torch.randn(4, 10, 35)
+        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
+        
+        with pytest.raises(NotImplementedError, match="norm_target=True is not currently supported"):
+            mae(x, obs_mask)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
