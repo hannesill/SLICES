@@ -26,6 +26,19 @@ class ExtractorConfig:
     """Configuration for data extraction.
     
     Users must specify parquet_root - the path to their local Parquet files.
+    
+    Attributes:
+        parquet_root: Path to directory containing Parquet files (required).
+        output_dir: Directory to write extracted data to.
+        seq_length_hours: Length of time-series sequences in hours (must be > 0).
+        feature_set: Feature set to extract ('core' or 'extended').
+        concepts_dir: Path to concepts directory (auto-detected if None).
+        tasks_dir: Path to task config directory (auto-detected if None).
+        tasks: List of task names to extract labels for.
+        min_stay_hours: Minimum ICU stay length to include (must be >= 0).
+    
+    Raises:
+        ValueError: If validation fails for any parameter.
     """
 
     parquet_root: str
@@ -36,6 +49,31 @@ class ExtractorConfig:
     tasks_dir: Optional[str] = None  # Path to task config directory (auto-detected if None)
     tasks: List[str] = field(default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"])
     min_stay_hours: int = 6  # Minimum ICU stay length to include
+
+    def __post_init__(self) -> None:
+        """Validate configuration after initialization."""
+        # Validate parquet_root is not empty/whitespace
+        if not self.parquet_root or not self.parquet_root.strip():
+            raise ValueError("parquet_root cannot be empty or whitespace-only")
+        
+        # Validate seq_length_hours is positive
+        if self.seq_length_hours <= 0:
+            raise ValueError(f"seq_length_hours must be positive, got {self.seq_length_hours}")
+        
+        # Validate min_stay_hours is non-negative
+        if self.min_stay_hours < 0:
+            raise ValueError(f"min_stay_hours cannot be negative, got {self.min_stay_hours}")
+        
+        # Validate feature_set is a known value
+        valid_feature_sets = {"core", "extended"}
+        if self.feature_set not in valid_feature_sets:
+            raise ValueError(
+                f"feature_set must be one of {valid_feature_sets}, got '{self.feature_set}'"
+            )
+        
+        # Validate output_dir is not empty
+        if not self.output_dir or not self.output_dir.strip():
+            raise ValueError("output_dir cannot be empty or whitespace-only")
 
 
 class BaseExtractor(ABC):

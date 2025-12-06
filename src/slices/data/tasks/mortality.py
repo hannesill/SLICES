@@ -11,9 +11,9 @@ class MortalityTaskBuilder(TaskBuilder):
     """Build mortality prediction labels with configurable time windows.
     
     Supports multiple prediction windows:
-    - ICU mortality: Death during ICU stay
+    - ICU mortality: Death during ICU stay (window_hours=-1)
     - 24h/48h mortality: Death within N hours of ICU admission
-    - Hospital mortality: Death before hospital discharge
+    - Hospital mortality: Death before hospital discharge (window_hours=None)
     """
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
@@ -34,6 +34,13 @@ class MortalityTaskBuilder(TaskBuilder):
         
         stays = raw_data["stays"]
         mortality = raw_data["mortality_info"]
+        
+        # Handle empty DataFrames
+        if len(stays) == 0:
+            return pl.DataFrame({
+                "stay_id": pl.Series([], dtype=pl.Int64),
+                "label": pl.Series([], dtype=pl.Int32),
+            })
         
         # Join mortality info with stays
         merged = stays.join(mortality, on="stay_id", how="left")
