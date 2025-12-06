@@ -388,3 +388,266 @@ class TestTimeSeriesExtraction:
         if len(stay1_hour0) > 0:
             assert stay1_hour0["sbp"][0] == pytest.approx(119.0)
             assert stay1_hour0["sbp_mask"][0] == True
+
+
+class TestTimeSeriesEdgeCases:
+    """Tests for edge cases in time-series extraction."""
+
+    @pytest.fixture
+    def mock_extractor(self, tmp_path):
+        """Create a mock extractor with temporary paths."""
+        config = ExtractorConfig(
+            parquet_root=str(tmp_path / "mimic-iv"),
+            output_dir=str(tmp_path / "processed"),
+        )
+        
+        # Create mock parquet directory structure
+        (tmp_path / "mimic-iv" / "icu").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "mimic-iv" / "hosp").mkdir(parents=True, exist_ok=True)
+        
+        return MIMICIVExtractor(config)
+
+    @pytest.fixture
+    def mock_stays_df(self):
+        """Create mock stays DataFrame."""
+        return pl.DataFrame({
+            "stay_id": [1, 2, 3],
+            "patient_id": [101, 102, 103],
+            "intime": [
+                datetime(2020, 1, 1, 10, 0),
+                datetime(2020, 1, 2, 14, 30),
+                datetime(2020, 1, 3, 8, 0),
+            ],
+            "outtime": [
+                datetime(2020, 1, 5, 10, 0),
+                datetime(2020, 1, 6, 14, 30),
+                datetime(2020, 1, 7, 8, 0),
+            ],
+            "los_days": [4.0, 4.0, 4.0],
+            "age": [65, 45, 70],
+            "gender": ["M", "F", "M"],
+        })
+
+    def test_empty_stay_list(self, mock_extractor, mock_stays_df):
+        """Test extraction with empty stay list."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        # Empty events
+        empty_events = pl.DataFrame({
+            "stay_id": pl.Series([], dtype=pl.Int64),
+            "charttime": pl.Series([], dtype=pl.Datetime),
+            "feature_name": pl.Series([], dtype=pl.Utf8),
+            "valuenum": pl.Series([], dtype=pl.Float64),
+        })
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                empty_events, [], feature_mapping
+            )
+        
+        # Should return empty DataFrame with correct columns
+        assert "stay_id" in result.columns
+        assert "hour" in result.columns
+        assert "heart_rate" in result.columns
+        assert len(result) == 0
+
+    def test_very_short_stay(self, mock_extractor):
+        """Test extraction for very short ICU stay (< 1 hour)."""
+        short_stays = pl.DataFrame({
+            "stay_id": [1],
+            "patient_id": [101],
+            "intime": [datetime(2020, 1, 1, 10, 0)],
+            "outtime": [datetime(2020, 1, 1, 10, 30)],  # 30 min stay
+            "los_days": [0.02],
+            "age": [65],
+            "gender": ["M"],
+        })
+        
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        # Events within the short stay
+        events = pl.DataFrame({
+            "stay_id": [1, 1],
+            "charttime": [
+                datetime(2020, 1, 1, 10, 10),  # hour 0
+                datetime(2020, 1, 1, 10, 20),  # hour 0
+            ],
+            "feature_name": ["heart_rate", "heart_rate"],
+            "valuenum": [80.0, 85.0],
+        })
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=short_stays):
+            result = mock_extractor._bin_to_hourly_grid(
+                events, [1], feature_mapping
+            )
+        
+        # Should have data for hour 0
+        assert len(result) == 1
+        assert result["hour"][0] == 0
+        assert result["heart_rate"][0] == pytest.approx(82.5)  # Mean of 80 and 85
+
+    def test_events_spanning_many_hours(self, mock_extractor, mock_stays_df):
+        """Test extraction with events spanning many hours."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        # Events spanning 100 hours
+        events = []
+        base_time = datetime(2020, 1, 1, 10, 0)
+        for hour in range(100):
+            events.append({
+                "stay_id": 1,
+                "charttime": base_time + timedelta(hours=hour),
+                "feature_name": "heart_rate",
+                "valuenum": 70.0 + hour * 0.1,
+            })
+        
+        events_df = pl.DataFrame(events)
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events_df, [1], feature_mapping
+            )
+        
+        # Should have 100 hours of data
+        stay1_data = result.filter(pl.col("stay_id") == 1)
+        assert len(stay1_data) == 100
+
+    def test_extreme_values(self, mock_extractor, mock_stays_df):
+        """Test extraction with extreme values."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        events = pl.DataFrame({
+            "stay_id": [1, 1, 1],
+            "charttime": [
+                datetime(2020, 1, 1, 10, 0),
+                datetime(2020, 1, 1, 11, 0),
+                datetime(2020, 1, 1, 12, 0),
+            ],
+            "feature_name": ["heart_rate", "heart_rate", "heart_rate"],
+            "valuenum": [0.0, 1e10, -1e10],  # Extreme values
+        })
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events, [1], feature_mapping
+            )
+        
+        # Should preserve extreme values
+        assert result.filter(pl.col("hour") == 0)["heart_rate"][0] == 0.0
+        assert result.filter(pl.col("hour") == 1)["heart_rate"][0] == 1e10
+        assert result.filter(pl.col("hour") == 2)["heart_rate"][0] == -1e10
+
+    def test_single_event(self, mock_extractor, mock_stays_df):
+        """Test extraction with single event."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        events = pl.DataFrame({
+            "stay_id": [1],
+            "charttime": [datetime(2020, 1, 1, 10, 30)],
+            "feature_name": ["heart_rate"],
+            "valuenum": [75.0],
+        })
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events, [1], feature_mapping
+            )
+        
+        assert len(result) == 1
+        assert result["heart_rate"][0] == 75.0
+
+    def test_many_features(self, mock_extractor, mock_stays_df):
+        """Test extraction with many features."""
+        # Create feature mapping with 50 features
+        feature_mapping = {
+            f"feature_{i}": {"source": "chartevents", "itemid": [220000 + i]}
+            for i in range(50)
+        }
+        
+        # Create events for each feature
+        events = []
+        for i in range(50):
+            events.append({
+                "stay_id": 1,
+                "charttime": datetime(2020, 1, 1, 10, 0),
+                "feature_name": f"feature_{i}",
+                "valuenum": float(i),
+            })
+        
+        events_df = pl.DataFrame(events)
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events_df, [1], feature_mapping
+            )
+        
+        # Should have all 50 features
+        for i in range(50):
+            assert f"feature_{i}" in result.columns
+            assert f"feature_{i}_mask" in result.columns
+
+    def test_multiple_stays_different_data_density(self, mock_extractor, mock_stays_df):
+        """Test extraction with stays having different data density."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        # Stay 1: Dense data (every hour)
+        # Stay 2: Sparse data (every 4 hours)
+        events = []
+        
+        # Dense for stay 1
+        for hour in range(24):
+            events.append({
+                "stay_id": 1,
+                "charttime": datetime(2020, 1, 1, 10, 0) + timedelta(hours=hour),
+                "feature_name": "heart_rate",
+                "valuenum": 70.0 + hour,
+            })
+        
+        # Sparse for stay 2
+        for hour in [0, 4, 8, 12]:
+            events.append({
+                "stay_id": 2,
+                "charttime": datetime(2020, 1, 2, 14, 30) + timedelta(hours=hour),
+                "feature_name": "heart_rate",
+                "valuenum": 80.0 + hour,
+            })
+        
+        events_df = pl.DataFrame(events)
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events_df, [1, 2], feature_mapping
+            )
+        
+        # Stay 1 should have 24 rows
+        stay1_data = result.filter(pl.col("stay_id") == 1)
+        assert len(stay1_data) == 24
+        
+        # Stay 2 should have 4 rows (sparse)
+        stay2_data = result.filter(pl.col("stay_id") == 2)
+        assert len(stay2_data) == 4
+
+    def test_events_exactly_on_hour_boundaries(self, mock_extractor, mock_stays_df):
+        """Test events that occur exactly on hour boundaries."""
+        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        
+        events = pl.DataFrame({
+            "stay_id": [1, 1, 1],
+            "charttime": [
+                datetime(2020, 1, 1, 10, 0, 0),  # Exactly at admission
+                datetime(2020, 1, 1, 11, 0, 0),  # Exactly 1 hour
+                datetime(2020, 1, 1, 12, 0, 0),  # Exactly 2 hours
+            ],
+            "feature_name": ["heart_rate", "heart_rate", "heart_rate"],
+            "valuenum": [70.0, 75.0, 80.0],
+        })
+        
+        with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
+            result = mock_extractor._bin_to_hourly_grid(
+                events, [1], feature_mapping
+            )
+        
+        # Events on boundary should go to the correct hour
+        assert result.filter(pl.col("hour") == 0)["heart_rate"][0] == 70.0
+        assert result.filter(pl.col("hour") == 1)["heart_rate"][0] == 75.0
+        assert result.filter(pl.col("hour") == 2)["heart_rate"][0] == 80.0

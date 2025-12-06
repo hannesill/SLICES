@@ -226,7 +226,6 @@ class TestExtractDataSourceAvailability:
 class TestEdgeCases:
     """Test edge cases and error conditions."""
 
-    @pytest.mark.xfail(reason="MortalityTaskBuilder doesn't handle empty DataFrames - known limitation")
     def test_extract_labels_with_empty_stay_list(self, tmp_path):
         """Test extracting labels for empty stay list."""
         config = ExtractorConfig(

@@ -1,10 +1,10 @@
 """Tests for ICUDataset and ICUDataModule."""
 
+import numpy as np
+import polars as pl
 import pytest
 import torch
 import yaml
-import numpy as np
-import polars as pl
 from pathlib import Path
 
 from slices.data.dataset import ICUDataset
@@ -232,6 +232,122 @@ class TestICUDataset:
         sample = dataset[0]
         assert sample["timeseries"].shape == (24, 3)
 
+    def test_get_feature_names(self, mock_extracted_data):
+        """Test get_feature_names returns correct list."""
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        
+        feature_names = dataset.get_feature_names()
+        
+        assert feature_names == ["heart_rate", "sbp", "resp_rate"]
+        assert len(feature_names) == 3
+
+    def test_get_task_names(self, mock_extracted_data):
+        """Test get_task_names returns available tasks."""
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        
+        task_names = dataset.get_task_names()
+        
+        assert "mortality_24h" in task_names
+        assert "mortality_hospital" in task_names
+
+    def test_static_features_in_sample(self, mock_extracted_data):
+        """Test that static features are included in sample."""
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        
+        sample = dataset[0]
+        
+        assert "static" in sample
+        assert "age" in sample["static"]
+        assert "gender" in sample["static"]
+        assert "los_days" in sample["static"]
+
+    def test_imputation_mean(self, mock_extracted_data):
+        """Test mean imputation strategy."""
+        dataset = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            impute_strategy="mean"
+        )
+        
+        sample = dataset[0]
+        
+        # After imputation, there should be no NaN values
+        assert not torch.isnan(sample["timeseries"]).any()
+
+    def test_invalid_impute_strategy_raises_error(self, mock_extracted_data):
+        """Test that invalid imputation strategy raises ValueError."""
+        # Error happens during initialization because dataset pre-computes tensors
+        with pytest.raises(ValueError, match="Unknown imputation strategy"):
+            ICUDataset(
+                mock_extracted_data,
+                task_name="mortality_24h",
+                impute_strategy="invalid_strategy"
+            )
+
+    def test_all_samples_accessible(self, mock_extracted_data):
+        """Test that all samples can be accessed without error."""
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        
+        for i in range(len(dataset)):
+            sample = dataset[i]
+            assert "timeseries" in sample
+            assert "mask" in sample
+            assert "stay_id" in sample
+
+    def test_single_sample_dataset(self, tmp_path):
+        """Test dataset with single sample works correctly."""
+        data_dir = tmp_path / "single_sample"
+        data_dir.mkdir(parents=True)
+        
+        # Create metadata
+        metadata = {
+            "dataset": "mock",
+            "feature_set": "core",
+            "feature_names": ["heart_rate"],
+            "n_features": 1,
+            "seq_length_hours": 10,
+            "min_stay_hours": 1,
+            "task_names": ["mortality_24h"],
+            "n_stays": 1,
+        }
+        
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+        
+        # Create single-sample data
+        import numpy as np
+        
+        static_df = pl.DataFrame({
+            "stay_id": [1],
+            "patient_id": [100],
+            "age": [65],
+            "gender": ["M"],
+            "los_days": [2.0],
+        })
+        static_df.write_parquet(data_dir / "static.parquet")
+        
+        ts = np.random.randn(10, 1).tolist()
+        mask = [[True] for _ in range(10)]
+        timeseries_df = pl.DataFrame({
+            "stay_id": [1],
+            "timeseries": [ts],
+            "mask": [mask],
+        })
+        timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+        
+        labels_df = pl.DataFrame({
+            "stay_id": [1],
+            "mortality_24h": [0],
+        })
+        labels_df.write_parquet(data_dir / "labels.parquet")
+        
+        # Load and test
+        dataset = ICUDataset(data_dir, task_name="mortality_24h")
+        
+        assert len(dataset) == 1
+        sample = dataset[0]
+        assert sample["timeseries"].shape == (10, 1)
+
 
 class TestICUDataModule:
     """Tests for ICUDataModule class."""
@@ -415,6 +531,135 @@ class TestICUDataModule:
                 val_ratio=0.3,
                 test_ratio=0.3,  # Sum = 1.1
             )
+
+    def test_train_dataloader_before_setup_raises_error(self, mock_extracted_data):
+        """Test that calling train_dataloader before setup raises RuntimeError."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        with pytest.raises(RuntimeError, match="Call setup"):
+            dm.train_dataloader()
+
+    def test_val_dataloader_before_setup_raises_error(self, mock_extracted_data):
+        """Test that calling val_dataloader before setup raises RuntimeError."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        with pytest.raises(RuntimeError, match="Call setup"):
+            dm.val_dataloader()
+
+    def test_test_dataloader_before_setup_raises_error(self, mock_extracted_data):
+        """Test that calling test_dataloader before setup raises RuntimeError."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        with pytest.raises(RuntimeError, match="Call setup"):
+            dm.test_dataloader()
+
+    def test_get_feature_dim_before_setup_raises_error(self, mock_extracted_data):
+        """Test that calling get_feature_dim before setup raises RuntimeError."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        with pytest.raises(RuntimeError, match="Call setup"):
+            dm.get_feature_dim()
+
+    def test_get_seq_length(self, mock_extracted_data):
+        """Test get_seq_length returns correct value."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        dm.setup()
+        
+        assert dm.get_seq_length() == 48
+
+    def test_get_label_statistics(self, mock_extracted_data):
+        """Test get_label_statistics returns correct information."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        dm.setup()
+        
+        stats = dm.get_label_statistics()
+        
+        assert "mortality_24h" in stats
+        assert "mortality_hospital" in stats
+        assert "total" in stats["mortality_24h"]
+        assert "positive" in stats["mortality_24h"]
+        assert "prevalence" in stats["mortality_24h"]
+
+    def test_custom_split_ratios(self, mock_extracted_data):
+        """Test custom split ratios are applied."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            train_ratio=0.6,
+            val_ratio=0.2,
+            test_ratio=0.2,
+        )
+        dm.setup()
+        
+        info = dm.get_split_info()
+        
+        # Check that splits are approximately correct (accounting for patient-level)
+        total = info["total_stays"]
+        assert info["train_stays"] + info["val_stays"] + info["test_stays"] == total
+
+    def test_num_workers_configuration(self, mock_extracted_data):
+        """Test that num_workers is properly configured."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            num_workers=2,
+        )
+        
+        assert dm.num_workers == 2
+
+    def test_pin_memory_configuration(self, mock_extracted_data):
+        """Test that pin_memory is properly configured."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            pin_memory=False,
+        )
+        
+        assert dm.pin_memory is False
+
+    def test_setup_with_stage_fit(self, mock_extracted_data):
+        """Test setup with stage='fit'."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        dm.setup(stage="fit")
+        
+        # Should still create all splits
+        assert len(dm.train_indices) > 0
+        assert len(dm.val_indices) > 0
+        assert len(dm.test_indices) > 0
+
+    def test_setup_with_stage_test(self, mock_extracted_data):
+        """Test setup with stage='test'."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+        )
+        
+        dm.setup(stage="test")
+        
+        # Should still have test indices
+        assert len(dm.test_indices) > 0
 
 
 class TestCollateFn:
