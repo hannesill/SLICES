@@ -42,3 +42,7 @@ feature_set: core  # core | extended
 hourly_aggregation: mean  # mean | median | last
 min_stay_hours: 6  # Minimum ICU stay length to include
 
+# Path to concepts directory (optional - auto-detected if not set)
+# Explicitly set this for deployment/production environments
+# concepts_dir: /path/to/configs/concepts
+concepts_dir: null
