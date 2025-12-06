@@ -134,15 +134,21 @@ slices/                          # Repository root
 
 ## Data Format
 
-ICU stays are stored as Parquet files with the following schema:
+Extracted ICU stays are stored as **separate Parquet files** in the output directory:
 
-- `stay_id: int64` - Unique ICU stay identifier
-- `patient_id: int64` - Patient identifier (for patient-level splits)
-- `timeseries: array<float32>` - Shape (T, D), hourly binned features
-- `mask: array<bool>` - Shape (T, D), True = observed, False = imputed
-- `feature_names: list<str>` - Column names for timeseries
-- `static: dict` - Age, gender, admission type, etc.
-- `labels: dict` - Task labels (mortality_48h, los_days, aki_stage, etc.)
+- `static.parquet` - Stay-level metadata (demographics, admission info)
+  - Columns: `stay_id`, `patient_id`, `age`, `gender`, `race`, `admission_type`, `los_days`, etc.
+- `timeseries.parquet` - Dense hourly-binned time-series with masks
+  - Columns: `stay_id`, `timeseries` (nested array<float32>, shape T×D), `mask` (nested array<bool>, shape T×D)
+- `labels.parquet` - Task labels
+  - Columns: `stay_id`, plus one column per task (e.g., `mortality_24h`, `mortality_48h`)
+- `metadata.yaml` - Feature names, sequence length, task names, etc.
+
+The `ICUDataset` loads these files and returns dictionaries with:
+- `timeseries`: FloatTensor of shape (seq_length, n_features)
+- `mask`: BoolTensor of shape (seq_length, n_features) - True = observed, False = missing/imputed
+- `static`: Dict with static features (age, gender, etc.)
+- `label`: FloatTensor with task label (if task_name specified)
 
 ## Configuration
 
