@@ -34,15 +34,24 @@ parquet_root: data/parquet/mimic-iv-demo # default to demo data
 # Output directory for extracted/processed features
 output_dir: data/processed/mimic-iv-demo # default to demo data
 
-# Extraction settings
+# ============================================================================
+# EXTRACTION SETTINGS
+# ============================================================================
+
 seq_length_hours: 48
 feature_set: core  # core | extended
+min_stay_hours: 6  # Minimum ICU stay length to include
 
 # Processing settings
 hourly_aggregation: mean  # mean | median | last
-min_stay_hours: 6  # Minimum ICU stay length to include
+
+# Tasks to extract labels for
+tasks:
+  - mortality_24h
+  - mortality_48h
+  - mortality_hospital
 
 # Path to concepts directory (optional - auto-detected if not set)
 # Explicitly set this for deployment/production environments
-# concepts_dir: /path/to/configs/concepts
 concepts_dir: null
+tasks_dir: null
