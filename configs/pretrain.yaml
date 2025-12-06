@@ -1,0 +1,117 @@
+# SSL Pretraining Configuration
+#
+# This config orchestrates SSL pretraining with configurable encoder
+# architecture and SSL objective. Override any setting via command line:
+#   uv run python scripts/pretrain.py encoder.d_model=256 ssl.mask_ratio=0.20
+#
+# Note: This uses similar settings to configs/model/transformer.yaml but with
+# encoder.pooling=none (required for MAE) instead of pooling=mean (for tasks).
+
+# Project info
+project_name: slices
+experiment_name: ssl_pretrain
+
+# Random seed for reproducibility
+seed: 42
+
+# Output directory (Hydra will create timestamped subdirs)
+output_dir: ${hydra:runtime.output_dir}
+checkpoint_dir: ${output_dir}/checkpoints
+
+# Data configuration
+data:
+  # Path to processed data directory
+  # This should contain: timeseries.parquet, static.parquet, metadata.yaml
+  processed_dir: data/processed/mimic-iv-demo
+  
+  # DataModule settings
+  num_workers: 4
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  
+  # Preprocessing
+  normalize: true
+  impute_strategy: forward_fill  # forward_fill | zero | mean | none
+  pin_memory: true
+
+# Encoder configuration
+encoder:
+  name: transformer
+  # d_input will be automatically set from data
+  d_model: 128
+  n_layers: 4
+  n_heads: 8
+  d_ff: 512
+  dropout: 0.1
+  max_seq_length: 168
+  pooling: none  # Required for MAE - need per-timestep outputs (vs 'mean' for tasks)
+  use_positional_encoding: true
+  prenorm: true
+  activation: gelu
+  layer_norm_eps: 1.0e-5
+
+# SSL objective configuration
+ssl:
+  name: mae
+  mask_ratio: 0.15
+  mask_strategy: block  # random | block | timestep | feature
+  min_block_size: 3
+  max_block_size: 10
+  mask_value: 0.0
+  decoder_d_model: 64
+  decoder_n_layers: 2
+  decoder_n_heads: 4
+  decoder_d_ff: 256
+  decoder_dropout: 0.1
+  loss_on_observed_only: true
+  norm_target: false
+
+# Training configuration
+training:
+  max_epochs: 100
+  batch_size: 64
+  
+  # Compute settings
+  accelerator: auto  # auto | cpu | gpu | mps
+  devices: auto  # auto | 1 | [0,1] | etc.
+  precision: 32  # 32 | 16 | bf16
+  
+  # Regularization
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  
+  # Early stopping
+  early_stopping_patience: 10
+
+# Optimizer configuration
+optimizer:
+  name: adamw
+  lr: 1.0e-3
+  weight_decay: 0.01
+
+# Optional learning rate scheduler
+scheduler:
+  name: warmup_cosine  # cosine | step | plateau | warmup_cosine
+  warmup_epochs: 10
+  max_epochs: ${training.max_epochs}
+  eta_min: 1.0e-6
+
+# Logging configuration
+logging:
+  use_wandb: false  # Set to true to enable W&B logging
+  wandb_project: ${project_name}
+  wandb_entity: null  # Set to your W&B username/team
+  run_name: ${experiment_name}
+  log_every_n_steps: 50
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Deterministic mode (slower but reproducible)
+deterministic: false
