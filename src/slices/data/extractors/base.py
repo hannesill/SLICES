@@ -5,15 +5,20 @@ Users specify parquet_root pointing to their local Parquet files.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import duckdb
 import polars as pl
+import yaml
 from omegaconf import OmegaConf
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from slices.data.tasks import TaskBuilder, TaskBuilderFactory, TaskConfig
+
+console = Console()
 
 
 @dataclass
@@ -27,7 +32,10 @@ class ExtractorConfig:
     output_dir: str = "data/processed"
     seq_length_hours: int = 48
     feature_set: str = "core"  # core | extended
-    concepts_dir: str | None = None  # Path to concepts directory (auto-detected if None)
+    concepts_dir: Optional[str] = None  # Path to concepts directory (auto-detected if None)
+    tasks_dir: Optional[str] = None  # Path to task config directory (auto-detected if None)
+    tasks: List[str] = field(default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"])
+    min_stay_hours: int = 6  # Minimum ICU stay length to include
 
 
 class BaseExtractor(ABC):
@@ -78,6 +86,18 @@ class BaseExtractor(ABC):
         """
         return self.parquet_root / schema / f"{table}.parquet"
 
+    def _get_project_root(self) -> Optional[Path]:
+        """Find project root by looking for pyproject.toml.
+        
+        Returns:
+            Path to project root or None if not found.
+        """
+        current = Path.cwd()
+        for parent in [current, *current.parents]:
+            if (parent / "pyproject.toml").exists():
+                return parent
+        return None
+
     def _get_concepts_path(self) -> Path:
         """Get path to concepts directory with robust fallback strategy.
         
@@ -102,16 +122,14 @@ class BaseExtractor(ABC):
             )
         
         # Strategy 2: Try to find project root (works for editable installs)
-        # Look for pyproject.toml as marker of project root
-        current = Path.cwd()
-        for parent in [current, *current.parents]:
-            pyproject = parent / "pyproject.toml"
-            concepts_dir = parent / "configs" / "concepts"
-            if pyproject.exists() and concepts_dir.exists():
+        project_root = self._get_project_root()
+        if project_root:
+            concepts_dir = project_root / "configs" / "concepts"
+            if concepts_dir.exists():
                 return concepts_dir
         
         # Strategy 3: Relative to source file (development mode fallback)
-        # From src/slices/data/extractors/mimic_iv.py -> configs/concepts
+        # From src/slices/data/extractors/base.py -> configs/concepts
         relative_path = Path(__file__).parents[4] / "configs" / "concepts"
         if relative_path.exists():
             return relative_path
@@ -123,6 +141,68 @@ class BaseExtractor(ABC):
             "2. Run from project root containing pyproject.toml\n"
             "3. Ensure configs/concepts exists relative to source tree"
         )
+
+    def _get_tasks_path(self) -> Path:
+        """Get path to tasks directory with robust fallback strategy.
+        
+        Returns:
+            Path to tasks directory containing task YAML files.
+            
+        Raises:
+            FileNotFoundError: If tasks directory cannot be found.
+        """
+        # Strategy 1: Explicit config path
+        if self.config.tasks_dir is not None:
+            tasks_path = Path(self.config.tasks_dir)
+            if tasks_path.exists():
+                return tasks_path
+            raise FileNotFoundError(
+                f"Tasks directory specified in config not found: {tasks_path}"
+            )
+        
+        # Strategy 2: Try to find project root
+        project_root = self._get_project_root()
+        if project_root:
+            tasks_dir = project_root / "configs" / "tasks"
+            if tasks_dir.exists():
+                return tasks_dir
+        
+        # Strategy 3: Relative to source file
+        relative_path = Path(__file__).parents[4] / "configs" / "tasks"
+        if relative_path.exists():
+            return relative_path
+        
+        raise FileNotFoundError(
+            "Could not locate tasks directory. Options:\n"
+            "1. Set 'tasks_dir' in ExtractorConfig\n"
+            "2. Run from project root containing pyproject.toml\n"
+            "3. Ensure configs/tasks exists relative to source tree"
+        )
+
+    def _load_task_configs(self, task_names: List[str]) -> List[TaskConfig]:
+        """Load task configurations from YAML files.
+        
+        Args:
+            task_names: List of task names to load (e.g., ['mortality_24h']).
+            
+        Returns:
+            List of TaskConfig instances.
+        """
+        tasks_path = self._get_tasks_path()
+        task_configs = []
+        
+        for task_name in task_names:
+            config_file = tasks_path / f"{task_name}.yaml"
+            if not config_file.exists():
+                console.print(f"[yellow]Warning: Task config not found: {config_file}[/yellow]")
+                continue
+            
+            with open(config_file) as f:
+                config_dict = yaml.safe_load(f)
+            
+            task_configs.append(TaskConfig(**config_dict))
+        
+        return task_configs
 
     def _load_feature_mapping(self, feature_set: str) -> Dict[str, Any]:
         """Load feature mapping from YAML config (generic).
@@ -443,20 +523,194 @@ class BaseExtractor(ABC):
         return combined
 
 
+    def _create_dense_timeseries(
+        self,
+        sparse_timeseries: pl.DataFrame,
+        stays: pl.DataFrame,
+        feature_names: List[str],
+    ) -> pl.DataFrame:
+        """Convert sparse hourly timeseries to dense fixed-length arrays.
+        
+        Creates a dense representation where each stay has exactly seq_length_hours
+        timesteps, with missing hours filled with NaN and masks set to False.
+        
+        Args:
+            sparse_timeseries: Sparse timeseries with stay_id, hour, features, masks.
+            stays: Stay metadata with stay_id, los_days for length calculation.
+            feature_names: List of feature column names (without _mask suffix).
+            
+        Returns:
+            DataFrame with one row per stay containing:
+                - stay_id: ICU stay identifier
+                - timeseries: List of lists (seq_length x n_features) with values
+                - mask: List of lists (seq_length x n_features) with observation flags
+        """
+        seq_length = self.config.seq_length_hours
+        n_features = len(feature_names)
+        
+        # Get unique stay_ids from sparse data
+        stay_ids = sparse_timeseries["stay_id"].unique().to_list()
+        
+        results = []
+        for stay_id in stay_ids:
+            # Get data for this stay
+            stay_data = sparse_timeseries.filter(pl.col("stay_id") == stay_id)
+            
+            # Initialize dense arrays with NaN/False
+            dense_values = [[float("nan")] * n_features for _ in range(seq_length)]
+            dense_mask = [[False] * n_features for _ in range(seq_length)]
+            
+            # Fill in observed values
+            for row in stay_data.iter_rows(named=True):
+                hour = row["hour"]
+                if 0 <= hour < seq_length:
+                    for feat_idx, feat_name in enumerate(feature_names):
+                        value = row.get(feat_name)
+                        mask_val = row.get(f"{feat_name}_mask", False)
+                        
+                        if value is not None and mask_val:
+                            dense_values[hour][feat_idx] = float(value)
+                            dense_mask[hour][feat_idx] = True
+            
+            results.append({
+                "stay_id": stay_id,
+                "timeseries": dense_values,
+                "mask": dense_mask,
+            })
+        
+        return pl.DataFrame(results)
+
     def run(self) -> None:
         """Execute full extraction pipeline.
         
-        Raises:
-            NotImplementedError: Method not yet implemented.
+        Extracts and saves:
+        - static.parquet: Stay-level metadata (demographics, admission info)
+        - timeseries.parquet: Dense hourly features with observation masks
+        - labels.parquet: Task labels for downstream prediction
+        - metadata.yaml: Extraction metadata (feature names, task names, etc.)
         """
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        console.print(f"\n[bold blue]SLICES Data Extraction[/bold blue]")
+        console.print(f"Output directory: {self.output_dir}")
+        console.print(f"Feature set: {self.config.feature_set}")
+        console.print(f"Sequence length: {self.config.seq_length_hours} hours")
+        console.print(f"Min stay length: {self.config.min_stay_hours} hours\n")
 
-        stays = self.extract_stays()
-        stay_ids = stays["stay_id"].to_list()
+        # -------------------------------------------------------------------------
+        # Step 1: Extract stays (static features)
+        # -------------------------------------------------------------------------
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Extracting ICU stays...", total=None)
+            stays = self.extract_stays()
+            progress.update(task, completed=True)
+        
+        # Filter by minimum stay length
+        min_los_days = self.config.min_stay_hours / 24.0
+        stays_filtered = stays.filter(pl.col("los_days") >= min_los_days)
+        
+        console.print(f"Found {len(stays)} ICU stays")
+        console.print(f"After filtering (>={self.config.min_stay_hours}h): {len(stays_filtered)} stays")
+        
+        stay_ids = stays_filtered["stay_id"].to_list()
+        
+        if len(stay_ids) == 0:
+            console.print("[red]Error: No stays remaining after filtering![/red]")
+            return
 
-        timeseries = self.extract_timeseries(stay_ids)
-        labels = self.extract_labels(stay_ids, [])
+        # -------------------------------------------------------------------------
+        # Step 2: Extract time-series features
+        # -------------------------------------------------------------------------
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Extracting timeseries for {len(stay_ids)} stays...", total=None)
+            sparse_timeseries = self.extract_timeseries(stay_ids)
+            progress.update(task, completed=True)
+        
+        # Get feature names (columns without _mask suffix, excluding stay_id and hour)
+        feature_names = [
+            col for col in sparse_timeseries.columns 
+            if col not in ["stay_id", "hour"] and not col.endswith("_mask")
+        ]
+        console.print(f"Extracted {len(feature_names)} features: {feature_names}")
+        
+        # Convert to dense representation
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Converting to dense timeseries...", total=None)
+            dense_timeseries = self._create_dense_timeseries(
+                sparse_timeseries, stays_filtered, feature_names
+            )
+            progress.update(task, completed=True)
 
-        # TODO: Combine and save to Parquet
-        raise NotImplementedError
+        # -------------------------------------------------------------------------
+        # Step 3: Extract labels
+        # -------------------------------------------------------------------------
+        task_configs = self._load_task_configs(self.config.tasks)
+        task_names = [tc.task_name for tc in task_configs]
+        
+        if task_configs:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task(f"Extracting labels for {len(task_configs)} tasks...", total=None)
+                labels = self.extract_labels(stay_ids, task_configs)
+                progress.update(task, completed=True)
+            
+            console.print(f"Extracted labels for tasks: {task_names}")
+        else:
+            # No tasks configured - create DataFrame with just stay_ids
+            labels = pl.DataFrame({"stay_id": stay_ids})
+            console.print("[yellow]No task configs found - labels will be empty[/yellow]")
+
+        # -------------------------------------------------------------------------
+        # Step 4: Save to Parquet
+        # -------------------------------------------------------------------------
+        console.print("\n[bold]Saving to Parquet...[/bold]")
+        
+        # Static features (demographics, admission info)
+        static_path = self.output_dir / "static.parquet"
+        stays_filtered.write_parquet(static_path)
+        console.print(f"  ✓ Static features: {static_path} ({len(stays_filtered)} stays)")
+        
+        # Time-series (dense format with masks)
+        timeseries_path = self.output_dir / "timeseries.parquet"
+        dense_timeseries.write_parquet(timeseries_path)
+        console.print(f"  ✓ Timeseries: {timeseries_path} ({len(dense_timeseries)} stays)")
+        
+        # Labels
+        labels_path = self.output_dir / "labels.parquet"
+        labels.write_parquet(labels_path)
+        console.print(f"  ✓ Labels: {labels_path} ({len(labels)} stays)")
+        
+        # Metadata (for ICUDataset to know feature names, etc.)
+        metadata = {
+            "dataset": self._get_dataset_name(),
+            "feature_set": self.config.feature_set,
+            "feature_names": feature_names,
+            "n_features": len(feature_names),
+            "seq_length_hours": self.config.seq_length_hours,
+            "min_stay_hours": self.config.min_stay_hours,
+            "task_names": task_names,
+            "n_stays": len(stays_filtered),
+        }
+        
+        metadata_path = self.output_dir / "metadata.yaml"
+        with open(metadata_path, "w") as f:
+            yaml.dump(metadata, f, default_flow_style=False)
+        console.print(f"  ✓ Metadata: {metadata_path}")
+        
+        console.print(f"\n[bold green]Extraction complete![/bold green]")
 
