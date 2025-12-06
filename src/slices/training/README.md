@@ -244,12 +244,182 @@ name: my_ssl
 uv run python scripts/pretrain.py ssl=my_ssl
 ```
 
+### `FineTuneModule`
+
+PyTorch Lightning module for downstream task finetuning. This module composes a pretrained encoder with a task head for supervised learning on clinical prediction tasks.
+
+#### Key Features
+
+- **Flexible checkpoint loading**: Supports loading from encoder weights (`.pt`) or full pretrain checkpoints (`.ckpt`)
+- **Freezing strategies**: Linear probing (frozen encoder), full finetuning, or gradual unfreezing
+- **Task support**: Binary classification, multiclass, multilabel, and regression
+- **Comprehensive metrics**: AUROC, AUPRC, accuracy, F1 score for classification tasks
+- **Class imbalance handling**: Configurable loss functions and class weights
+
+#### Usage
+
+```python
+from omegaconf import OmegaConf
+from slices.training import FineTuneModule
+
+# Load config (typically from Hydra)
+config = OmegaConf.load("configs/finetune.yaml")
+
+# Create module with pretrained encoder
+module = FineTuneModule(
+    config=config,
+    checkpoint_path="outputs/encoder.pt",  # From pretraining
+)
+
+# Train with Lightning Trainer
+from pytorch_lightning import Trainer
+trainer = Trainer(max_epochs=50, gpus=1)
+trainer.fit(module, datamodule=datamodule)
+```
+
+#### Config Structure
+
+The module expects a config with encoder, task, and training sections:
+
+```yaml
+encoder:
+  name: transformer
+  d_model: 128
+  # ... encoder config (should match pretrained encoder)
+
+task:
+  task_name: mortality_24h
+  task_type: binary  # binary | multiclass | multilabel | regression
+  head_type: mlp    # mlp | linear
+  hidden_dims: [64]
+  dropout: 0.1
+
+training:
+  freeze_encoder: true  # Linear probing (default)
+  unfreeze_epoch: null  # Set to N for gradual unfreezing
+  max_epochs: 50
+  batch_size: 64
+
+optimizer:
+  name: adamw
+  lr: 1.0e-4  # Lower LR for finetuning
+  weight_decay: 0.01
+```
+
+#### Finetuning Strategies
+
+1. **Linear Probing** (default): Freeze encoder, train only task head
+   ```yaml
+   training:
+     freeze_encoder: true
+   ```
+
+2. **Full Finetuning**: Train both encoder and task head
+   ```yaml
+   training:
+     freeze_encoder: false
+   ```
+
+3. **Gradual Unfreezing**: Start frozen, unfreeze after N epochs
+   ```yaml
+   training:
+     freeze_encoder: true
+     unfreeze_epoch: 5  # Unfreeze at epoch 5
+   ```
+
+#### Task Types
+
+- **binary**: Binary classification (2 outputs for CrossEntropyLoss)
+- **multiclass**: Multi-class classification (requires `n_classes`)
+- **multilabel**: Multi-label classification (requires `n_classes`)
+- **regression**: Continuous prediction (1 output, MSELoss)
+
+#### Logged Metrics
+
+For classification tasks:
+- `train/loss`, `val/loss`, `test/loss`: Cross-entropy loss
+- `train/accuracy`, `val/accuracy`, `test/accuracy`: Classification accuracy
+- `val/auroc`, `test/auroc`: Area under ROC curve
+- `val/auprc`, `test/auprc`: Area under PR curve
+- `val/f1`, `test/f1`: F1 score
+
+For regression tasks:
+- `train/loss`, `val/loss`, `test/loss`: MSE loss
+
+#### Methods
+
+- **`forward(timeseries, mask)`**: Forward pass through encoder and task head
+- **`training_step(batch, batch_idx)`**: Training step (called by Lightning)
+- **`validation_step(batch, batch_idx)`**: Validation step (called by Lightning)
+- **`test_step(batch, batch_idx)`**: Test step (called by Lightning)
+- **`on_train_epoch_start()`**: Called at start of each epoch (handles gradual unfreezing)
+- **`configure_optimizers()`**: Configure optimizer and optional scheduler
+- **`get_encoder()`**: Get encoder module
+- **`get_task_head()`**: Get task head module
+
+#### Loading Checkpoints
+
+The module supports two checkpoint formats:
+
+1. **Encoder weights** (`.pt` file from `pretrain.py`):
+   ```python
+   module = FineTuneModule(
+       config=config,
+       checkpoint_path="outputs/encoder.pt",
+   )
+   ```
+
+2. **Full pretrain checkpoint** (`.ckpt` file from Lightning):
+   ```python
+   module = FineTuneModule(
+       config=config,
+       pretrain_checkpoint_path="outputs/ssl-last.ckpt",
+   )
+   ```
+
+#### Adding a New Task Head
+
+1. Create task head class in `src/slices/models/heads/`:
+
+```python
+from .base import BaseTaskHead, TaskHeadConfig
+
+class MyTaskHead(BaseTaskHead):
+    def __init__(self, config: TaskHeadConfig):
+        super().__init__(config)
+        # ... build head architecture
+    
+    def forward(self, encoder_output):
+        # ... compute predictions
+        return {"logits": logits, "probs": probs}
+```
+
+2. Register in `src/slices/models/heads/factory.py`:
+
+```python
+from .my_head import MyTaskHead
+
+TASK_HEAD_REGISTRY["my_head"] = MyTaskHead
+```
+
+3. Use in finetuning:
+
+```yaml
+task:
+  head_type: my_head
+  # ... other config
+```
+
 ## Testing
 
-Test the module with pytest:
+Test the modules with pytest:
 
 ```bash
+# Test pretraining module
 uv run pytest tests/test_pretrain_module.py -v
+
+# Test finetuning module
+uv run pytest tests/test_finetune_module.py -v
 ```
 
 ## See Also
@@ -257,3 +427,4 @@ uv run pytest tests/test_pretrain_module.py -v
 - [Pretraining Guide](../../../docs/PRETRAINING_GUIDE.md) - Full guide to using the pretraining pipeline
 - [Encoder README](../models/encoders/README.md) - Details on encoder architectures
 - [SSL Objectives README](../models/pretraining/README.md) - Details on SSL objectives
+- [Task Heads README](../models/heads/README.md) - Details on task head architectures
