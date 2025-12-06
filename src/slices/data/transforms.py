@@ -63,6 +63,24 @@ def create_block_mask(
     if device is None:
         device = torch.device("cpu")
     
+    # Always use CPU for random integer generation to avoid MPS device issues
+    # Create CPU generator if one is provided for reproducibility
+    cpu_generator = None
+    if generator is not None:
+        try:
+            # Try to create a CPU generator with the same seed
+            # Get the current state and create a new CPU generator
+            cpu_generator = torch.Generator(device="cpu")
+            # Try to copy state (works if generator is on CPU, otherwise we'll use None)
+            try:
+                state = generator.get_state()
+                cpu_generator.set_state(state)
+            except (RuntimeError, AttributeError):
+                # If state copying fails (e.g., cross-device), use None
+                cpu_generator = None
+        except Exception:
+            cpu_generator = None
+    
     mask = torch.ones((B, T, D), dtype=torch.bool, device=device)
     
     for b in range(B):
@@ -79,13 +97,13 @@ def create_block_mask(
                 # Can't add another block without exceeding target
                 break
             
-            # Random block size within allowed range
+            # Random block size within allowed range (always on CPU to avoid MPS issues)
             block_size = torch.randint(
-                min_block_size, actual_max + 1, (1,), generator=generator
+                min_block_size, actual_max + 1, (1,), device="cpu", generator=cpu_generator
             ).item()
-            # Random start position
+            # Random start position (always on CPU to avoid MPS issues)
             start = torch.randint(
-                0, max(1, T - block_size + 1), (1,), generator=generator
+                0, max(1, T - block_size + 1), (1,), device="cpu", generator=cpu_generator
             ).item()
             end = min(start + block_size, T)
             
