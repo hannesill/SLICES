@@ -1,0 +1,206 @@
+"""Tests for task label extraction and builders.
+
+Minimal version for mortality tasks only.
+"""
+
+import polars as pl
+import pytest
+from datetime import datetime, timedelta
+
+from slices.data.tasks import TaskConfig, TaskBuilderFactory
+from slices.data.tasks.mortality import MortalityTaskBuilder
+
+
+class TestTaskConfig:
+    """Tests for TaskConfig dataclass."""
+
+    def test_task_config_creation(self):
+        """Test basic TaskConfig instantiation."""
+        config = TaskConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+            primary_metric="auroc",
+        )
+
+        assert config.task_name == "mortality_24h"
+        assert config.task_type == "binary_classification"
+        assert config.prediction_window_hours == 24
+        assert "stays" in config.label_sources
+
+    def test_task_config_defaults(self):
+        """Test TaskConfig with default values."""
+        config = TaskConfig(
+            task_name="test_task",
+            task_type="binary_classification",
+        )
+
+        assert config.prediction_window_hours is None
+        assert config.gap_hours == 0
+        assert config.label_sources == []
+        assert config.primary_metric == "auroc"
+
+
+class TestMortalityTaskBuilder:
+    """Tests for MortalityTaskBuilder."""
+
+    @pytest.fixture
+    def sample_stays(self):
+        """Sample ICU stay data."""
+        return pl.DataFrame({
+            "stay_id": [1, 2, 3, 4],
+            "intime": [
+                datetime(2020, 1, 1, 10, 0),
+                datetime(2020, 1, 2, 12, 0),
+                datetime(2020, 1, 3, 8, 0),
+                datetime(2020, 1, 4, 14, 0),
+            ],
+            "outtime": [
+                datetime(2020, 1, 3, 10, 0),
+                datetime(2020, 1, 5, 12, 0),
+                datetime(2020, 1, 6, 8, 0),
+                datetime(2020, 1, 10, 14, 0),
+            ],
+        })
+
+    @pytest.fixture
+    def sample_mortality_info(self):
+        """Sample mortality data."""
+        return pl.DataFrame({
+            "stay_id": [1, 2, 3, 4],
+            "date_of_death": [
+                datetime(2020, 1, 1, 20, 0),  # Died 10h after admission
+                None,  # Survived
+                datetime(2020, 1, 5, 10, 0),  # Died 50h after admission
+                datetime(2020, 1, 6, 14, 0),  # Died 48h after admission
+            ],
+            "hospital_expire_flag": [1, 0, 1, 1],
+            "dischtime": [
+                datetime(2020, 1, 3, 10, 0),
+                datetime(2020, 1, 5, 12, 0),
+                datetime(2020, 1, 6, 8, 0),
+                datetime(2020, 1, 10, 14, 0),
+            ],
+            "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
+        })
+
+    def test_hospital_mortality(self, sample_stays, sample_mortality_info):
+        """Test hospital mortality prediction (no time window)."""
+        config = TaskConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = MortalityTaskBuilder(config)
+        raw_data = {
+            "stays": sample_stays,
+            "mortality_info": sample_mortality_info,
+        }
+
+        labels = builder.build_labels(raw_data)
+
+        assert labels.shape[0] == 4
+        assert "stay_id" in labels.columns
+        assert "label" in labels.columns
+
+        # Check specific cases
+        labels_dict = dict(zip(labels["stay_id"], labels["label"]))
+        assert labels_dict[1] == 1  # Died
+        assert labels_dict[2] == 0  # Survived
+        assert labels_dict[3] == 1  # Died
+        assert labels_dict[4] == 1  # Died
+
+    def test_24h_mortality(self, sample_stays, sample_mortality_info):
+        """Test 24-hour mortality prediction."""
+        config = TaskConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = MortalityTaskBuilder(config)
+        raw_data = {
+            "stays": sample_stays,
+            "mortality_info": sample_mortality_info,
+        }
+
+        labels = builder.build_labels(raw_data)
+
+        # Check specific cases
+        labels_dict = dict(zip(labels["stay_id"], labels["label"]))
+        assert labels_dict[1] == 1  # Died within 24h (10h)
+        assert labels_dict[2] == 0  # Survived
+        assert labels_dict[3] == 0  # Died after 24h (50h)
+        assert labels_dict[4] == 0  # Died after 24h (48h)
+
+    def test_48h_mortality(self, sample_stays, sample_mortality_info):
+        """Test 48-hour mortality prediction."""
+        config = TaskConfig(
+            task_name="mortality_48h",
+            task_type="binary_classification",
+            prediction_window_hours=48,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = MortalityTaskBuilder(config)
+        raw_data = {
+            "stays": sample_stays,
+            "mortality_info": sample_mortality_info,
+        }
+
+        labels = builder.build_labels(raw_data)
+
+        labels_dict = dict(zip(labels["stay_id"], labels["label"]))
+        assert labels_dict[1] == 1  # Died within 48h (10h)
+        assert labels_dict[2] == 0  # Survived
+        assert labels_dict[3] == 0  # Died after 48h (50h)
+        assert labels_dict[4] == 1  # Died within 48h (exactly 48h)
+
+
+class TestTaskBuilderFactory:
+    """Tests for TaskBuilderFactory (minimal - mortality only)."""
+
+    def test_factory_creates_mortality_builder(self):
+        """Test factory creates MortalityTaskBuilder."""
+        config = TaskConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = TaskBuilderFactory.create(config)
+        assert isinstance(builder, MortalityTaskBuilder)
+
+    def test_factory_handles_underscores(self):
+        """Test factory extracts category from task names with underscores."""
+        # All of these should create MortalityTaskBuilder
+        for task_name in ["mortality_24h", "mortality_48h", "mortality_hospital"]:
+            config = TaskConfig(
+                task_name=task_name,
+                task_type="binary_classification",
+                label_sources=["stays", "mortality_info"],
+            )
+            builder = TaskBuilderFactory.create(config)
+            assert isinstance(builder, MortalityTaskBuilder)
+
+    def test_factory_unknown_task_raises_error(self):
+        """Test factory raises error for unknown task category."""
+        config = TaskConfig(
+            task_name="unknown_task",
+            task_type="binary_classification",
+            label_sources=["stays"],
+        )
+
+        with pytest.raises(ValueError, match="No TaskBuilder registered"):
+            TaskBuilderFactory.create(config)
+
+    def test_factory_list_available(self):
+        """Test listing available task builders."""
+        available = TaskBuilderFactory.list_available()
+
+        assert "mortality" in available
+        assert isinstance(available["mortality"], type)
