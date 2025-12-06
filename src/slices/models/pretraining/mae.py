@@ -22,7 +22,14 @@ from .base import BaseSSLObjective, SSLConfig
 
 @dataclass
 class MAEConfig(SSLConfig):
-    """Configuration for MAE objective."""
+    """Configuration for MAE objective.
+    
+    Note:
+        - norm_target is NOT SUPPORTED and must be False. Data should be
+          normalized during preprocessing instead.
+        - During validation, masks are deterministic for reproducible metrics.
+        - Block masking is capped to not exceed target mask_ratio significantly.
+    """
     
     name: str = "mae"
     
@@ -43,7 +50,7 @@ class MAEConfig(SSLConfig):
     
     # Loss parameters
     loss_on_observed_only: bool = True  # Only compute loss on originally observed values
-    norm_target: bool = False  # Normalize reconstruction targets
+    norm_target: bool = False  # NOT SUPPORTED - must be False, normalize data in preprocessing
 
 
 class MAEDecoder(nn.Module):
@@ -136,6 +143,9 @@ class MAEObjective(BaseSSLObjective):
         >>> loss, metrics = mae(x, obs_mask)
     """
     
+    # Fixed seed for deterministic validation masks
+    _VAL_MASK_SEED: int = 42
+
     def __init__(self, encoder: nn.Module, config: MAEConfig) -> None:
         """Initialize MAE objective.
         
@@ -183,8 +193,21 @@ class MAEObjective(BaseSSLObjective):
             Tuple of:
             - loss: Scalar loss tensor
             - metrics: Dict of additional metrics to log
+        
+        Note:
+            During validation (self.training=False), masks are generated with a
+            fixed seed for reproducibility. This ensures consistent validation
+            metrics across epochs.
         """
         B, T, D = x.shape
+        
+        # Use deterministic masks for validation (reproducible metrics)
+        if self.training:
+            generator = None  # Random masks during training
+        else:
+            # Fixed seed for validation - ensures same masks each validation run
+            generator = torch.Generator(device=x.device)
+            generator.manual_seed(self._VAL_MASK_SEED)
         
         # Create SSL mask (which positions to mask for reconstruction)
         ssl_mask = create_ssl_mask(
@@ -195,6 +218,7 @@ class MAEObjective(BaseSSLObjective):
             min_block_size=self.config.min_block_size,
             max_block_size=self.config.max_block_size,
             device=x.device,
+            generator=generator,
         )  # False = masked for SSL
         
         # Apply masking to input
@@ -233,18 +257,15 @@ class MAEObjective(BaseSSLObjective):
         """
         # Normalize targets if requested (per-sample normalization)
         if self.config.norm_target:
-            # Compute mean/std on observed values only
-            obs_sum = (x_target * obs_mask.float()).sum(dim=(1, 2), keepdim=True)
-            obs_count = obs_mask.float().sum(dim=(1, 2), keepdim=True).clamp(min=1)
-            obs_mean = obs_sum / obs_count
-            
-            obs_sq_sum = ((x_target - obs_mean) ** 2 * obs_mask.float()).sum(
-                dim=(1, 2), keepdim=True
+            # NOTE: This feature is disabled because the previous implementation
+            # incorrectly normalized x_recon using target statistics after prediction,
+            # creating a mismatch between training signal and model output.
+            # A correct implementation would require architectural changes.
+            raise NotImplementedError(
+                "norm_target=True is not currently supported due to implementation "
+                "issues. Use norm_target=False (default) instead. The input data "
+                "should be normalized during preprocessing."
             )
-            obs_std = (obs_sq_sum / obs_count).sqrt().clamp(min=1e-6)
-            
-            x_target = (x_target - obs_mean) / obs_std
-            x_recon = (x_recon - obs_mean) / obs_std
         
         # Compute MSE
         squared_error = (x_recon - x_target) ** 2  # (B, T, D)

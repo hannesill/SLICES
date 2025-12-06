@@ -153,6 +153,14 @@ class ICUDataModule(ptl.LightningDataModule):
         val_patients = set(shuffled_patients[n_train:n_train + n_val])
         test_patients = set(shuffled_patients[n_train + n_val:])
         
+        # Verify no patient overlap between splits (data leakage check)
+        assert train_patients.isdisjoint(val_patients), \
+            "Patient leakage detected: train/val splits have overlapping patients"
+        assert train_patients.isdisjoint(test_patients), \
+            "Patient leakage detected: train/test splits have overlapping patients"
+        assert val_patients.isdisjoint(test_patients), \
+            "Patient leakage detected: val/test splits have overlapping patients"
+        
         # Map back to stay indices
         train_indices = []
         val_indices = []
