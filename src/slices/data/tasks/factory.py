@@ -1,0 +1,81 @@
+"""Factory for creating task builders from configurations."""
+
+from typing import Dict, Type
+
+from .base import TaskBuilder, TaskConfig
+from .mortality import MortalityTaskBuilder
+
+
+class TaskBuilderFactory:
+    """Factory for creating TaskBuilder instances from configurations.
+    
+    Usage:
+        config = TaskConfig(task_name='mortality_24h', ...)
+        builder = TaskBuilderFactory.create(config)
+        labels = builder.build_labels(raw_data)
+    """
+
+    # Registry mapping task categories to builder classes
+    _REGISTRY: Dict[str, Type[TaskBuilder]] = {
+        "mortality": MortalityTaskBuilder,
+    }
+
+    @classmethod
+    def create(cls, config: TaskConfig) -> TaskBuilder:
+        """Create a TaskBuilder instance from configuration.
+        
+        Args:
+            config: Task configuration.
+            
+        Returns:
+            Instantiated TaskBuilder for the specified task.
+            
+        Raises:
+            ValueError: If task name doesn't match any registered builder.
+        """
+        # Extract task category from task_name (e.g., 'mortality_24h' -> 'mortality')
+        task_category = cls._extract_category(config.task_name)
+        
+        if task_category not in cls._REGISTRY:
+            raise ValueError(
+                f"No TaskBuilder registered for task category '{task_category}'. "
+                f"Available categories: {list(cls._REGISTRY.keys())}"
+            )
+        
+        builder_class = cls._REGISTRY[task_category]
+        return builder_class(config)
+
+    @classmethod
+    def register(cls, category: str, builder_class: Type[TaskBuilder]) -> None:
+        """Register a new TaskBuilder class for a task category.
+        
+        Args:
+            category: Task category name (e.g., 'aki', 'sepsis').
+            builder_class: TaskBuilder subclass to register.
+        """
+        cls._REGISTRY[category] = builder_class
+
+    @staticmethod
+    def _extract_category(task_name: str) -> str:
+        """Extract task category from full task name.
+        
+        Examples:
+            'mortality_24h' -> 'mortality'
+            'mortality_hospital' -> 'mortality'
+        
+        Args:
+            task_name: Full task name.
+            
+        Returns:
+            Task category (first part before underscore).
+        """
+        return task_name.split("_")[0]
+
+    @classmethod
+    def list_available(cls) -> Dict[str, Type[TaskBuilder]]:
+        """List all registered task builders.
+        
+        Returns:
+            Dictionary mapping categories to builder classes.
+        """
+        return cls._REGISTRY.copy()
