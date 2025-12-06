@@ -2,3 +2,7 @@
 
 __version__ = "0.1.0"
 
+# Expose key modules for convenient imports
+from slices import eval
+
+__all__ = ["eval"]
