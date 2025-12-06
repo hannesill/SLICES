@@ -1,7 +1,7 @@
 """Label extraction and builders.
 
 This module handles label extraction for downstream tasks (mortality, AKI, etc.).
-Separate from src/slices/tasks/ which contains model prediction heads.
+Separate from src/slices/models/heads/ which contains model prediction heads for finetuning.
 """
 
 from .base import LabelConfig, LabelBuilder

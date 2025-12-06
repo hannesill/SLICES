@@ -90,7 +90,7 @@ python scripts/pretrain.py data.parquet_root=/path/to/mimic-iv-parquet
 
 **Fine-tune on Downstream Task**
 ```bash
-python scripts/finetune.py task=mortality checkpoint=/path/to/pretrained.ckpt
+uv run python scripts/finetune.py checkpoint=outputs/encoder.pt
 ```
 
 ## Project Structure
@@ -108,12 +108,20 @@ slices/                          # Repository root
 │       │   └── transforms.py     # SSL augmentations
 │       ├── models/
 │       │   ├── encoders/         # Backbone architectures
-│       │   │   └── base.py       # Abstract base encoder
-│       │   └── pretraining/      # SSL objectives
-│       │       └── base.py       # Abstract SSL objective
-│       ├── tasks/                # Downstream task heads
-│       │   └── base.py           # Abstract task head
-│       └── training/             # Training utilities
+│       │   │   ├── base.py       # Abstract base encoder
+│       │   │   ├── factory.py    # Encoder factory
+│       │   │   └── transformer.py # Transformer encoder
+│       │   ├── pretraining/      # SSL objectives
+│       │   │   ├── base.py       # Abstract SSL objective
+│       │   │   ├── factory.py    # SSL objective factory
+│       │   │   └── mae.py        # MAE objective
+│       │   └── heads/            # Task heads (for finetuning)
+│       │       ├── base.py       # Abstract BaseTaskHead
+│       │       ├── factory.py    # Task head factory
+│       │       └── mlp.py        # MLP and Linear task heads
+│       └── training/              # Training utilities and Lightning modules
+│           ├── pretrain_module.py # SSLPretrainModule
+│           ├── finetune_module.py # FineTuneModule
 │           └── utils.py
 ├── configs/                      # Hydra configs (outside src/)
 │   ├── config.yaml               # Main config
