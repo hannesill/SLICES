@@ -7,10 +7,11 @@ Users specify parquet_root pointing to their local Parquet files.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import duckdb
 import polars as pl
+from omegaconf import OmegaConf
 
 from slices.data.tasks import TaskBuilder, TaskBuilderFactory, TaskConfig
 
@@ -26,6 +27,7 @@ class ExtractorConfig:
     output_dir: str = "data/processed"
     seq_length_hours: int = 48
     feature_set: str = "core"  # core | extended
+    concepts_dir: str | None = None  # Path to concepts directory (auto-detected if None)
 
 
 class BaseExtractor(ABC):
@@ -76,6 +78,215 @@ class BaseExtractor(ABC):
         """
         return self.parquet_root / schema / f"{table}.parquet"
 
+    def _get_concepts_path(self) -> Path:
+        """Get path to concepts directory with robust fallback strategy.
+        
+        Returns:
+            Path to concepts directory containing feature YAML files.
+            
+        Strategy:
+            1. Use concepts_dir from config if explicitly provided
+            2. Try to find project root and look for configs/concepts
+            3. Try relative to this source file (development mode)
+            
+        Raises:
+            FileNotFoundError: If concepts directory cannot be found.
+        """
+        # Strategy 1: Explicit config path (most robust for deployment)
+        if self.config.concepts_dir is not None:
+            concepts_path = Path(self.config.concepts_dir)
+            if concepts_path.exists():
+                return concepts_path
+            raise FileNotFoundError(
+                f"Concepts directory specified in config not found: {concepts_path}"
+            )
+        
+        # Strategy 2: Try to find project root (works for editable installs)
+        # Look for pyproject.toml as marker of project root
+        current = Path.cwd()
+        for parent in [current, *current.parents]:
+            pyproject = parent / "pyproject.toml"
+            concepts_dir = parent / "configs" / "concepts"
+            if pyproject.exists() and concepts_dir.exists():
+                return concepts_dir
+        
+        # Strategy 3: Relative to source file (development mode fallback)
+        # From src/slices/data/extractors/mimic_iv.py -> configs/concepts
+        relative_path = Path(__file__).parents[4] / "configs" / "concepts"
+        if relative_path.exists():
+            return relative_path
+        
+        # If nothing works, give helpful error
+        raise FileNotFoundError(
+            "Could not locate concepts directory. Options:\n"
+            "1. Set 'concepts_dir' in ExtractorConfig (recommended for deployment)\n"
+            "2. Run from project root containing pyproject.toml\n"
+            "3. Ensure configs/concepts exists relative to source tree"
+        )
+
+    def _load_feature_mapping(self, feature_set: str) -> Dict[str, Any]:
+        """Load feature mapping from YAML config (generic).
+        
+        This method loads the concept YAML and extracts dataset-specific mappings.
+        Subclasses don't need to override this unless they have special requirements.
+        
+        Args:
+            feature_set: Name of feature set to load (e.g., 'core').
+            
+        Returns:
+            Dictionary with dataset-specific feature configuration.
+            Structure depends on dataset implementation.
+            
+        Raises:
+            FileNotFoundError: If feature config file cannot be found.
+        """
+        config_path = self._get_concepts_path() / f"{feature_set}_features.yaml"
+        
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Feature config not found: {config_path}\n"
+                f"Tried concepts_dir: {self._get_concepts_path()}\n"
+                f"Hint: Set 'concepts_dir' in ExtractorConfig to point to your configs/concepts directory"
+            )
+        
+        config = OmegaConf.load(config_path)
+        dataset_name = self._get_dataset_name()
+        
+        # Extract dataset-specific feature configuration
+        feature_mapping = {}
+        
+        # Process all feature categories (vitals, labs, etc.)
+        for category in config:
+            category_config = config[category]
+            # OmegaConf objects may not be recognized by isinstance(dict)
+            if category_config is not None and hasattr(category_config, 'items'):
+                for feature_name, feature_config in category_config.items():
+                    # Check if this feature has config for our dataset
+                    if dataset_name in feature_config:
+                        # Convert OmegaConf to dict for easier manipulation
+                        feature_mapping[feature_name] = OmegaConf.to_container(
+                            feature_config[dataset_name], resolve=True
+                        )
+        
+        return feature_mapping
+
+    def _bin_to_hourly_grid(
+        self, 
+        raw_events: pl.DataFrame, 
+        stay_ids: List[int],
+        feature_mapping: Dict[str, Any]
+    ) -> pl.DataFrame:
+        """Bin raw events to hourly grid and create observation masks (generic).
+        
+        This method is completely dataset-agnostic. It expects raw_events to have:
+        - stay_id, charttime, feature_name, valuenum columns
+        
+        Args:
+            raw_events: Raw events DataFrame with standardized schema.
+            stay_ids: List of ICU stay IDs.
+            feature_mapping: Feature mapping (only used to get expected feature names).
+            
+        Returns:
+            Wide-format DataFrame with hourly bins and observation masks.
+        """
+        # Get stay info for intime calculation
+        stays = self.extract_stays().filter(pl.col("stay_id").is_in(stay_ids))
+        
+        # Join with stays to get intime and calculate hour offset
+        events_with_hours = (
+            raw_events
+            .join(stays.select(["stay_id", "intime"]), on="stay_id", how="left")
+            .with_columns([
+                # Calculate hour offset from ICU admission (floor to get hour bins)
+                ((pl.col("charttime") - pl.col("intime")).dt.total_seconds() / 3600)
+                .floor()
+                .cast(pl.Int32)
+                .alias("hour")
+            ])
+            # Filter out events before admission (hour < 0)
+            .filter(pl.col("hour") >= 0)
+        )
+        
+        # Aggregate by stay_id, hour, feature_name (mean for multiple values in same hour)
+        # Also track that we observed at least one value
+        aggregated = (
+            events_with_hours
+            .group_by(["stay_id", "hour", "feature_name"])
+            .agg([
+                pl.col("valuenum").mean().alias("value"),
+                pl.lit(True).alias("observed")  # Mark as observed
+            ])
+        )
+        
+        # Pivot to wide format: one column per feature
+        # First pivot the values
+        pivoted_values = (
+            aggregated
+            .pivot(
+                values="value",
+                index=["stay_id", "hour"],
+                columns="feature_name"
+            )
+        )
+        
+        # Pivot the observation masks
+        pivoted_masks = (
+            aggregated
+            .pivot(
+                values="observed",
+                index=["stay_id", "hour"],
+                columns="feature_name"
+            )
+        )
+        
+        # Rename mask columns to have _mask suffix (exclude index columns)
+        mask_columns = {
+            col: f"{col}_mask" 
+            for col in pivoted_masks.columns 
+            if col not in ["stay_id", "hour"]
+        }
+        pivoted_masks = pivoted_masks.rename(mask_columns)
+        
+        # Join values and masks
+        result = pivoted_values.join(pivoted_masks, on=["stay_id", "hour"], how="left")
+        
+        # Ensure all expected feature columns exist (even if no data)
+        expected_features = list(feature_mapping.keys())
+        for feature in expected_features:
+            # Add value column if missing
+            if feature not in result.columns:
+                result = result.with_columns([
+                    pl.lit(None, dtype=pl.Float64).alias(feature)
+                ])
+            # Add mask column if missing
+            mask_col = f"{feature}_mask"
+            if mask_col not in result.columns:
+                result = result.with_columns([
+                    pl.lit(False).alias(mask_col)
+                ])
+        
+        # Fill missing mask values with False (not observed)
+        for col in result.columns:
+            if col.endswith("_mask"):
+                result = result.with_columns([
+                    pl.col(col).fill_null(False)
+                ])
+        
+        # Sort by stay_id and hour for cleaner output
+        result = result.sort(["stay_id", "hour"])
+        
+        return result
+
+    @abstractmethod
+    def _get_dataset_name(self) -> str:
+        """Get the name of the dataset for this extractor.
+        
+        Returns:
+            Dataset name (e.g., 'mimic_iv', 'eicu', 'hirid').
+            Used to parse dataset-specific configs from concept YAML files.
+        """
+        pass
+
     @abstractmethod
     def extract_stays(self) -> pl.DataFrame:
         """Extract ICU stay metadata (stay_id, patient_id, times).
@@ -88,16 +299,60 @@ class BaseExtractor(ABC):
         pass
 
     @abstractmethod
+    def _extract_raw_events(
+        self,
+        stay_ids: List[int],
+        feature_mapping: Dict[str, Any]
+    ) -> pl.DataFrame:
+        """Extract raw time-series events for specified features (dataset-specific).
+        
+        This is the dataset-specific method that queries the appropriate tables
+        and returns raw events. Each dataset implements this differently.
+        
+        Args:
+            stay_ids: List of ICU stay IDs to extract.
+            feature_mapping: Dataset-specific feature mapping from _load_feature_mapping.
+            
+        Returns:
+            DataFrame with columns:
+                - stay_id: ICU stay identifier
+                - charttime: Timestamp of observation (or similar time column)
+                - feature_name: Name of feature (canonical name from config)
+                - valuenum: Numeric value
+        """
+        pass
+
     def extract_timeseries(self, stay_ids: List[int]) -> pl.DataFrame:
-        """Extract time-series features for given stays.
+        """Extract time-series features for given stays (generic orchestration).
+        
+        This method provides generic orchestration for time-series extraction:
+        1. Load feature mapping from concept configs
+        2. Extract raw events (dataset-specific via _extract_raw_events)
+        3. Bin to hourly grid and create observation masks
         
         Args:
             stay_ids: List of ICU stay IDs to extract.
             
         Returns:
-            DataFrame with time-series data.
+            DataFrame with columns:
+                - stay_id: ICU stay identifier
+                - hour: Hour offset from ICU admission (0, 1, 2, ...)
+                - {feature_name}: Value for each feature (mean aggregated)
+                - {feature_name}_mask: Boolean indicating if value was observed
         """
-        pass
+        # Use feature_set from config (or default to 'core')
+        feature_set = self.config.feature_set
+        
+        # Load feature mapping for this dataset
+        feature_mapping = self._load_feature_mapping(feature_set)
+        
+        # Extract raw events (dataset-specific implementation)
+        raw_events = self._extract_raw_events(stay_ids, feature_mapping)
+        
+        # Bin to hourly grid (generic)
+        hourly_binned = self._bin_to_hourly_grid(raw_events, stay_ids, feature_mapping)
+        
+        return hourly_binned
 
     @abstractmethod
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
