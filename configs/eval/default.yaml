@@ -1,0 +1,27 @@
+# Default evaluation configuration
+#
+# This configures which metrics to compute during training/validation/testing.
+# Metrics are computed using torchmetrics and logged to tensorboard/wandb.
+#
+# Available metrics by task type:
+#   binary:     auroc, auprc, accuracy, f1
+#   multiclass: auroc, auprc, accuracy, f1
+#   multilabel: auroc, auprc, accuracy, f1
+#   regression: (not yet implemented)
+
+# Metric configuration
+metrics:
+  # Metrics to compute (null = use defaults for task type)
+  # Defaults: binary/multiclass -> [auroc, auprc], multilabel -> [auroc]
+  names: null
+  
+  # Decision threshold for binary classification
+  threshold: 0.5
+
+# Fairness analysis configuration (not yet implemented)
+# fairness:
+#   enabled: false
+#   protected_attributes:
+#     - gender
+#     - race
+#   min_subgroup_size: 50

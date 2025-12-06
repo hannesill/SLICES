@@ -18,8 +18,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
-from torchmetrics import AUROC, Accuracy, AveragePrecision, F1Score
+from torchmetrics import MetricCollection
 
+from slices.eval import MetricConfig, build_metrics
 from slices.models.encoders import build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
 
@@ -217,38 +218,32 @@ class FineTuneModule(pl.LightningModule):
             raise ValueError(f"Unknown task type: {self.task_type}")
     
     def _setup_metrics(self) -> None:
-        """Setup task-specific metrics."""
-        if self.task_type in ("binary", "multiclass"):
-            # Infer n_classes from task head config
-            output_dim = self.task_head.config.get_output_dim()
-            task = "binary" if output_dim == 2 else "multiclass"
-            
-            # Training metrics
-            self.train_accuracy = Accuracy(task=task, num_classes=output_dim)
-            
-            # Validation metrics
-            self.val_accuracy = Accuracy(task=task, num_classes=output_dim)
-            self.val_auroc = AUROC(task=task, num_classes=output_dim)
-            self.val_auprc = AveragePrecision(task=task, num_classes=output_dim)
-            self.val_f1 = F1Score(task=task, num_classes=output_dim)
-            
-            # Test metrics
-            self.test_accuracy = Accuracy(task=task, num_classes=output_dim)
-            self.test_auroc = AUROC(task=task, num_classes=output_dim)
-            self.test_auprc = AveragePrecision(task=task, num_classes=output_dim)
-            self.test_f1 = F1Score(task=task, num_classes=output_dim)
-        elif self.task_type == "multilabel":
-            # Multilabel metrics
-            n_labels = self.task_head.config.n_classes
-            self.train_accuracy = Accuracy(task="multilabel", num_labels=n_labels)
-            self.val_accuracy = Accuracy(task="multilabel", num_labels=n_labels)
-            self.val_auroc = AUROC(task="multilabel", num_labels=n_labels)
-            self.val_auprc = AveragePrecision(task="multilabel", num_labels=n_labels)
-            self.val_f1 = F1Score(task="multilabel", num_labels=n_labels)
-            self.test_accuracy = Accuracy(task="multilabel", num_labels=n_labels)
-            self.test_auroc = AUROC(task="multilabel", num_labels=n_labels)
-            self.test_auprc = AveragePrecision(task="multilabel", num_labels=n_labels)
-            self.test_f1 = F1Score(task="multilabel", num_labels=n_labels)
+        """Setup task-specific metrics using eval module."""
+        if self.task_type == "regression":
+            # No metrics for regression yet
+            self.train_metrics = None
+            self.val_metrics = None
+            self.test_metrics = None
+            return
+        
+        # Build metric config from task settings
+        output_dim = self.task_head.config.get_output_dim()
+        
+        # Get metrics from config if specified, otherwise use defaults
+        eval_cfg = self.config.get("eval", {})
+        metrics_cfg = eval_cfg.get("metrics", {})
+        metric_names = metrics_cfg.get("names", None)
+        
+        metric_config = MetricConfig(
+            task_type=self.task_type,
+            n_classes=output_dim,
+            metrics=metric_names,
+        )
+        
+        # Build metrics for each stage
+        self.train_metrics = build_metrics(metric_config, prefix="train")
+        self.val_metrics = build_metrics(metric_config, prefix="val")
+        self.test_metrics = build_metrics(metric_config, prefix="test")
     
     def forward(
         self,
@@ -314,41 +309,28 @@ class FineTuneModule(pl.LightningModule):
         )
         
         # Log classification metrics
-        if self.task_type in ("binary", "multiclass"):
-            preds = logits.argmax(dim=-1)  # (B,)
+        if self.task_type in ("binary", "multiclass", "multilabel"):
             labels_long = labels.long()  # Convert to long for metrics
             
             # For AUROC/AUPRC, use probabilities
             output_dim = self.task_head.config.get_output_dim()
             if output_dim == 2:
                 # Binary: use probability of positive class
-                prob_positive = probs[:, 1]  # (B,)
+                metric_input = probs[:, 1]  # (B,)
             else:
-                prob_positive = probs  # (B, n_classes)
+                metric_input = probs  # (B, n_classes)
             
-            if stage == "train":
-                self.train_accuracy(preds, labels_long)
-                self.log(f"{stage}/accuracy", self.train_accuracy, on_epoch=True)
-            elif stage == "val":
-                self.val_accuracy(preds, labels_long)
-                self.val_auroc(prob_positive, labels_long)
-                self.val_auprc(prob_positive, labels_long)
-                self.val_f1(preds, labels_long)
-                
-                self.log(f"{stage}/accuracy", self.val_accuracy, on_epoch=True)
-                self.log(f"{stage}/auroc", self.val_auroc, on_epoch=True, prog_bar=True)
-                self.log(f"{stage}/auprc", self.val_auprc, on_epoch=True)
-                self.log(f"{stage}/f1", self.val_f1, on_epoch=True)
-            else:  # test
-                self.test_accuracy(preds, labels_long)
-                self.test_auroc(prob_positive, labels_long)
-                self.test_auprc(prob_positive, labels_long)
-                self.test_f1(preds, labels_long)
-                
-                self.log(f"{stage}/accuracy", self.test_accuracy, on_epoch=True)
-                self.log(f"{stage}/auroc", self.test_auroc, on_epoch=True)
-                self.log(f"{stage}/auprc", self.test_auprc, on_epoch=True)
-                self.log(f"{stage}/f1", self.test_f1, on_epoch=True)
+            # Get metrics for this stage
+            metrics = getattr(self, f"{stage}_metrics", None)
+            if metrics is not None:
+                metrics.update(metric_input, labels_long)
+                self.log_dict(
+                    metrics,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=(stage == "val"),
+                    sync_dist=True,
+                )
         
         return loss
     
