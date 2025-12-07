@@ -1,4 +1,4 @@
-"""PyTorch Lightning DataModule for ICU data.
+"""Lightning DataModule for ICU data.
 
 Handles patient-level splits, data loading, and batching for training.
 Ensures no patient appears in multiple splits (prevents data leakage).
@@ -7,9 +7,9 @@ Ensures no patient appears in multiple splits (prevents data leakage).
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import lightning.pytorch as L
 import numpy as np
 import polars as pl
-import pytorch_lightning as ptl
 import torch
 import yaml
 from torch.utils.data import DataLoader, Subset
@@ -45,8 +45,8 @@ def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     return result
 
 
-class ICUDataModule(ptl.LightningDataModule):
-    """PyTorch Lightning DataModule for ICU data.
+class ICUDataModule(L.LightningDataModule):
+    """Lightning DataModule for ICU data.
     
     Implements patient-level splits to prevent data leakage.
     Uses hashing of patient_id for deterministic, reproducible splits.

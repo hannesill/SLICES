@@ -28,14 +28,14 @@ from pathlib import Path
 from typing import Optional
 
 import hydra
-import pytorch_lightning as pl
-from omegaconf import DictConfig, OmegaConf
-from pytorch_lightning.callbacks import (
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from pytorch_lightning.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger
+from omegaconf import DictConfig, OmegaConf
 
 from slices.data.datamodule import ICUDataModule
 from slices.training import FineTuneModule
