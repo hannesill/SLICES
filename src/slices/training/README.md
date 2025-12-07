@@ -1,12 +1,12 @@
 # Training Module
 
-This module contains PyTorch Lightning modules for training SSL and supervised models.
+This module contains Lightning modules for training SSL and supervised models.
 
 ## Components
 
 ### `SSLPretrainModule`
 
-PyTorch Lightning module for SSL pretraining. This module is fully agnostic to:
+Lightning module for SSL pretraining. This module is fully agnostic to:
 - **Encoder architecture**: Works with any encoder (transformer, RNN, CNN, etc.)
 - **SSL objective**: Works with any SSL objective (MAE, contrastive, JEPA, etc.)
 
@@ -19,7 +19,7 @@ All components are built from configuration using factory patterns.
 - **Learning rate schedulers**: Cosine annealing, step decay, plateau, warmup+cosine
 - **Automatic logging**: Logs all metrics from SSL objectives to tensorboard/wandb
 - **Checkpoint management**: Saves encoder weights separately for downstream tasks
-- **Distributed training**: Works with multi-GPU via PyTorch Lightning
+- **Distributed training**: Works with multi-GPU via Lightning
 
 #### Usage
 
@@ -34,8 +34,8 @@ config = OmegaConf.load("configs/pretrain.yaml")
 module = SSLPretrainModule(config)
 
 # Train with Lightning Trainer
-from pytorch_lightning import Trainer
-trainer = Trainer(max_epochs=100, gpus=1)
+import lightning.pytorch as L
+trainer = L.Trainer(max_epochs=100, devices=1)
 trainer.fit(module, datamodule=datamodule)
 
 # Save encoder for downstream tasks
@@ -246,7 +246,7 @@ uv run python scripts/pretrain.py ssl=my_ssl
 
 ### `FineTuneModule`
 
-PyTorch Lightning module for downstream task finetuning. This module composes a pretrained encoder with a task head for supervised learning on clinical prediction tasks.
+Lightning module for downstream task finetuning. This module composes a pretrained encoder with a task head for supervised learning on clinical prediction tasks.
 
 #### Key Features
 
@@ -272,8 +272,8 @@ module = FineTuneModule(
 )
 
 # Train with Lightning Trainer
-from pytorch_lightning import Trainer
-trainer = Trainer(max_epochs=50, gpus=1)
+import lightning.pytorch as L
+trainer = L.Trainer(max_epochs=50, devices=1)
 trainer.fit(module, datamodule=datamodule)
 ```
 

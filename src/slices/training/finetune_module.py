@@ -1,4 +1,4 @@
-"""PyTorch Lightning module for downstream task finetuning.
+"""Lightning module for downstream task finetuning.
 
 This module wraps a pretrained encoder and task head for finetuning on
 downstream clinical prediction tasks (mortality, LOS, AKI, sepsis, etc.).
@@ -13,7 +13,7 @@ Key features:
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,7 +26,7 @@ from slices.models.heads import TaskHeadConfig, build_task_head
 
 
 class FineTuneModule(pl.LightningModule):
-    """PyTorch Lightning module for downstream task finetuning.
+    """Lightning module for downstream task finetuning.
     
     This module composes a pretrained encoder with a task head and handles:
     - Loading pretrained encoder weights

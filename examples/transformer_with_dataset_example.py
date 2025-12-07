@@ -132,7 +132,7 @@ def batch_processing():
 
 
 def with_datamodule():
-    """Use with ICUDataModule (PyTorch Lightning)."""
+    """Use with ICUDataModule (Lightning)."""
     print("=== Integration with ICUDataModule ===")
     
     if not check_data_availability():

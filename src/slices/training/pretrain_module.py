@@ -1,4 +1,4 @@
-"""PyTorch Lightning module for SSL pretraining.
+"""Lightning module for SSL pretraining.
 
 This module wraps encoder and SSL objective for end-to-end training with
 Lightning's training loop, logging, checkpointing, and distributed training.
@@ -6,7 +6,7 @@ Lightning's training loop, logging, checkpointing, and distributed training.
 
 from typing import Any, Dict, Optional, Tuple
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
@@ -16,7 +16,7 @@ from slices.models.pretraining import build_ssl_objective, get_ssl_config_class
 
 
 class SSLPretrainModule(pl.LightningModule):
-    """PyTorch Lightning module for SSL pretraining.
+    """Lightning module for SSL pretraining.
     
     This module is agnostic to:
     - Encoder architecture (transformer, RNN, CNN, etc.)

@@ -84,10 +84,10 @@ class TestPackageStructure:
 
     def test_datamodule_inherits_lightning(self) -> None:
         """Test that ICUDataModule inherits from LightningDataModule."""
-        import pytorch_lightning as ptl
+        import lightning.pytorch as L
         from slices.data.datamodule import ICUDataModule
 
-        assert issubclass(ICUDataModule, ptl.LightningDataModule)
+        assert issubclass(ICUDataModule, L.LightningDataModule)
 
     def test_dataset_inherits_torch_dataset(self) -> None:
         """Test that ICUDataset inherits from torch Dataset."""
@@ -106,13 +106,13 @@ class TestPackageDependencies:
         import polars
         import duckdb
         import yaml
-        import pytorch_lightning
+        import lightning.pytorch
 
         assert torch is not None
         assert polars is not None
         assert duckdb is not None
         assert yaml is not None
-        assert pytorch_lightning is not None
+        assert lightning.pytorch is not None
 
     def test_torch_cuda_status(self) -> None:
         """Test that we can check CUDA availability (doesn't require CUDA)."""
