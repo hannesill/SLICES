@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 import polars as pl
 
+from slices.data.callbacks import get_callback
 from .base import BaseExtractor, ExtractorConfig
 
 
@@ -149,6 +150,32 @@ class MIMICIVExtractor(BaseExtractor):
         """
         
         raw_events = self._query(sql)
+        
+        # Apply callbacks (transformations) before mapping itemids to feature names
+        # This allows callbacks to access original itemid information
+        for feature_name, config in feature_mapping.items():
+            if config.get("source") == "chartevents" and "transform" in config:
+                callback_name = config["transform"]
+                callback_func = get_callback(callback_name)
+                
+                # Get itemids for this feature
+                itemids = config.get("itemid", [])
+                if isinstance(itemids, int):
+                    itemids = [itemids]
+                
+                # Apply callback only to rows for this feature's itemids
+                feature_mask = pl.col("itemid").is_in(itemids)
+                feature_rows = raw_events.filter(feature_mask)
+                
+                if len(feature_rows) > 0:
+                    # Apply callback with metadata
+                    transformed = callback_func(feature_rows, config)
+                    
+                    # Replace original rows with transformed rows
+                    raw_events = pl.concat([
+                        raw_events.filter(~feature_mask),  # Keep non-feature rows
+                        transformed  # Add transformed rows
+                    ]).sort(["stay_id", "charttime"])
         
         # Map itemid to feature_name using join (robust across Polars versions)
         itemid_mapping_df = pl.DataFrame({
