@@ -327,14 +327,50 @@ class BaseExtractor(ABC):
         
         # Aggregate by stay_id, hour, feature_name (mean for multiple values in same hour)
         # Also track that we observed at least one value
-        aggregated = (
-            events_with_hours
-            .group_by(["stay_id", "hour", "feature_name"])
-            .agg([
-                pl.col("valuenum").mean().alias("value"),
-                pl.lit(True).alias("observed")  # Mark as observed
-            ])
-        )
+        aggregation_strategy = {}
+        for feature_name, config in feature_mapping.items():
+            # Prefer explicit aggregation if provided; otherwise infer sensible default
+            agg = config.get("aggregation")
+            if agg is None:
+                source = config.get("source")
+                agg = "sum" if source == "outputevents" else "mean"
+            aggregation_strategy[feature_name] = agg
+        
+        aggregated_parts: List[pl.DataFrame] = []
+        
+        # Sum-aggregated features (e.g., urine output)
+        sum_features = [f for f, agg in aggregation_strategy.items() if agg == "sum"]
+        if sum_features:
+            aggregated_parts.append(
+                events_with_hours
+                .filter(pl.col("feature_name").is_in(sum_features))
+                .group_by(["stay_id", "hour", "feature_name"])
+                .agg([
+                    pl.col("valuenum").sum().alias("value"),
+                    pl.lit(True).alias("observed")
+                ])
+            )
+        
+        # Mean-aggregated features (default)
+        mean_features = [f for f, agg in aggregation_strategy.items() if agg != "sum"]
+        if mean_features:
+            aggregated_parts.append(
+                events_with_hours
+                .filter(pl.col("feature_name").is_in(mean_features))
+                .group_by(["stay_id", "hour", "feature_name"])
+                .agg([
+                    pl.col("valuenum").mean().alias("value"),
+                    pl.lit(True).alias("observed")
+                ])
+            )
+        
+        aggregated = pl.concat(aggregated_parts) if aggregated_parts else pl.DataFrame({
+            "stay_id": [],
+            "hour": [],
+            "feature_name": [],
+            "value": [],
+            "observed": []
+        })
         
         # Pivot to wide format: one column per feature
         # First pivot the values

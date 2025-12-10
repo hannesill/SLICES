@@ -89,7 +89,7 @@ class MIMICIVExtractor(BaseExtractor):
         stay_ids: List[int],
         feature_mapping: Dict[str, Any]
     ) -> pl.DataFrame:
-        """Extract raw chartevents for specified features (MIMIC-IV specific).
+        """Extract raw events for all configured sources (MIMIC-IV specific).
 
         Args:
             stay_ids: List of ICU stay IDs to extract.
@@ -103,93 +103,29 @@ class MIMICIVExtractor(BaseExtractor):
                 - feature_name: Canonical feature name
                 - valuenum: Numeric value
         """
-        # Build itemid -> feature_name mapping and collect all itemids
-        itemid_to_feature = {}
-        all_itemids = []
-        
+        # Group features by source (chartevents, labevents, outputevents, ...)
+        features_by_source: Dict[str, list[tuple[str, Dict[str, Any]]]] = {}
         for feature_name, config in feature_mapping.items():
-            # Only process chartevents for now
-            if config.get("source") == "chartevents":
-                itemids = config.get("itemid", [])
-                # Ensure itemids is a list
-                if isinstance(itemids, int):
-                    itemids = [itemids]
-                
-                for itemid in itemids:
-                    itemid_to_feature[itemid] = feature_name
-                    all_itemids.append(itemid)
-        
-        if not all_itemids:
-            # No chartevents features to extract
+            source = config.get("source")
+            if source is None:
+                continue
+            features_by_source.setdefault(source, []).append((feature_name, config))
+
+        raw_event_batches: List[pl.DataFrame] = []
+        for source, features in features_by_source.items():
+            raw_event_batches.append(
+                self._extract_events_for_source(source=source, stay_ids=stay_ids, features=features)
+            )
+
+        if not raw_event_batches:
             return pl.DataFrame({
                 "stay_id": [],
                 "charttime": [],
                 "feature_name": [],
                 "valuenum": []
             })
-        
-        # Query chartevents
-        chartevents_path = self._parquet_path("icu", "chartevents")
-        stay_ids_str = ",".join(map(str, stay_ids))
-        itemids_str = ",".join(map(str, all_itemids))
-        
-        sql = f"""
-        SELECT 
-            stay_id,
-            charttime,
-            itemid,
-            valuenum
-        FROM 
-            read_parquet('{chartevents_path}')
-        WHERE 
-            stay_id IN ({stay_ids_str})
-            AND itemid IN ({itemids_str})
-            AND valuenum IS NOT NULL
-        ORDER BY 
-            stay_id, charttime
-        """
-        
-        raw_events = self._query(sql)
-        
-        # Apply callbacks (transformations) before mapping itemids to feature names
-        # This allows callbacks to access original itemid information
-        for feature_name, config in feature_mapping.items():
-            if config.get("source") == "chartevents" and "transform" in config:
-                callback_name = config["transform"]
-                callback_func = get_callback(callback_name)
-                
-                # Get itemids for this feature
-                itemids = config.get("itemid", [])
-                if isinstance(itemids, int):
-                    itemids = [itemids]
-                
-                # Apply callback only to rows for this feature's itemids
-                feature_mask = pl.col("itemid").is_in(itemids)
-                feature_rows = raw_events.filter(feature_mask)
-                
-                if len(feature_rows) > 0:
-                    # Apply callback with metadata
-                    transformed = callback_func(feature_rows, config)
-                    
-                    # Replace original rows with transformed rows
-                    raw_events = pl.concat([
-                        raw_events.filter(~feature_mask),  # Keep non-feature rows
-                        transformed  # Add transformed rows
-                    ]).sort(["stay_id", "charttime"])
-        
-        # Map itemid to feature_name using join (robust across Polars versions)
-        itemid_mapping_df = pl.DataFrame({
-            "itemid": list(itemid_to_feature.keys()),
-            "feature_name": list(itemid_to_feature.values())
-        })
-        
-        events_with_names = (
-            raw_events
-            .join(itemid_mapping_df, on="itemid", how="inner")
-            .select(["stay_id", "charttime", "feature_name", "valuenum"])
-        )
-        
-        return events_with_names
+
+        return pl.concat(raw_event_batches)
         
 
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
@@ -259,3 +195,134 @@ class MIMICIVExtractor(BaseExtractor):
         """
 
         return self._query(sql)
+
+    # -------------------------------------------------------------------------
+    # Private helpers
+    # -------------------------------------------------------------------------
+
+    def _extract_events_for_source(
+        self,
+        source: str,
+        stay_ids: List[int],
+        features: list[tuple[str, Dict[str, Any]]],
+    ) -> pl.DataFrame:
+        """Extract events for a single source (chartevents, labevents, outputevents)."""
+        source_to_table = {
+            "chartevents": ("icu", "chartevents", "charttime"),
+            "labevents": ("hosp", "labevents", "charttime"),
+            "outputevents": ("icu", "outputevents", "charttime"),
+        }
+
+        if source not in source_to_table:
+            raise ValueError(f"Unsupported source '{source}' for MIMIC-IV extractor")
+
+        schema, table, time_col = source_to_table[source]
+
+        itemid_to_feature: Dict[int, str] = {}
+        all_itemids: List[int] = []
+        value_cols = set()
+
+        for feature_name, config in features:
+            itemids = config.get("itemid", [])
+            if isinstance(itemids, int):
+                itemids = [itemids]
+
+            value_cols.add(config.get("value_col", "valuenum"))
+
+            for itemid in itemids:
+                itemid_to_feature[itemid] = feature_name
+                all_itemids.append(itemid)
+
+        if not all_itemids:
+            return pl.DataFrame({
+                "stay_id": [],
+                "charttime": [],
+                "feature_name": [],
+                "valuenum": []
+            })
+
+        if len(value_cols) > 1:
+            raise ValueError(
+                f"Mixed value columns for source '{source}': {value_cols}. "
+                "Configure a consistent value_col per source."
+            )
+
+        value_col = next(iter(value_cols))
+        parquet_path = self._parquet_path(schema, table)
+        stay_ids_str = ",".join(map(str, stay_ids))
+        itemids_str = ",".join(map(str, all_itemids))
+
+        # labevents doesn't have stay_id directly - needs join with icustays
+        if source == "labevents":
+            icustays_path = self._parquet_path("icu", "icustays")
+            sql = f"""
+            SELECT 
+                i.stay_id,
+                l.{time_col} AS charttime,
+                l.itemid,
+                l.{value_col} AS valuenum
+            FROM 
+                read_parquet('{parquet_path}') AS l
+            INNER JOIN 
+                read_parquet('{icustays_path}') AS i
+                ON l.hadm_id = i.hadm_id
+            WHERE 
+                i.stay_id IN ({stay_ids_str})
+                AND l.itemid IN ({itemids_str})
+                AND l.{value_col} IS NOT NULL
+            ORDER BY 
+                i.stay_id, l.{time_col}
+            """
+        else:
+            # chartevents and outputevents have stay_id directly
+            sql = f"""
+            SELECT 
+                stay_id,
+                {time_col} AS charttime,
+                itemid,
+                {value_col} AS valuenum
+            FROM 
+                read_parquet('{parquet_path}')
+            WHERE 
+                stay_id IN ({stay_ids_str})
+                AND itemid IN ({itemids_str})
+                AND {value_col} IS NOT NULL
+            ORDER BY 
+                stay_id, {time_col}
+            """
+
+        raw_events = self._query(sql)
+
+        # Apply callbacks before mapping itemids to feature names
+        for feature_name, config in features:
+            if "transform" not in config:
+                continue
+
+            itemids = config.get("itemid", [])
+            if isinstance(itemids, int):
+                itemids = [itemids]
+
+            callback_name = config["transform"]
+            callback_func = get_callback(callback_name)
+
+            feature_mask = pl.col("itemid").is_in(itemids)
+            feature_rows = raw_events.filter(feature_mask)
+
+            if len(feature_rows) > 0:
+                transformed = callback_func(feature_rows, config)
+                raw_events = pl.concat([
+                    raw_events.filter(~feature_mask),
+                    transformed,
+                ]).sort(["stay_id", "charttime"])
+
+        # Map itemid to feature_name using join (robust across Polars versions)
+        itemid_mapping_df = pl.DataFrame({
+            "itemid": list(itemid_to_feature.keys()),
+            "feature_name": list(itemid_to_feature.values())
+        })
+
+        return (
+            raw_events
+            .join(itemid_mapping_df, on="itemid", how="inner")
+            .select(["stay_id", "charttime", "feature_name", "valuenum"])
+        )
