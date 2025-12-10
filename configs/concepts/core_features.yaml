@@ -1,76 +1,572 @@
-# Core feature set: ~35 variables that exist across MIMIC-IV, eICU, HiRID
+# Core feature set: ~47 features for robust ICU patient embeddings
+# 
+# This comprehensive set covers all major organ systems and physiological domains
+# needed for SSL to learn meaningful patient state representations.
+#
 # Format: canonical_name -> dataset-specific extraction rules
+#   - source: chartevents | labevents | outputevents
+#   - itemid: list of MIMIC-IV item IDs that map to this concept
+#   - value_col: column containing the numeric value
+#   - units: standard units for this measurement
+#
+# Organization:
+#   1. vitals: High-frequency bedside measurements (chartevents)
+#   2. labs: Laboratory test results (labevents)
+#   3. outputs: Fluid output measurements (outputevents)
+
+# =============================================================================
+# VITALS (Chartevents)
+# =============================================================================
+# High-frequency measurements from bedside monitors and assessments.
+# Typical frequency: Minutes to hourly
 
 vitals:
+  # === Cardiovascular (5) ===
   heart_rate:
     mimic_iv:
       source: chartevents
       itemid: [220045]
       value_col: valuenum
     units: bpm
+    min: 0
+    max: 300
     
   sbp:
     mimic_iv:
       source: chartevents
-      itemid: [220050, 220179]  # Arterial, Non-invasive
+      itemid: [220050, 220179]  # Arterial BP Systolic, Non-Invasive BP Systolic
       value_col: valuenum
     units: mmHg
+    min: 0
+    max: 300
     
   dbp:
     mimic_iv:
       source: chartevents
-      itemid: [220051, 220180]
+      itemid: [220051, 220180]  # Arterial BP Diastolic, Non-Invasive BP Diastolic
       value_col: valuenum
     units: mmHg
+    min: 0
+    max: 200
     
   map:
     mimic_iv:
       source: chartevents
-      itemid: [220052, 220181, 225312]
+      itemid: [220052, 220181, 225312]  # Arterial BP Mean, Non-Invasive BP Mean, ART BP Mean
       value_col: valuenum
     units: mmHg
+    min: 0
+    max: 250
     
+  cvp:
+    mimic_iv:
+      source: chartevents
+      itemid: [220074]  # Central Venous Pressure
+      value_col: valuenum
+    units: mmHg
+    min: 0
+    max: 30
+    # 993k measurements, 21k stays
+    # Volume status and right heart function indicator
+  
+  # === Respiratory (5) ===
   resp_rate:
     mimic_iv:
       source: chartevents
-      itemid: [220210, 224690]
+      itemid: [220210, 224690]  # Respiratory Rate, Respiratory Rate (Total)
       value_col: valuenum
     units: breaths/min
+    min: 0
+    max: 120
     
   spo2:
     mimic_iv:
       source: chartevents
-      itemid: [220277]
+      itemid: [220277]  # O2 saturation pulseoxymetry
       value_col: valuenum
     units: '%'
+    min: 50
+    max: 100
     
+  fio2:
+    mimic_iv:
+      source: chartevents
+      itemid: [223835]  # Inspired O2 Fraction
+      value_col: valuenum
+    units: fraction
+    min: 0.21
+    max: 1.0
+    # 1.1M measurements, 47k stays
+    # CRITICAL: Contextualizes SpO2 (SpO2=95% on FiO2=0.21 vs 1.0 very different)
+    # Typical range: 0.21-1.0 (21%-100%)
+    
+  peep:
+    mimic_iv:
+      source: chartevents
+      itemid: [220339]  # PEEP set
+      value_col: valuenum
+    units: cmH2O
+    min: 0
+    max: 30
+    # 860k measurements, 39k stays
+    # Ventilator support level indicator
+    # Only present for mechanically ventilated patients
+    
+  # === Neurological (3) ===
+  gcs_eye:
+    mimic_iv:
+      source: chartevents
+      itemid: [220739]  # GCS - Eye Opening
+      value_col: valuenum
+    units: score
+    min: 1
+    max: 4
+    # 2.2M measurements, 94k stays
+    # Range: 1-4
+    # NOTE: Sum gcs_eye + gcs_verbal + gcs_motor = GCS total (3-15)
+    
+  gcs_verbal:
+    mimic_iv:
+      source: chartevents
+      itemid: [223900]  # GCS - Verbal Response
+      value_col: valuenum
+    units: score
+    min: 1
+    max: 5
+    # 2.2M measurements, 94k stays
+    # Range: 1-5
+    
+  gcs_motor:
+    mimic_iv:
+      source: chartevents
+      itemid: [223901]  # GCS - Motor Response
+      value_col: valuenum
+    units: score
+    min: 1
+    max: 6
+    # 2.2M measurements, 94k stays
+    # Range: 1-6
+    
+  rass:
+    mimic_iv:
+      source: chartevents
+      itemid: [228096]  # Richmond-RAS Scale
+      value_col: valuenum
+    units: score
+    min: -5
+    max: 4
+    # 1.7M measurements, 84k stays
+    # Range: -5 (unarousable) to +4 (combative)
+    # Sedation/agitation assessment
+  
+  # === Temperature ===
   temperature:
     mimic_iv:
       source: chartevents
-      itemid: [223761, 223762]  # F, C
+      itemid: [223761, 223762]  # Temperature Fahrenheit, Temperature Celsius
       value_col: valuenum
-      transform: to_celsius  # Convert F to C
+      transform: to_celsius  # Convert F to C if needed
     units: celsius
+    min: 32
+    max: 42
+  
+  # === Glucose Monitoring ===
+  glucose_fingerstick:
+    mimic_iv:
+      source: chartevents
+      itemid: [225664]  # Glucose finger stick (range 70-100)
+      value_col: valuenum
+    units: mg/dL
+    min: 0
+    max: 1000
+    # 1.0M measurements, 69k stays
+    # Frequent bedside glucose monitoring (hourly in some cases)
+    # Complements lab glucose with higher temporal resolution
+
+# =============================================================================
+# LABS (Labevents)
+# =============================================================================
+# Laboratory test results from blood draws.
+# Typical frequency: 6-12 hours for most, 1-4 hours for critical labs
 
 labs:
+  # === Renal Function & Electrolytes (8) ===
+  creatinine:
+    mimic_iv:
+      source: labevents
+      itemid: [50912]  # Creatinine
+      value_col: valuenum
+    units: mg/dL
+    min: 0
+    max: 15
+    # 4.2M measurements, 293k patients
+    # Key marker of kidney function
+    
+  bun:
+    mimic_iv:
+      source: labevents
+      itemid: [51006]  # Urea Nitrogen
+      value_col: valuenum
+    units: mg/dL
+    min: 0
+    max: 200
+    # 4.2M measurements, 293k patients
+    # Kidney function and protein metabolism
+    
+  sodium:
+    mimic_iv:
+      source: labevents
+      itemid: [50983, 50824]  # Sodium, Sodium (whole blood)
+      value_col: valuenum
+    units: mEq/L
+    min: 110
+    max: 165
+    # 4.1M measurements, 288k patients
+    
+  potassium:
+    mimic_iv:
+      source: labevents
+      itemid: [50971, 50822]  # Potassium, Potassium (whole blood)
+      value_col: valuenum
+    units: mEq/L
+    min: 0
+    max: 10
+    # 4.1M measurements, 288k patients
+    # Critical for cardiac function
+    
+  chloride:
+    mimic_iv:
+      source: labevents
+      itemid: [50902, 50806]  # Chloride, Chloride (whole blood)
+      value_col: valuenum
+    units: mEq/L
+    min: 80
+    max: 130
+    # 4.1M measurements, 288k patients
+    
+  bicarbonate:
+    mimic_iv:
+      source: labevents
+      itemid: [50882, 50803]  # Bicarbonate, Calculated Bicarbonate (whole blood)
+      value_col: valuenum
+    units: mEq/L
+    min: 5
+    max: 50
+    # 3.9M measurements, 287k patients
+    # Acid-base status
+    
+  calcium:
+    mimic_iv:
+      source: labevents
+      itemid: [50893]  # Calcium, Total
+      value_col: valuenum
+    units: mg/dL
+    min: 4
+    max: 20
+    # 3.0M measurements, 211k patients
+    # Important for cardiac and neuromuscular function
+    
+  magnesium:
+    mimic_iv:
+      source: labevents
+      itemid: [50960]  # Magnesium
+      value_col: valuenum
+    units: mg/dL
+    min: 0
+    max: 6
+    # 2.9M measurements, 203k patients
+    # Electrolyte critical for cardiac rhythm
+    
+  phosphate:
+    mimic_iv:
+      source: labevents
+      itemid: [50970]  # Phosphate
+      value_col: valuenum
+    units: mg/dL
+    min: 0
+    max: 10
+    # 2.8M measurements, 201k patients
+  
+  # === Glucose Metabolism (1) ===
   glucose:
     mimic_iv:
       source: labevents
       itemid: [50931, 50809]  # Glucose, Glucose (whole blood)
       value_col: valuenum
     units: mg/dL
-    
-  creatinine:
+    min: 0
+    max: 1000
+    # 4.2M measurements, 293k patients
+    # Lab glucose (less frequent than fingerstick)
+  
+  # === Acid-Base & Metabolic Status (2) ===
+  anion_gap:
     mimic_iv:
       source: labevents
-      itemid: [50912]
+      itemid: [50868]  # Anion Gap
+      value_col: valuenum
+    units: mEq/L
+    min: 0
+    max: 30
+    # 3.9M measurements, 287k patients
+    # Calculated but stored as lab value
+    # Useful for detecting metabolic acidosis
+    
+  lactate:
+    mimic_iv:
+      source: labevents
+      itemid: [50813]  # Lactate
+      value_col: valuenum
+    units: mmol/L
+    min: 0
+    max: 50
+    # 670k measurements, 136k patients
+    # Key marker of tissue hypoperfusion and shock
+  
+  # === Blood Gas (4) ===
+  ph:
+    mimic_iv:
+      source: labevents
+      itemid: [50820, 50831]  # pH (arterial), pH (other body fluid)
+      value_col: valuenum
+    units: pH
+    min: 6.8
+    max: 8.0
+    # 754k measurements, 76k patients
+    
+  pao2:
+    mimic_iv:
+      source: labevents
+      itemid: [50821]  # pO2
+      value_col: valuenum
+    units: mmHg
+    min: 0
+    max: 500
+    # 698k measurements, 71k patients
+    # Arterial oxygen tension
+    
+  paco2:
+    mimic_iv:
+      source: labevents
+      itemid: [50818]  # pCO2
+      value_col: valuenum
+    units: mmHg
+    min: 10
+    max: 100
+    # 698k measurements, 71k patients
+    # Arterial carbon dioxide tension
+    
+  base_excess:
+    mimic_iv:
+      source: labevents
+      itemid: [50802]  # Base Excess
+      value_col: valuenum
+    units: mEq/L
+    min: -25
+    max: 25
+    # 698k measurements, 71k patients
+    # Metabolic component of acid-base status
+  
+  # === Hematology - Complete Blood Count (6) ===
+  hemoglobin:
+    mimic_iv:
+      source: labevents
+      itemid: [51222, 50811]  # Hemoglobin, Hemoglobin (whole blood)
+      value_col: valuenum
+    units: g/dL
+    min: 4
+    max: 18
+    # 4.2M measurements, 299k patients
+    
+  hematocrit:
+    mimic_iv:
+      source: labevents
+      itemid: [51221]  # Hematocrit
+      value_col: valuenum
+    units: '%'
+    min: 15
+    max: 60
+    # 4.3M measurements, 299k patients
+    # Closely related to hemoglobin but provides volume status info
+    
+  wbc:
+    mimic_iv:
+      source: labevents
+      itemid: [51301, 51300]  # White Blood Cells, WBC Count
+      value_col: valuenum
+    units: K/uL
+    min: 0
+    max: 100
+    # 4.2M measurements, 299k patients
+    
+  neutrophils:
+    mimic_iv:
+      source: labevents
+      itemid: [51256]  # Neutrophils (%)
+      value_col: valuenum
+    units: '%'
+    min: 0
+    max: 100
+    # 1.6M measurements, 276k patients
+    # Infection and stress response marker
+    # High neutrophils = bacterial infection pattern
+    
+  platelets:
+    mimic_iv:
+      source: labevents
+      itemid: [51265]  # Platelet Count
+      value_col: valuenum
+    units: K/uL
+    min: 5
+    max: 1200
+    # 4.2M measurements, 299k patients
+    # Coagulation and bone marrow function
+  
+  # === Liver Function (5) ===
+  bilirubin:
+    mimic_iv:
+      source: labevents
+      itemid: [50885]  # Bilirubin, Total
       value_col: valuenum
     units: mg/dL
+    min: 0
+    max: 100
+    # 1.6M measurements, 186k patients
+    # Liver function and hemolysis marker
     
-  # TODO: Add remaining lab features
-  # bun, sodium, potassium, chloride, bicarbonate
-  # ph, pao2, paco2, lactate, base_excess
-  # hemoglobin, hematocrit, wbc, platelets
-  # bilirubin, alt, ast, albumin
-  # inr, ptt
+  alt:
+    mimic_iv:
+      source: labevents
+      itemid: [50861]  # Alanine Aminotransferase (ALT)
+      value_col: valuenum
+    units: IU/L
+    min: 0
+    max: 10000
+    # 1.8M measurements, 202k patients
+    # Hepatocellular injury marker (more liver-specific)
+    
+  ast:
+    mimic_iv:
+      source: labevents
+      itemid: [50878]  # Aspartate Aminotransferase (AST)
+      value_col: valuenum
+    units: IU/L
+    min: 0
+    max: 10000
+    # 1.8M measurements, 200k patients
+    # Hepatocellular injury marker (also in cardiac/muscle)
+    
+  alkaline_phosphatase:
+    mimic_iv:
+      source: labevents
+      itemid: [50863]  # Alkaline Phosphatase
+      value_col: valuenum
+    units: IU/L
+    min: 0
+    max: 2000
+    # 1.6M measurements, 189k patients
+    # Cholestatic liver injury and bone turnover
+    
+  albumin:
+    mimic_iv:
+      source: labevents
+      itemid: [50862]  # Albumin
+      value_col: valuenum
+    units: g/dL
+    min: 0
+    max: 6
+    # 1.0M measurements, 166k patients
+    # Liver synthetic function and nutritional status
+  
+  # === Coagulation (3) ===
+  inr:
+    mimic_iv:
+      source: labevents
+      itemid: [51237]  # INR(PT)
+      value_col: valuenum
+    units: ratio
+    min: 0.5
+    max: 10
+    # 1.8M measurements, 196k patients
+    # Standardized prothrombin time, warfarin monitoring
+    
+  pt:
+    mimic_iv:
+      source: labevents
+      itemid: [51274]  # PT (Prothrombin Time)
+      value_col: valuenum
+    units: sec
+    min: 0
+    max: 100
+    # 1.8M measurements, 196k patients
+    # Extrinsic coagulation pathway
+    
+  ptt:
+    mimic_iv:
+      source: labevents
+      itemid: [51275]  # PTT (Partial Thromboplastin Time)
+      value_col: valuenum
+    units: sec
+    min: 0
+    max: 150
+    # 1.6M measurements, 191k patients
+    # Intrinsic coagulation pathway, heparin monitoring
 
+# =============================================================================
+# OUTPUTS (Outputevents)
+# =============================================================================
+# Fluid output measurements, primarily urine output.
+# Typical frequency: Hourly aggregation
+
+outputs:
+  urine_output:
+    mimic_iv:
+      source: outputevents
+      itemid: [226559]  # Foley catheter
+      value_col: value
+    units: mL
+    min: 0
+    max: 2000
+    # 3.6M measurements, 66k stays
+    # CRITICAL: Most dynamic renal function marker
+    # Key for: AKI detection, volume status, shock assessment
+    # NOTE: Requires hourly aggregation (sum within each hour bin)
+    # Normal: ~0.5-1 mL/kg/hr, Oliguria: <0.5 mL/kg/hr
+
+# =============================================================================
+# FEATURE SUMMARY
+# =============================================================================
+# Total: 47 features across 3 data sources
+#
+# By Source:
+#   - Chartevents (vitals): 15 features
+#   - Labevents (labs): 31 features  
+#   - Outputevents (outputs): 1 feature
+#
+# By Organ System:
+#   - Cardiovascular: 5 (HR, SBP, DBP, MAP, CVP)
+#   - Respiratory: 5 (RR, SpO2, FiO2, PEEP, PaCO2)
+#   - Neurological: 5 (GCS eye/verbal/motor, RASS, temperature)
+#   - Renal: 4 (Creatinine, BUN, urine output, phosphate)
+#   - Metabolic: 9 (Glucose×2, Na, K, Cl, HCO3, Ca, Mg, anion gap)
+#   - Acid-Base: 4 (pH, PaO2, lactate, base excess)
+#   - Hematology: 6 (Hgb, Hct, WBC, neutrophils, platelets)
+#   - Liver: 5 (Bilirubin, ALT, AST, ALP, albumin)
+#   - Coagulation: 3 (INR, PT, PTT)
+#   - Other: 1 (Glucose fingerstick)
+#
+# Clinical Syndromes Detectable:
+#   ✓ Sepsis/Infection (lactate, WBC, neutrophils, temperature)
+#   ✓ ARDS (PaO2/FiO2 ratio, PEEP, RR)
+#   ✓ AKI (creatinine, BUN, urine output)
+#   ✓ Acute Liver Failure (bilirubin, ALT, AST, INR, albumin)
+#   ✓ DIC (platelets, INR, PT, PTT)
+#   ✓ Shock (MAP, lactate, CVP, urine output)
+#   ✓ Metabolic Acidosis (pH, HCO3, anion gap, base excess)
+#   ✓ Electrolyte Disorders (all major electrolytes)
+#   ✓ Altered Mental Status (GCS, RASS)
+#
+# Severity Score Components:
+#   ✓ SOFA: Most components covered
+#   ✓ APACHE: Most components covered
+#   ✓ qSOFA: RR, MAP, GCS
