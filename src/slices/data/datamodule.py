@@ -176,6 +176,38 @@ class ICUDataModule(L.LightningDataModule):
                 test_indices.append(idx)
         
         return train_indices, val_indices, test_indices
+    
+    def _save_split_info(self) -> None:
+        """Save split information to file for reproducibility."""
+        if self.dataset is None:
+            return
+        
+        static_df = self.dataset.static_df
+        stay_to_patient = dict(zip(
+            static_df["stay_id"].to_list(),
+            static_df["patient_id"].to_list()
+        ))
+        
+        train_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.train_indices})
+        val_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.val_indices})
+        test_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.test_indices})
+        
+        split_info = {
+            "seed": self.seed,
+            "train_ratio": self.train_ratio,
+            "val_ratio": self.val_ratio,
+            "test_ratio": self.test_ratio,
+            "train_patients": train_patients,
+            "val_patients": val_patients,
+            "test_patients": test_patients,
+            "train_stays": len(self.train_indices),
+            "val_stays": len(self.val_indices),
+            "test_stays": len(self.test_indices),
+        }
+        
+        split_path = self.processed_dir / "splits.yaml"
+        with open(split_path, "w") as f:
+            yaml.dump(split_info, f, default_flow_style=False)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Set up datasets for train/val/test.
@@ -196,6 +228,9 @@ class ICUDataModule(L.LightningDataModule):
         self.train_indices, self.val_indices, self.test_indices = (
             self._get_patient_level_splits()
         )
+        
+        # Save split information for reproducibility
+        self._save_split_info()
 
     def train_dataloader(self) -> DataLoader:
         """Return training DataLoader."""
