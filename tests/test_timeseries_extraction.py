@@ -140,86 +140,83 @@ class TestTimeSeriesExtraction:
         assert "itemid" in feature_mapping["heart_rate"]
 
     def test_extract_raw_events(self, mock_extractor, mock_chartevents_df):
-        """Test that raw events extraction works correctly with new standardized schema."""
-        # Create feature mapping in new format (as returned by _load_feature_mapping)
+        """Raw events extraction concatenates multiple sources and maps feature names."""
         feature_mapping = {
             "heart_rate": {"source": "chartevents", "itemid": [220045], "value_col": "valuenum"},
-            "sbp": {"source": "chartevents", "itemid": [220050, 220179], "value_col": "valuenum"}
+            "sbp": {"source": "chartevents", "itemid": [220050, 220179], "value_col": "valuenum"},
+            "glucose": {"source": "labevents", "itemid": [50931], "value_col": "valuenum"},
         }
-        
-        # Mock the _query method
-        with patch.object(mock_extractor, '_query', return_value=mock_chartevents_df):
+
+        chart_events = mock_chartevents_df
+        lab_events = pl.DataFrame({
+            "stay_id": [1],
+            "charttime": [chart_events["charttime"][0]],
+            "itemid": [50931],
+            "feature_name": ["glucose"],
+            "valuenum": [140.0],
+        })
+
+        def fake_extract_source(source: str, stay_ids, features):
+            if source == "chartevents":
+                return chart_events.with_columns(
+                    pl.when(pl.col("itemid") == 220045)
+                    .then(pl.lit("heart_rate"))
+                    .otherwise(pl.lit("sbp"))
+                    .alias("feature_name")
+                ).select(["stay_id", "charttime", "feature_name", "valuenum"])
+            if source == "labevents":
+                return lab_events.select(["stay_id", "charttime", "feature_name", "valuenum"])
+            raise AssertionError("Unexpected source")
+
+        with patch.object(mock_extractor, "_extract_events_for_source", side_effect=fake_extract_source):
             result = mock_extractor._extract_raw_events([1, 2], feature_mapping)
-        
-        # Check result has standardized schema (not itemid!)
-        assert "stay_id" in result.columns
-        assert "charttime" in result.columns
-        assert "feature_name" in result.columns  # Standardized!
-        assert "valuenum" in result.columns
-        assert "itemid" not in result.columns  # itemid should be mapped away
-        
-        # Check data content
-        assert len(result) == 9
-        assert set(result["stay_id"].to_list()) == {1, 2}
-        assert set(result["feature_name"].to_list()) == {"heart_rate", "sbp"}
+
+        assert {"stay_id", "charttime", "feature_name", "valuenum"} <= set(result.columns)
+        assert "itemid" not in result.columns
+        assert set(result["feature_name"].to_list()) == {"heart_rate", "sbp", "glucose"}
 
     def test_bin_to_hourly_grid_aggregation(self, mock_extractor, mock_stays_df):
-        """Test that hourly binning and aggregation works correctly."""
-        # Feature mapping in new format
+        """Hourly binning aggregates means and sums per source defaults."""
         feature_mapping = {
             "heart_rate": {"source": "chartevents", "itemid": [220045]},
-            "sbp": {"source": "chartevents", "itemid": [220050]}
+            "sbp": {"source": "chartevents", "itemid": [220050]},
+            "urine_output": {"source": "outputevents", "itemid": [226559]},
         }
-        
-        # Create standardized events (with feature_name, not itemid)
+
         base_time = datetime(2020, 1, 1, 10, 0)
         standardized_events = pl.DataFrame({
-            "stay_id": [1, 1, 1, 1, 1, 1, 2, 2, 2],
+            "stay_id": [1, 1, 1, 1, 1, 1],
             "charttime": [
-                base_time + timedelta(minutes=5),   # hour 0
-                base_time + timedelta(minutes=30),  # hour 0
-                base_time + timedelta(hours=1, minutes=10),  # hour 1
-                base_time + timedelta(hours=2, minutes=15),  # hour 2
-                base_time + timedelta(hours=2, minutes=45),  # hour 2
-                base_time + timedelta(hours=3),     # hour 3
-                datetime(2020, 1, 2, 14, 45),      # hour 0 for stay 2
-                datetime(2020, 1, 2, 15, 30),      # hour 1 for stay 2
-                datetime(2020, 1, 2, 16, 15),      # hour 1 for stay 2
+                base_time + timedelta(minutes=5),   # hour 0 hr
+                base_time + timedelta(minutes=30),  # hour 0 hr
+                base_time + timedelta(hours=1, minutes=10),  # hour 1 sbp
+                base_time + timedelta(hours=2, minutes=15),  # hour 2 urine
+                base_time + timedelta(hours=2, minutes=45),  # hour 2 urine
+                base_time + timedelta(hours=2, minutes=50),  # hour 2 urine
             ],
             "feature_name": [
-                "heart_rate", "heart_rate", "sbp", "heart_rate", "sbp", "heart_rate",
-                "heart_rate", "sbp", "sbp"
+                "heart_rate", "heart_rate", "sbp", "urine_output", "urine_output", "urine_output"
             ],
-            "valuenum": [80.0, 85.0, 120.0, 90.0, 115.0, 88.0, 75.0, 125.0, 130.0]
+            "valuenum": [80.0, 100.0, 120.0, 10.0, 20.0, 5.0]
         })
-        
-        # Mock extract_stays to return our test data
+
         with patch.object(mock_extractor, 'extract_stays', return_value=mock_stays_df):
             result = mock_extractor._bin_to_hourly_grid(
-                standardized_events, [1, 2], feature_mapping
+                standardized_events, [1], feature_mapping
             )
-        
-        # Check result structure
-        assert "stay_id" in result.columns
-        assert "hour" in result.columns
-        assert "heart_rate" in result.columns
-        assert "sbp" in result.columns
-        assert "heart_rate_mask" in result.columns
-        assert "sbp_mask" in result.columns
-        
-        # Check that values are aggregated correctly (mean)
-        # For stay_id=1, hour=0: two heart_rate values (80, 85) -> mean = 82.5
+
+        assert {"stay_id", "hour", "heart_rate", "sbp", "urine_output"} <= set(result.columns)
+        assert {"heart_rate_mask", "sbp_mask", "urine_output_mask"} <= set(result.columns)
+
         stay1_hour0 = result.filter((pl.col("stay_id") == 1) & (pl.col("hour") == 0))
         if len(stay1_hour0) > 0:
-            assert stay1_hour0["heart_rate"][0] == pytest.approx(82.5)
-            assert stay1_hour0["heart_rate_mask"][0] == True
-            assert stay1_hour0["sbp_mask"][0] == False  # No sbp in hour 0
-        
-        # For stay_id=2, hour=1: two sbp values (125, 130) -> mean = 127.5
-        stay2_hour1 = result.filter((pl.col("stay_id") == 2) & (pl.col("hour") == 1))
-        if len(stay2_hour1) > 0:
-            assert stay2_hour1["sbp"][0] == pytest.approx(127.5)
-            assert stay2_hour1["sbp_mask"][0] == True
+            assert stay1_hour0["heart_rate"][0] == pytest.approx(90.0)  # mean of 80 & 100
+            assert stay1_hour0["sbp_mask"][0] is False
+
+        stay1_hour2 = result.filter((pl.col("stay_id") == 1) & (pl.col("hour") == 2))
+        if len(stay1_hour2) > 0:
+            assert stay1_hour2["urine_output"][0] == pytest.approx(35.0)  # sum of 10+20+5
+            assert stay1_hour2["urine_output_mask"][0] is True
 
     def test_bin_to_hourly_grid_missing_values(self, mock_extractor, mock_stays_df):
         """Test that missing values are handled correctly with masks."""
