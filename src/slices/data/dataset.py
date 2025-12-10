@@ -96,6 +96,17 @@ class ICUDataset(Dataset):
         timeseries_path = self.data_dir / "timeseries.parquet"
         self.timeseries_df = pl.read_parquet(timeseries_path)
         
+        # Warn for large datasets that may cause memory issues
+        n_stays = len(self.timeseries_df)
+        if n_stays > 100000:
+            import warnings
+            warnings.warn(
+                f"Large dataset detected ({n_stays:,} stays). "
+                "Loading entire dataset into memory. "
+                "Consider using chunked loading for datasets > 200K stays.",
+                UserWarning
+            )
+        
         # Load static features
         static_path = self.data_dir / "static.parquet"
         self.static_df = pl.read_parquet(static_path)

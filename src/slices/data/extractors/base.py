@@ -6,6 +6,7 @@ Users specify parquet_root pointing to their local Parquet files.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,7 +15,7 @@ import polars as pl
 import yaml
 from omegaconf import OmegaConf
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
@@ -100,6 +101,14 @@ class BaseExtractor(ABC):
         # Validate parquet directory exists
         if not self.parquet_root.exists():
             raise ValueError(f"Parquet directory not found: {self.parquet_root}")
+    
+    def __del__(self) -> None:
+        """Cleanup DuckDB connection on deletion."""
+        if hasattr(self, 'conn'):
+            try:
+                self.conn.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
 
     def _query(self, sql: str) -> pl.DataFrame:
         """Execute SQL query on local Parquet files and return Polars DataFrame.
@@ -528,6 +537,106 @@ class BaseExtractor(ABC):
         """
         pass
 
+    def _validate_stays(self, stays: pl.DataFrame) -> None:
+        """Validate stay metadata for required fields and data quality.
+        
+        Args:
+            stays: DataFrame with stay metadata.
+            
+        Raises:
+            ValueError: If validation fails.
+        """
+        # Check for null patient_ids (required for patient-level splits)
+        null_patients = stays.filter(pl.col("patient_id").is_null())
+        if len(null_patients) > 0:
+            raise ValueError(
+                f"Found {len(null_patients)} stays with null patient_id. "
+                "Patient IDs are required for patient-level splits."
+            )
+        
+        # Check for duplicate stay_ids
+        duplicates = stays.filter(pl.col("stay_id").is_duplicated())
+        if len(duplicates) > 0:
+            raise ValueError(
+                f"Found {len(duplicates)} duplicate stay_ids. Each stay must have a unique ID."
+            )
+        
+        # Check for negative or invalid LOS
+        invalid_los = stays.filter(
+            (pl.col("los_days").is_null()) | (pl.col("los_days") < 0)
+        )
+        if len(invalid_los) > 0:
+            console.print(
+                f"[yellow]Warning: Found {len(invalid_los)} stays with invalid LOS[/yellow]"
+            )
+    
+    def _validate_timeseries(
+        self, 
+        timeseries: pl.DataFrame, 
+        stay_ids: List[int],
+        feature_names: List[str]
+    ) -> None:
+        """Validate timeseries data consistency.
+        
+        Args:
+            timeseries: Sparse timeseries DataFrame.
+            stay_ids: List of expected stay IDs.
+            feature_names: List of expected feature names.
+            
+        Raises:
+            ValueError: If validation fails.
+        """
+        # Check that all stays have timeseries data
+        timeseries_stay_ids = set(timeseries["stay_id"].unique().to_list())
+        expected_stay_ids = set(stay_ids)
+        
+        missing = expected_stay_ids - timeseries_stay_ids
+        if missing:
+            console.print(
+                f"[yellow]Warning: {len(missing)} stays have no timeseries data[/yellow]"
+            )
+        
+        # Check that expected features are present
+        timeseries_features = {
+            col for col in timeseries.columns 
+            if col not in ["stay_id", "hour"] and not col.endswith("_mask")
+        }
+        missing_features = set(feature_names) - timeseries_features
+        if missing_features:
+            console.print(
+                f"[yellow]Warning: Missing features in timeseries: {missing_features}[/yellow]"
+            )
+    
+    def _validate_labels(self, labels: pl.DataFrame, stay_ids: List[int]) -> None:
+        """Validate label data consistency.
+        
+        Args:
+            labels: Labels DataFrame.
+            stay_ids: List of expected stay IDs.
+            
+        Raises:
+            ValueError: If validation fails.
+        """
+        if len(labels) == 0:
+            return
+        
+        label_stay_ids = set(labels["stay_id"].to_list())
+        expected_stay_ids = set(stay_ids)
+        
+        # Check for missing labels
+        missing = expected_stay_ids - label_stay_ids
+        if missing:
+            console.print(
+                f"[yellow]Warning: {len(missing)} stays have no labels[/yellow]"
+            )
+        
+        # Check for extra labels (shouldn't happen, but worth checking)
+        extra = label_stay_ids - expected_stay_ids
+        if extra:
+            console.print(
+                f"[yellow]Warning: {len(extra)} labels for stays not in dataset[/yellow]"
+            )
+
     def extract_labels(
         self, 
         stay_ids: List[int], 
@@ -654,6 +763,55 @@ class BaseExtractor(ABC):
         
         return pl.DataFrame(results)
 
+    def _check_existing_extraction(self) -> Optional[Dict[str, pl.DataFrame]]:
+        """Check if extraction output files already exist.
+        
+        Returns:
+            Dictionary with existing DataFrames if all files exist, None otherwise.
+            Keys: 'stays', 'timeseries', 'labels'
+        """
+        static_path = self.output_dir / "static.parquet"
+        timeseries_path = self.output_dir / "timeseries.parquet"
+        labels_path = self.output_dir / "labels.parquet"
+        metadata_path = self.output_dir / "metadata.yaml"
+        
+        # Check if all required files exist
+        if not all(p.exists() for p in [static_path, timeseries_path, labels_path, metadata_path]):
+            return None
+        
+        # Check if metadata matches current config
+        try:
+            with open(metadata_path) as f:
+                existing_metadata = yaml.safe_load(f)
+            
+            # Verify config matches (critical fields)
+            if (existing_metadata.get("feature_set") != self.config.feature_set or
+                existing_metadata.get("seq_length_hours") != self.config.seq_length_hours):
+                console.print(
+                    "[yellow]Warning: Existing extraction has different config. "
+                    "Will overwrite.[/yellow]"
+                )
+                return None
+        except Exception:
+            # If metadata can't be read, assume we should overwrite
+            return None
+        
+        # Load existing data
+        try:
+            existing = {
+                "stays": pl.read_parquet(static_path),
+                "timeseries": pl.read_parquet(timeseries_path),
+                "labels": pl.read_parquet(labels_path),
+            }
+            console.print(
+                f"[green]Found existing extraction with {len(existing['stays'])} stays. "
+                "Will resume and merge with new data.[/green]"
+            )
+            return existing
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load existing extraction: {e}[/yellow]")
+            return None
+
     def run(self) -> None:
         """Execute full extraction pipeline.
         
@@ -662,14 +820,27 @@ class BaseExtractor(ABC):
         - timeseries.parquet: Dense hourly features with observation masks
         - labels.parquet: Task labels for downstream prediction
         - metadata.yaml: Extraction metadata (feature names, task names, etc.)
+        
+        If output files already exist with matching configuration, will resume
+        extraction by skipping already-extracted stays and merging results.
         """
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Check for existing extraction
+        existing_data = self._check_existing_extraction()
+        existing_stay_ids = set()
+        if existing_data is not None:
+            existing_stay_ids = set(existing_data["stays"]["stay_id"].to_list())
         
         console.print(f"\n[bold blue]SLICES Data Extraction[/bold blue]")
         console.print(f"Output directory: {self.output_dir}")
         console.print(f"Feature set: {self.config.feature_set}")
         console.print(f"Sequence length: {self.config.seq_length_hours} hours")
-        console.print(f"Min stay length: {self.config.min_stay_hours} hours\n")
+        console.print(f"Min stay length: {self.config.min_stay_hours} hours")
+        if existing_stay_ids:
+            console.print(f"Resuming: {len(existing_stay_ids)} stays already extracted\n")
+        else:
+            console.print("")
 
         # -------------------------------------------------------------------------
         # Step 1: Extract stays (static features)
@@ -690,23 +861,51 @@ class BaseExtractor(ABC):
         console.print(f"Found {len(stays)} ICU stays")
         console.print(f"After filtering (>={self.config.min_stay_hours}h): {len(stays_filtered)} stays")
         
+        # Filter out already-extracted stays if resuming
+        if existing_stay_ids:
+            stays_filtered = stays_filtered.filter(
+                ~pl.col("stay_id").is_in(list(existing_stay_ids))
+            )
+            console.print(f"After excluding already-extracted: {len(stays_filtered)} stays to process")
+        
         stay_ids = stays_filtered["stay_id"].to_list()
         
         if len(stay_ids) == 0:
-            console.print("[red]Error: No stays remaining after filtering![/red]")
-            return
+            if existing_stay_ids:
+                console.print("[green]All stays already extracted. Nothing to do![/green]")
+                return
+            else:
+                console.print("[red]Error: No stays remaining after filtering![/red]")
+                return
+
+        # Validate stays have required fields
+        self._validate_stays(stays_filtered)
 
         # -------------------------------------------------------------------------
         # Step 2: Extract time-series features
         # -------------------------------------------------------------------------
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"Extracting timeseries for {len(stay_ids)} stays...", total=None)
-            sparse_timeseries = self.extract_timeseries(stay_ids)
-            progress.update(task, completed=True)
+        # Use progress bar for large extractions
+        if len(stay_ids) > 1000:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("({task.completed}/{task.total} stays)"),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task(f"Extracting timeseries...", total=len(stay_ids))
+                sparse_timeseries = self.extract_timeseries(stay_ids)
+                progress.update(task, completed=len(stay_ids))
+        else:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task(f"Extracting timeseries for {len(stay_ids)} stays...", total=None)
+                sparse_timeseries = self.extract_timeseries(stay_ids)
+                progress.update(task, completed=True)
         
         # Get feature names (columns without _mask suffix, excluding stay_id and hour)
         feature_names = [
@@ -714,6 +913,9 @@ class BaseExtractor(ABC):
             if col not in ["stay_id", "hour"] and not col.endswith("_mask")
         ]
         console.print(f"Extracted {len(feature_names)} features: {feature_names}")
+        
+        # Validate timeseries data
+        self._validate_timeseries(sparse_timeseries, stay_ids, feature_names)
         
         # Convert to dense representation
         with Progress(
@@ -750,7 +952,25 @@ class BaseExtractor(ABC):
             console.print("[yellow]No task configs found - labels will be empty[/yellow]")
 
         # -------------------------------------------------------------------------
-        # Step 4: Save to Parquet
+        # Step 4: Merge with existing data (if resuming)
+        # -------------------------------------------------------------------------
+        if existing_data is not None:
+            console.print("\n[bold]Merging with existing data...[/bold]")
+            
+            # Merge stays
+            stays_filtered = pl.concat([existing_data["stays"], stays_filtered])
+            console.print(f"  ✓ Merged stays: {len(stays_filtered)} total")
+            
+            # Merge timeseries
+            dense_timeseries = pl.concat([existing_data["timeseries"], dense_timeseries])
+            console.print(f"  ✓ Merged timeseries: {len(dense_timeseries)} total")
+            
+            # Merge labels
+            labels = pl.concat([existing_data["labels"], labels])
+            console.print(f"  ✓ Merged labels: {len(labels)} total")
+        
+        # -------------------------------------------------------------------------
+        # Step 5: Save to Parquet
         # -------------------------------------------------------------------------
         console.print("\n[bold]Saving to Parquet...[/bold]")
         
@@ -769,6 +989,9 @@ class BaseExtractor(ABC):
         labels.write_parquet(labels_path)
         console.print(f"  ✓ Labels: {labels_path} ({len(labels)} stays)")
         
+        # Validate labels consistency
+        self._validate_labels(labels, stay_ids)
+        
         # Metadata (for ICUDataset to know feature names, etc.)
         metadata = {
             "dataset": self._get_dataset_name(),
@@ -779,6 +1002,16 @@ class BaseExtractor(ABC):
             "min_stay_hours": self.config.min_stay_hours,
             "task_names": task_names,
             "n_stays": len(stays_filtered),
+            # Extraction configuration for reproducibility
+            "extraction_config": {
+                "parquet_root": str(self.parquet_root),
+                "output_dir": str(self.output_dir),
+                "feature_set": self.config.feature_set,
+                "seq_length_hours": self.config.seq_length_hours,
+                "min_stay_hours": self.config.min_stay_hours,
+                "tasks": self.config.tasks,
+                "extraction_timestamp": datetime.now().isoformat(),
+            },
         }
         
         metadata_path = self.output_dir / "metadata.yaml"
