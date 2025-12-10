@@ -1,5 +1,25 @@
 # SLICES: Self-Supervised Learning for Intensive Care Embeddings System
 
+<p align="center">
+  <img src=".github/SLICES-logo.png" alt="SLICES Logo" width="320"/>
+</p>
+
+<!--- Badges and Tags --->
+
+<p align="center">
+  <img src="https://img.shields.io/badge/PyPI--uv-blueviolet?style=flat-square" alt="uv Package Manager"/>
+  <img src="https://img.shields.io/badge/pytorch-2.0+-e07c24?style=flat-square&logo=pytorch" alt="PyTorch Version"/>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"/>
+  <img src="https://img.shields.io/badge/tested%20with-pytest-6fa8dc?style=flat-square" alt="Tested with pytest"/>
+</p>
+
+<p align="center">
+  <b>Tags:</b>
+  <code>ICU</code> <code>Self-Supervised Learning</code> <code>PyTorch</code> <code>Time Series</code> <code>Benchmark</code> <code>Healthcare AI</code> <code>DuckDB</code> <code>Polars</code> <code>Lightning</code>
+</p>
+
+
+
 A benchmark framework for learning universal patient embeddings from unlabeled ICU time-series data using self-supervised learning (SSL). The learned embeddings transfer across clinical prediction tasks (mortality, length of stay, AKI, sepsis) and institutions.
 
 ## Overview
