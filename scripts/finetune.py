@@ -28,6 +28,7 @@ from typing import Optional
 
 import hydra
 import lightning.pytorch as pl
+import torch
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -248,6 +249,7 @@ def main(cfg: DictConfig) -> None:
         gradient_clip_val=cfg.training.get("gradient_clip_val", None),
         accumulate_grad_batches=cfg.training.get("accumulate_grad_batches", 1),
         deterministic=cfg.get("deterministic", False),
+        overfit_batches=cfg.training.get("overfit_batches", 0),
         enable_progress_bar=True,
         enable_model_summary=True,
     )
@@ -281,8 +283,15 @@ def main(cfg: DictConfig) -> None:
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
 
     if best_ckpt:
-        print(f"\n✓ Loading best checkpoint: {best_ckpt}")
-        test_results = trainer.test(model, datamodule=datamodule, ckpt_path=best_ckpt)
+        print(f"\n✓ Best checkpoint: {best_ckpt}")
+        # Load checkpoint manually with weights_only=False (PyTorch 2.6+ compatibility)
+        try:
+            checkpoint = torch.load(best_ckpt, map_location="cpu", weights_only=False)
+            model.load_state_dict(checkpoint["state_dict"])
+            print("  - Loaded best checkpoint weights")
+        except Exception as e:
+            print(f"  - Warning: Could not load checkpoint ({e}), using final model")
+        test_results = trainer.test(model, datamodule=datamodule)
     else:
         print("\n⚠ No best checkpoint found, testing with final model")
         test_results = trainer.test(model, datamodule=datamodule)

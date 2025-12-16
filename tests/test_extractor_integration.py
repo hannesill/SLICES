@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import polars as pl
 import pytest
-from slices.data.extractors.mimic_iv import ExtractorConfig, MIMICIVExtractor
+from slices.data.extractors.base import ExtractorConfig
+from slices.data.extractors.mimic_iv import MIMICIVExtractor
 from slices.data.labels import LabelConfig
 
 
