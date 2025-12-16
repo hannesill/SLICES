@@ -1,4 +1,4 @@
-# SLICES: Self-Supervised Learning for Intensive Care Embeddings System
+# SLICES (BETA): The SSL Framework for ICU embeddings
 
 <p align="center">
   <img src=".github/SLICES-logo.png" alt="SLICES Logo" width="320"/>
