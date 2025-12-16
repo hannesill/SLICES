@@ -7,7 +7,7 @@ TODO: Implement utilities for:
 - Metrics computation
 """
 
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 
@@ -18,12 +18,12 @@ def compute_metrics(
     task_name: str,
 ) -> Dict[str, float]:
     """Compute task-specific metrics.
-    
+
     Args:
         predictions: Model predictions.
         targets: Ground truth labels.
         task_name: Name of the task ('mortality', 'los', 'aki', etc.).
-        
+
     Returns:
         Dictionary of metric names to values.
     """
@@ -37,15 +37,14 @@ def get_learning_rate_scheduler(
     **kwargs,
 ) -> torch.optim.lr_scheduler._LRScheduler:
     """Get learning rate scheduler.
-    
+
     Args:
         optimizer: Optimizer to schedule.
         scheduler_type: Type of scheduler ('cosine', 'step', 'plateau', etc.).
         **kwargs: Additional scheduler arguments.
-        
+
     Returns:
         Learning rate scheduler.
     """
     # TODO: Implement scheduler creation
     raise NotImplementedError
-

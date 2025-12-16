@@ -9,7 +9,7 @@ Available task heads:
 
 Example:
     >>> from slices.models.heads import build_task_head, TaskHeadConfig
-    >>> 
+    >>>
     >>> config = TaskHeadConfig(
     ...     name="mlp",
     ...     task_name="mortality_24h",

@@ -12,4 +12,3 @@ __all__ = [
     "build_ssl_objective",
     "get_ssl_config_class",
 ]
-

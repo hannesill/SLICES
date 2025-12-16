@@ -52,7 +52,7 @@ eval:
   metrics:
     # Specify metrics to compute (null = use defaults)
     names: [auroc, auprc, accuracy, f1]
-    
+
     # Decision threshold for binary classification
     threshold: 0.5
 ```

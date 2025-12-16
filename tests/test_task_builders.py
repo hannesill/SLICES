@@ -3,11 +3,11 @@
 Comprehensive tests for mortality tasks and task builder infrastructure.
 """
 
+from datetime import datetime
+
 import polars as pl
 import pytest
-from datetime import datetime, timedelta
-
-from slices.data.labels import LabelConfig, LabelBuilderFactory
+from slices.data.labels import LabelBuilderFactory, LabelConfig
 from slices.data.labels.mortality import MortalityLabelBuilder
 
 
@@ -71,42 +71,46 @@ class TestMortalityLabelBuilder:
     @pytest.fixture
     def sample_stays(self):
         """Sample ICU stay data."""
-        return pl.DataFrame({
-            "stay_id": [1, 2, 3, 4],
-            "intime": [
-                datetime(2020, 1, 1, 10, 0),
-                datetime(2020, 1, 2, 12, 0),
-                datetime(2020, 1, 3, 8, 0),
-                datetime(2020, 1, 4, 14, 0),
-            ],
-            "outtime": [
-                datetime(2020, 1, 3, 10, 0),
-                datetime(2020, 1, 5, 12, 0),
-                datetime(2020, 1, 6, 8, 0),
-                datetime(2020, 1, 10, 14, 0),
-            ],
-        })
+        return pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "intime": [
+                    datetime(2020, 1, 1, 10, 0),
+                    datetime(2020, 1, 2, 12, 0),
+                    datetime(2020, 1, 3, 8, 0),
+                    datetime(2020, 1, 4, 14, 0),
+                ],
+                "outtime": [
+                    datetime(2020, 1, 3, 10, 0),
+                    datetime(2020, 1, 5, 12, 0),
+                    datetime(2020, 1, 6, 8, 0),
+                    datetime(2020, 1, 10, 14, 0),
+                ],
+            }
+        )
 
     @pytest.fixture
     def sample_mortality_info(self):
         """Sample mortality data."""
-        return pl.DataFrame({
-            "stay_id": [1, 2, 3, 4],
-            "date_of_death": [
-                datetime(2020, 1, 1, 20, 0),  # Died 10h after admission
-                None,  # Survived
-                datetime(2020, 1, 5, 10, 0),  # Died 50h after admission
-                datetime(2020, 1, 6, 14, 0),  # Died 48h after admission
-            ],
-            "hospital_expire_flag": [1, 0, 1, 1],
-            "dischtime": [
-                datetime(2020, 1, 3, 10, 0),
-                datetime(2020, 1, 5, 12, 0),
-                datetime(2020, 1, 6, 8, 0),
-                datetime(2020, 1, 10, 14, 0),
-            ],
-            "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
-        })
+        return pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "date_of_death": [
+                    datetime(2020, 1, 1, 20, 0),  # Died 10h after admission
+                    None,  # Survived
+                    datetime(2020, 1, 5, 10, 0),  # Died 50h after admission
+                    datetime(2020, 1, 6, 14, 0),  # Died 48h after admission
+                ],
+                "hospital_expire_flag": [1, 0, 1, 1],
+                "dischtime": [
+                    datetime(2020, 1, 3, 10, 0),
+                    datetime(2020, 1, 5, 12, 0),
+                    datetime(2020, 1, 6, 8, 0),
+                    datetime(2020, 1, 10, 14, 0),
+                ],
+                "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
+            }
+        )
 
     def test_hospital_mortality(self, sample_stays, sample_mortality_info):
         """Test hospital mortality prediction (no time window)."""
@@ -186,23 +190,25 @@ class TestMortalityLabelBuilder:
     def test_icu_mortality(self, sample_stays):
         """Test ICU mortality prediction (death during ICU stay, window_hours=-1)."""
         # Create mortality info where some patients died during ICU, some after
-        mortality_info = pl.DataFrame({
-            "stay_id": [1, 2, 3, 4],
-            "date_of_death": [
-                datetime(2020, 1, 2, 10, 0),  # Died during ICU stay
-                None,  # Survived
-                datetime(2020, 1, 10, 10, 0),  # Died after ICU discharge
-                datetime(2020, 1, 6, 8, 0),  # Died at exact ICU discharge time
-            ],
-            "hospital_expire_flag": [1, 0, 1, 1],
-            "dischtime": [
-                datetime(2020, 1, 3, 10, 0),
-                datetime(2020, 1, 5, 12, 0),
-                datetime(2020, 1, 10, 10, 0),
-                datetime(2020, 1, 10, 14, 0),
-            ],
-            "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "date_of_death": [
+                    datetime(2020, 1, 2, 10, 0),  # Died during ICU stay
+                    None,  # Survived
+                    datetime(2020, 1, 10, 10, 0),  # Died after ICU discharge
+                    datetime(2020, 1, 6, 8, 0),  # Died at exact ICU discharge time
+                ],
+                "hospital_expire_flag": [1, 0, 1, 1],
+                "dischtime": [
+                    datetime(2020, 1, 3, 10, 0),
+                    datetime(2020, 1, 5, 12, 0),
+                    datetime(2020, 1, 10, 10, 0),
+                    datetime(2020, 1, 10, 14, 0),
+                ],
+                "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_icu",
@@ -235,22 +241,26 @@ class TestMortalityLabelBuilder:
         )
 
         builder = MortalityLabelBuilder(config)
-        
+
         # Empty DataFrames
-        empty_stays = pl.DataFrame({
-            "stay_id": [],
-            "intime": [],
-            "outtime": [],
-        }).cast({"stay_id": pl.Int64})
-        
-        empty_mortality = pl.DataFrame({
-            "stay_id": [],
-            "date_of_death": [],
-            "hospital_expire_flag": [],
-            "dischtime": [],
-            "discharge_location": [],
-        }).cast({"stay_id": pl.Int64, "hospital_expire_flag": pl.Int32})
-        
+        empty_stays = pl.DataFrame(
+            {
+                "stay_id": [],
+                "intime": [],
+                "outtime": [],
+            }
+        ).cast({"stay_id": pl.Int64})
+
+        empty_mortality = pl.DataFrame(
+            {
+                "stay_id": [],
+                "date_of_death": [],
+                "hospital_expire_flag": [],
+                "dischtime": [],
+                "discharge_location": [],
+            }
+        ).cast({"stay_id": pl.Int64, "hospital_expire_flag": pl.Int32})
+
         raw_data = {
             "stays": empty_stays,
             "mortality_info": empty_mortality,
@@ -270,27 +280,31 @@ class TestMortalityBoundaryConditions:
     @pytest.fixture
     def boundary_stays(self):
         """Stays for boundary condition testing."""
-        return pl.DataFrame({
-            "stay_id": [1, 2, 3, 4, 5],
-            "intime": [datetime(2020, 1, 1, 0, 0)] * 5,  # All same admission time
-            "outtime": [datetime(2020, 1, 3, 0, 0)] * 5,  # All same discharge time
-        })
+        return pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 5,  # All same admission time
+                "outtime": [datetime(2020, 1, 3, 0, 0)] * 5,  # All same discharge time
+            }
+        )
 
     def test_death_exactly_at_24h_boundary(self, boundary_stays):
         """Test death exactly at 24-hour boundary (should be included)."""
-        mortality_info = pl.DataFrame({
-            "stay_id": [1, 2, 3, 4, 5],
-            "date_of_death": [
-                datetime(2020, 1, 2, 0, 0),      # Exactly 24h (should be included)
-                datetime(2020, 1, 1, 23, 59, 59),  # Just before 24h (included)
-                datetime(2020, 1, 2, 0, 0, 1),    # Just after 24h (excluded)
-                None,  # Survived
-                datetime(2020, 1, 1, 12, 0),      # 12h (included)
-            ],
-            "hospital_expire_flag": [1, 1, 1, 0, 1],
-            "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
-            "discharge_location": ["DIED", "DIED", "DIED", "HOME", "DIED"],
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "date_of_death": [
+                    datetime(2020, 1, 2, 0, 0),  # Exactly 24h (should be included)
+                    datetime(2020, 1, 1, 23, 59, 59),  # Just before 24h (included)
+                    datetime(2020, 1, 2, 0, 0, 1),  # Just after 24h (excluded)
+                    None,  # Survived
+                    datetime(2020, 1, 1, 12, 0),  # 12h (included)
+                ],
+                "hospital_expire_flag": [1, 1, 1, 0, 1],
+                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
+                "discharge_location": ["DIED", "DIED", "DIED", "HOME", "DIED"],
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_24h",
@@ -300,10 +314,12 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": boundary_stays,
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": boundary_stays,
+                "mortality_info": mortality_info,
+            }
+        )
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
         assert labels_dict[1] == 1  # Exactly at 24h - included
@@ -314,17 +330,19 @@ class TestMortalityBoundaryConditions:
 
     def test_death_exactly_at_48h_boundary(self, boundary_stays):
         """Test death exactly at 48-hour boundary."""
-        mortality_info = pl.DataFrame({
-            "stay_id": [1, 2, 3],
-            "date_of_death": [
-                datetime(2020, 1, 3, 0, 0),  # Exactly 48h
-                datetime(2020, 1, 3, 0, 0, 1),  # Just after 48h
-                datetime(2020, 1, 2, 23, 59, 59),  # Just before 48h
-            ],
-            "hospital_expire_flag": [1, 1, 1],
-            "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
-            "discharge_location": ["DIED", "DIED", "DIED"],
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "date_of_death": [
+                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h
+                    datetime(2020, 1, 3, 0, 0, 1),  # Just after 48h
+                    datetime(2020, 1, 2, 23, 59, 59),  # Just before 48h
+                ],
+                "hospital_expire_flag": [1, 1, 1],
+                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
+                "discharge_location": ["DIED", "DIED", "DIED"],
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_48h",
@@ -334,10 +352,12 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": boundary_stays.filter(pl.col("stay_id").is_in([1, 2, 3])),
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": boundary_stays.filter(pl.col("stay_id").is_in([1, 2, 3])),
+                "mortality_info": mortality_info,
+            }
+        )
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
         assert labels_dict[1] == 1  # Exactly at 48h - included
@@ -346,13 +366,15 @@ class TestMortalityBoundaryConditions:
 
     def test_all_survivors(self, boundary_stays):
         """Test dataset where all patients survive."""
-        mortality_info = pl.DataFrame({
-            "stay_id": [1, 2, 3, 4, 5],
-            "date_of_death": [None] * 5,
-            "hospital_expire_flag": [0] * 5,
-            "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
-            "discharge_location": ["HOME"] * 5,
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "date_of_death": [None] * 5,
+                "hospital_expire_flag": [0] * 5,
+                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
+                "discharge_location": ["HOME"] * 5,
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_hospital",
@@ -362,10 +384,12 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": boundary_stays,
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": boundary_stays,
+                "mortality_info": mortality_info,
+            }
+        )
 
         # All should be 0
         assert labels["label"].sum() == 0
@@ -373,13 +397,15 @@ class TestMortalityBoundaryConditions:
 
     def test_all_deaths(self, boundary_stays):
         """Test dataset where all patients die."""
-        mortality_info = pl.DataFrame({
-            "stay_id": [1, 2, 3, 4, 5],
-            "date_of_death": [datetime(2020, 1, 1, 12, 0)] * 5,
-            "hospital_expire_flag": [1] * 5,
-            "dischtime": [datetime(2020, 1, 1, 12, 0)] * 5,
-            "discharge_location": ["DIED"] * 5,
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "date_of_death": [datetime(2020, 1, 1, 12, 0)] * 5,
+                "hospital_expire_flag": [1] * 5,
+                "dischtime": [datetime(2020, 1, 1, 12, 0)] * 5,
+                "discharge_location": ["DIED"] * 5,
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_24h",
@@ -389,10 +415,12 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": boundary_stays,
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": boundary_stays,
+                "mortality_info": mortality_info,
+            }
+        )
 
         # All should be 1
         assert labels["label"].sum() == 5
@@ -400,19 +428,23 @@ class TestMortalityBoundaryConditions:
 
     def test_single_stay(self):
         """Test with single stay in dataset."""
-        stays = pl.DataFrame({
-            "stay_id": [1],
-            "intime": [datetime(2020, 1, 1, 0, 0)],
-            "outtime": [datetime(2020, 1, 3, 0, 0)],
-        })
-        
-        mortality_info = pl.DataFrame({
-            "stay_id": [1],
-            "date_of_death": [datetime(2020, 1, 1, 12, 0)],
-            "hospital_expire_flag": [1],
-            "dischtime": [datetime(2020, 1, 1, 12, 0)],
-            "discharge_location": ["DIED"],
-        })
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "intime": [datetime(2020, 1, 1, 0, 0)],
+                "outtime": [datetime(2020, 1, 3, 0, 0)],
+            }
+        )
+
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "date_of_death": [datetime(2020, 1, 1, 12, 0)],
+                "hospital_expire_flag": [1],
+                "dischtime": [datetime(2020, 1, 1, 12, 0)],
+                "discharge_location": ["DIED"],
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_24h",
@@ -422,30 +454,36 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": stays,
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": stays,
+                "mortality_info": mortality_info,
+            }
+        )
 
         assert len(labels) == 1
         assert labels["label"][0] == 1
 
     def test_missing_mortality_info_for_stay(self):
         """Test when mortality info is missing for some stays (left join behavior)."""
-        stays = pl.DataFrame({
-            "stay_id": [1, 2, 3],
-            "intime": [datetime(2020, 1, 1, 0, 0)] * 3,
-            "outtime": [datetime(2020, 1, 3, 0, 0)] * 3,
-        })
-        
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 3,
+                "outtime": [datetime(2020, 1, 3, 0, 0)] * 3,
+            }
+        )
+
         # Only mortality info for stay 1
-        mortality_info = pl.DataFrame({
-            "stay_id": [1],
-            "date_of_death": [datetime(2020, 1, 1, 12, 0)],
-            "hospital_expire_flag": [1],
-            "dischtime": [datetime(2020, 1, 1, 12, 0)],
-            "discharge_location": ["DIED"],
-        })
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "date_of_death": [datetime(2020, 1, 1, 12, 0)],
+                "hospital_expire_flag": [1],
+                "dischtime": [datetime(2020, 1, 1, 12, 0)],
+                "discharge_location": ["DIED"],
+            }
+        )
 
         config = LabelConfig(
             task_name="mortality_hospital",
@@ -455,10 +493,12 @@ class TestMortalityBoundaryConditions:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({
-            "stays": stays,
-            "mortality_info": mortality_info,
-        })
+        labels = builder.build_labels(
+            {
+                "stays": stays,
+                "mortality_info": mortality_info,
+            }
+        )
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
         assert labels_dict[1] == 1  # Has mortality info

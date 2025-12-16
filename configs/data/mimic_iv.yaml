@@ -23,7 +23,7 @@ csv_root: data/raw/mimic-iv-demo # default to demo data
 #   ${parquet_root}/hosp/patients.parquet
 #   ${parquet_root}/hosp/admissions.parquet
 #   ${parquet_root}/icu/icustays.parquet
-#   ${parquet_root}/icu/chartevents.parquet 
+#   ${parquet_root}/icu/chartevents.parquet
 #   etc.
 parquet_root: data/parquet/mimic-iv-demo # default to demo data
 

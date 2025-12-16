@@ -1,5 +1,5 @@
 # Core feature set: ~47 features for robust ICU patient embeddings
-# 
+#
 # This comprehensive set covers all major organ systems and physiological domains
 # needed for SSL to learn meaningful patient state representations.
 #
@@ -30,7 +30,7 @@ vitals:
     units: bpm
     min: 0
     max: 300
-    
+
   sbp:
     mimic_iv:
       source: chartevents
@@ -39,7 +39,7 @@ vitals:
     units: mmHg
     min: 0
     max: 300
-    
+
   dbp:
     mimic_iv:
       source: chartevents
@@ -48,7 +48,7 @@ vitals:
     units: mmHg
     min: 0
     max: 200
-    
+
   map:
     mimic_iv:
       source: chartevents
@@ -57,7 +57,7 @@ vitals:
     units: mmHg
     min: 0
     max: 250
-    
+
   cvp:
     mimic_iv:
       source: chartevents
@@ -68,7 +68,7 @@ vitals:
     max: 30
     # 993k measurements, 21k stays
     # Volume status and right heart function indicator
-  
+
   # === Respiratory (5) ===
   resp_rate:
     mimic_iv:
@@ -78,7 +78,7 @@ vitals:
     units: breaths/min
     min: 0
     max: 120
-    
+
   spo2:
     mimic_iv:
       source: chartevents
@@ -87,7 +87,7 @@ vitals:
     units: '%'
     min: 50
     max: 100
-    
+
   fio2:
     mimic_iv:
       source: chartevents
@@ -99,7 +99,7 @@ vitals:
     # 1.1M measurements, 47k stays
     # CRITICAL: Contextualizes SpO2 (SpO2=95% on FiO2=0.21 vs 1.0 very different)
     # Typical range: 0.21-1.0 (21%-100%)
-    
+
   peep:
     mimic_iv:
       source: chartevents
@@ -111,7 +111,7 @@ vitals:
     # 860k measurements, 39k stays
     # Ventilator support level indicator
     # Only present for mechanically ventilated patients
-    
+
   # === Neurological (3) ===
   gcs_eye:
     mimic_iv:
@@ -124,7 +124,7 @@ vitals:
     # 2.2M measurements, 94k stays
     # Range: 1-4
     # NOTE: Sum gcs_eye + gcs_verbal + gcs_motor = GCS total (3-15)
-    
+
   gcs_verbal:
     mimic_iv:
       source: chartevents
@@ -135,7 +135,7 @@ vitals:
     max: 5
     # 2.2M measurements, 94k stays
     # Range: 1-5
-    
+
   gcs_motor:
     mimic_iv:
       source: chartevents
@@ -146,7 +146,7 @@ vitals:
     max: 6
     # 2.2M measurements, 94k stays
     # Range: 1-6
-    
+
   rass:
     mimic_iv:
       source: chartevents
@@ -158,7 +158,7 @@ vitals:
     # 1.7M measurements, 84k stays
     # Range: -5 (unarousable) to +4 (combative)
     # Sedation/agitation assessment
-  
+
   # === Temperature ===
   temperature:
     mimic_iv:
@@ -169,7 +169,7 @@ vitals:
     units: celsius
     min: 32
     max: 42
-  
+
   # === Glucose Monitoring ===
   glucose_fingerstick:
     mimic_iv:
@@ -201,7 +201,7 @@ labs:
     max: 15
     # 4.2M measurements, 293k patients
     # Key marker of kidney function
-    
+
   bun:
     mimic_iv:
       source: labevents
@@ -212,7 +212,7 @@ labs:
     max: 200
     # 4.2M measurements, 293k patients
     # Kidney function and protein metabolism
-    
+
   sodium:
     mimic_iv:
       source: labevents
@@ -222,7 +222,7 @@ labs:
     min: 110
     max: 165
     # 4.1M measurements, 288k patients
-    
+
   potassium:
     mimic_iv:
       source: labevents
@@ -233,7 +233,7 @@ labs:
     max: 10
     # 4.1M measurements, 288k patients
     # Critical for cardiac function
-    
+
   chloride:
     mimic_iv:
       source: labevents
@@ -243,7 +243,7 @@ labs:
     min: 80
     max: 130
     # 4.1M measurements, 288k patients
-    
+
   bicarbonate:
     mimic_iv:
       source: labevents
@@ -254,7 +254,7 @@ labs:
     max: 50
     # 3.9M measurements, 287k patients
     # Acid-base status
-    
+
   calcium:
     mimic_iv:
       source: labevents
@@ -265,7 +265,7 @@ labs:
     max: 20
     # 3.0M measurements, 211k patients
     # Important for cardiac and neuromuscular function
-    
+
   magnesium:
     mimic_iv:
       source: labevents
@@ -276,7 +276,7 @@ labs:
     max: 6
     # 2.9M measurements, 203k patients
     # Electrolyte critical for cardiac rhythm
-    
+
   phosphate:
     mimic_iv:
       source: labevents
@@ -286,7 +286,7 @@ labs:
     min: 0
     max: 10
     # 2.8M measurements, 201k patients
-  
+
   # === Glucose Metabolism (1) ===
   glucose:
     mimic_iv:
@@ -298,7 +298,7 @@ labs:
     max: 1000
     # 4.2M measurements, 293k patients
     # Lab glucose (less frequent than fingerstick)
-  
+
   # === Acid-Base & Metabolic Status (2) ===
   anion_gap:
     mimic_iv:
@@ -311,7 +311,7 @@ labs:
     # 3.9M measurements, 287k patients
     # Calculated but stored as lab value
     # Useful for detecting metabolic acidosis
-    
+
   lactate:
     mimic_iv:
       source: labevents
@@ -322,7 +322,7 @@ labs:
     max: 50
     # 670k measurements, 136k patients
     # Key marker of tissue hypoperfusion and shock
-  
+
   # === Blood Gas (4) ===
   ph:
     mimic_iv:
@@ -333,7 +333,7 @@ labs:
     min: 6.8
     max: 8.0
     # 754k measurements, 76k patients
-    
+
   pao2:
     mimic_iv:
       source: labevents
@@ -344,7 +344,7 @@ labs:
     max: 500
     # 698k measurements, 71k patients
     # Arterial oxygen tension
-    
+
   paco2:
     mimic_iv:
       source: labevents
@@ -355,7 +355,7 @@ labs:
     max: 100
     # 698k measurements, 71k patients
     # Arterial carbon dioxide tension
-    
+
   base_excess:
     mimic_iv:
       source: labevents
@@ -366,7 +366,7 @@ labs:
     max: 25
     # 698k measurements, 71k patients
     # Metabolic component of acid-base status
-  
+
   # === Hematology - Complete Blood Count (6) ===
   hemoglobin:
     mimic_iv:
@@ -377,7 +377,7 @@ labs:
     min: 4
     max: 18
     # 4.2M measurements, 299k patients
-    
+
   hematocrit:
     mimic_iv:
       source: labevents
@@ -388,7 +388,7 @@ labs:
     max: 60
     # 4.3M measurements, 299k patients
     # Closely related to hemoglobin but provides volume status info
-    
+
   wbc:
     mimic_iv:
       source: labevents
@@ -398,7 +398,7 @@ labs:
     min: 0
     max: 100
     # 4.2M measurements, 299k patients
-    
+
   neutrophils:
     mimic_iv:
       source: labevents
@@ -410,7 +410,7 @@ labs:
     # 1.6M measurements, 276k patients
     # Infection and stress response marker
     # High neutrophils = bacterial infection pattern
-    
+
   platelets:
     mimic_iv:
       source: labevents
@@ -421,7 +421,7 @@ labs:
     max: 1200
     # 4.2M measurements, 299k patients
     # Coagulation and bone marrow function
-  
+
   # === Liver Function (5) ===
   bilirubin:
     mimic_iv:
@@ -433,7 +433,7 @@ labs:
     max: 100
     # 1.6M measurements, 186k patients
     # Liver function and hemolysis marker
-    
+
   alt:
     mimic_iv:
       source: labevents
@@ -444,7 +444,7 @@ labs:
     max: 10000
     # 1.8M measurements, 202k patients
     # Hepatocellular injury marker (more liver-specific)
-    
+
   ast:
     mimic_iv:
       source: labevents
@@ -455,7 +455,7 @@ labs:
     max: 10000
     # 1.8M measurements, 200k patients
     # Hepatocellular injury marker (also in cardiac/muscle)
-    
+
   alkaline_phosphatase:
     mimic_iv:
       source: labevents
@@ -466,7 +466,7 @@ labs:
     max: 2000
     # 1.6M measurements, 189k patients
     # Cholestatic liver injury and bone turnover
-    
+
   albumin:
     mimic_iv:
       source: labevents
@@ -477,7 +477,7 @@ labs:
     max: 6
     # 1.0M measurements, 166k patients
     # Liver synthetic function and nutritional status
-  
+
   # === Coagulation (3) ===
   inr:
     mimic_iv:
@@ -489,7 +489,7 @@ labs:
     max: 10
     # 1.8M measurements, 196k patients
     # Standardized prothrombin time, warfarin monitoring
-    
+
   pt:
     mimic_iv:
       source: labevents
@@ -500,7 +500,7 @@ labs:
     max: 100
     # 1.8M measurements, 196k patients
     # Extrinsic coagulation pathway
-    
+
   ptt:
     mimic_iv:
       source: labevents
@@ -540,7 +540,7 @@ outputs:
 #
 # By Source:
 #   - Chartevents (vitals): 15 features
-#   - Labevents (labs): 31 features  
+#   - Labevents (labs): 31 features
 #   - Outputevents (outputs): 1 feature
 #
 # By Organ System:

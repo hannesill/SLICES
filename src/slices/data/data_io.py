@@ -37,24 +37,24 @@ def _get_logger():
 
 def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
     """Convert all CSV files in the source directory to Parquet files.
-    
+
     Streams via DuckDB COPY to keep memory low. Low concurrency to avoid
     parallel memory spikes. Tunable via environment variables:
         - SLICES_CONVERT_MAX_WORKERS (default: 4)
         - SLICES_DUCKDB_MEM (default: 3GB)
         - SLICES_DUCKDB_THREADS (default: 2)
-    
+
     Args:
         src_root: Root directory containing CSV.gz files.
         parquet_root: Destination root for Parquet files (mirrors structure).
-        
+
     Returns:
         True if conversion succeeded, False otherwise.
     """
     log = _get_logger()
     parquet_paths: list[Path] = []
     csv_files = list(src_root.rglob("*.csv.gz"))
-    
+
     if not csv_files:
         if _has_rich:
             log.print(f"[red]No CSV files found in {src_root}[/red]")
@@ -70,10 +70,10 @@ def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
 
     def _convert_one(csv_gz: Path) -> tuple[Optional[Path], float]:
         """Convert one CSV file and return the output path and time taken.
-        
+
         Args:
             csv_gz: Path to the CSV.gz file to convert.
-            
+
         Returns:
             Tuple of (output_path, elapsed_time). output_path is None on failure.
         """
@@ -105,7 +105,7 @@ def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
             con.execute(sql)
             elapsed = time.time() - start
             return out, elapsed
-        except Exception as e:
+        except Exception:
             # Log error in outer scope, just return None here
             return None, time.time() - start
         finally:
@@ -140,7 +140,7 @@ def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
                     elapsed = time.time() - start_time
                     progress_pct = 100 * completed / total_files
                     elapsed_str = str(timedelta(seconds=int(elapsed)))
-                    
+
                     if _has_rich:
                         log.print(
                             f"[green]Progress:[/green] {completed}/{total_files} files "
@@ -156,9 +156,7 @@ def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
             except Exception as e:
                 csv_file = futures[fut]
                 if _has_rich:
-                    log.print(
-                        f"[red]Parquet conversion failed for {csv_file}: {e}[/red]"
-                    )
+                    log.print(f"[red]Parquet conversion failed for {csv_file}: {e}[/red]")
                 else:
                     log.error(f"Parquet conversion failed for {csv_file}: {e}")
                 ex.shutdown(cancel_futures=True)
@@ -166,7 +164,7 @@ def _csv_to_parquet_all(src_root: Path, parquet_root: Path) -> bool:
 
     elapsed_time = time.time() - start_time
     elapsed_str = str(timedelta(seconds=int(elapsed_time)))
-    
+
     if _has_rich:
         log.print(
             f"[green]✓[/green] Converted {len(parquet_paths)} files to Parquet "
@@ -184,15 +182,15 @@ def convert_csv_to_parquet(
     csv_root: Path, parquet_root: Path, dataset_name: Optional[str] = None
 ) -> bool:
     """Public wrapper to convert CSV.gz files to Parquet for a dataset.
-    
+
     Args:
         csv_root: Root folder containing hosp/ and icu/ CSV.gz files.
         parquet_root: Destination root for Parquet files mirroring structure.
         dataset_name: Optional dataset name for logging (e.g., 'mimic_iv').
-        
+
     Returns:
         True if conversion succeeded, False otherwise.
-        
+
     Example:
         >>> from pathlib import Path
         >>> convert_csv_to_parquet(
@@ -201,20 +199,20 @@ def convert_csv_to_parquet(
         ... )
     """
     log = _get_logger()
-    
+
     if not csv_root.exists():
         if _has_rich:
             log.print(f"[red]CSV root not found: {csv_root}[/red]")
         else:
             log.error(f"CSV root not found: {csv_root}")
         return False
-    
+
     parquet_root.mkdir(parents=True, exist_ok=True)
-    
+
     if dataset_name:
         if _has_rich:
             log.print(f"[cyan]Converting {dataset_name} CSV files to Parquet...[/cyan]")
         else:
             log.info(f"Converting {dataset_name} CSV files to Parquet...")
-    
+
     return _csv_to_parquet_all(csv_root, parquet_root)

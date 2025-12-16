@@ -10,21 +10,21 @@ encoder:
   d_input: 35  # Number of input features (core feature set: 9 vitals + 26 labs)
   d_model: 128  # Model dimension (embedding size)
   max_seq_length: 168  # Maximum sequence length in hours (7 days)
-  
+
   # Transformer architecture
   n_layers: 4  # Number of transformer encoder layers
   n_heads: 8  # Number of attention heads (must divide d_model evenly)
   d_ff: 512  # Feedforward dimension (typically 4 * d_model)
-  
+
   # Regularization
   dropout: 0.1  # Dropout probability for attention and feedforward
-  
+
   # Architecture choices
   activation: gelu  # Activation function: gelu | relu | silu
   layer_norm_eps: 1.0e-5  # Layer normalization epsilon
   prenorm: true  # Pre-LN (true) vs Post-LN (false) transformer
   use_positional_encoding: true  # Add sinusoidal positional encoding
-  
+
   # Pooling strategy for sequence-level representation
   # Options: mean | max | cls | last | none
   # - mean: Average over valid timesteps (recommended for SSL)
@@ -51,4 +51,3 @@ ssl:
 # Large (research-scale):
 #   d_model: 512, n_layers: 8, n_heads: 16, d_ff: 2048
 #   ~25M parameters
-

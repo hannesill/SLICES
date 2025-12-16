@@ -24,7 +24,7 @@ class BaseEncoder(ABC, nn.Module):
 
     def __init__(self, config: EncoderConfig) -> None:
         """Initialize encoder with configuration.
-        
+
         Args:
             config: Encoder configuration.
         """
@@ -39,7 +39,7 @@ class BaseEncoder(ABC, nn.Module):
         padding_mask: Optional[torch.Tensor] = None,  # (B, T) sequence padding
     ) -> torch.Tensor:
         """Encode input time-series.
-        
+
         Args:
             x: Input tensor of shape (B, T, D) where B is batch size,
                T is sequence length, and D is feature dimension.
@@ -47,7 +47,7 @@ class BaseEncoder(ABC, nn.Module):
                   indicates observed values and False indicates missing/imputed.
             padding_mask: Optional padding mask of shape (B, T) where True
                          indicates valid timesteps and False indicates padding.
-        
+
         Returns:
             Tensor of shape (B, T, H) or (B, H) depending on pooling,
             where H is the hidden dimension.
@@ -56,9 +56,8 @@ class BaseEncoder(ABC, nn.Module):
 
     def get_output_dim(self) -> int:
         """Return the output dimension of the encoder.
-        
+
         Returns:
             Output dimension (typically d_model).
         """
         return self.config.d_model
-

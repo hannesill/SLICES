@@ -89,23 +89,23 @@ def test_something(sample_batch):
 ```python
 class TestMyFeature:
     """Test suite for MyFeature."""
-    
+
     @pytest.fixture
     def setup_data(self, tmp_path):
         """Create test data."""
         # Setup code
         return data
-    
+
     def test_basic_functionality(self, setup_data):
         """Test basic case."""
         result = my_function(setup_data)
         assert result == expected
-    
+
     def test_edge_case(self):
         """Test edge case."""
         with pytest.raises(ValueError, match="expected error"):
             my_function(invalid_input)
-    
+
     def test_boundary_condition(self, setup_data):
         """Test boundary condition."""
         result = my_function(setup_data, boundary_value)
