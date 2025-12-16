@@ -1,4 +1,4 @@
-# SLICES (BETA): The SSL Framework for ICU embeddings
+# SLICES (beta): SSL Framework for ICU Embeddings
 
 <p align="center">
   <img src=".github/SLICES-logo.png" alt="SLICES Logo" width="320"/>
