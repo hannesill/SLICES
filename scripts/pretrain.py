@@ -205,6 +205,7 @@ def main(cfg: DictConfig) -> None:
         gradient_clip_val=cfg.training.get("gradient_clip_val", None),
         accumulate_grad_batches=cfg.training.get("accumulate_grad_batches", 1),
         deterministic=cfg.get("deterministic", False),
+        overfit_batches=cfg.training.get("overfit_batches", 0),
         enable_progress_bar=True,
         enable_model_summary=True,
     )

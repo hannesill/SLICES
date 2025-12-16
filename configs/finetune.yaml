@@ -117,6 +117,9 @@ training:
   early_stopping_monitor: val/auroc
   early_stopping_mode: max
 
+  # Debug: overfit on N batches (0 = disabled)
+  overfit_batches: 0
+
 # Optimizer configuration
 # Note: Lower learning rate than pretraining for finetuning
 optimizer:

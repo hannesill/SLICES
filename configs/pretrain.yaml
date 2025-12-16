@@ -84,6 +84,9 @@ training:
   # Early stopping
   early_stopping_patience: 10
 
+  # Debug: overfit on N batches (0 = disabled)
+  overfit_batches: 0
+
 # Optimizer configuration
 optimizer:
   name: adamw
