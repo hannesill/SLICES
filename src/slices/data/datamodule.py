@@ -5,11 +5,10 @@ Ensures no patient appears in multiple splits (prevents data leakage).
 """
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import lightning.pytorch as L
 import numpy as np
-import polars as pl
 import torch
 import yaml
 from torch.utils.data import DataLoader, Subset
@@ -19,38 +18,38 @@ from slices.data.dataset import ICUDataset
 
 def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     """Collate function for batching ICU samples.
-    
+
     Args:
         batch: List of sample dictionaries from ICUDataset.
-        
+
     Returns:
         Batched dictionary with stacked tensors.
     """
     # Stack tensors
     timeseries = torch.stack([s["timeseries"] for s in batch])  # (B, T, D)
     mask = torch.stack([s["mask"] for s in batch])  # (B, T, D)
-    stay_ids = torch.tensor([s["stay_id"] for s in batch]) # (B,)
-    
+    stay_ids = torch.tensor([s["stay_id"] for s in batch])  # (B,)
+
     result = {
         "timeseries": timeseries,
         "mask": mask,
         "stay_id": stay_ids,
     }
-    
+
     # Stack labels if present
     if "label" in batch[0]:
-        labels = torch.stack([s["label"] for s in batch]) # (B,)
+        labels = torch.stack([s["label"] for s in batch])  # (B,)
         result["label"] = labels
-    
+
     return result
 
 
 class ICUDataModule(L.LightningDataModule):
     """Lightning DataModule for ICU data.
-    
+
     Implements patient-level splits to prevent data leakage.
     Uses hashing of patient_id for deterministic, reproducible splits.
-    
+
     Example:
         >>> dm = ICUDataModule(
         ...     processed_dir="data/processed/mimic-iv-demo",
@@ -77,7 +76,7 @@ class ICUDataModule(L.LightningDataModule):
         pin_memory: bool = True,
     ) -> None:
         """Initialize DataModule.
-        
+
         Args:
             processed_dir: Directory containing extracted parquet files.
             task_name: Task for label extraction (e.g., 'mortality_24h').
@@ -105,12 +104,12 @@ class ICUDataModule(L.LightningDataModule):
         self.normalize = normalize
         self.impute_strategy = impute_strategy
         self.pin_memory = pin_memory
-        
+
         # Validate ratios
         total_ratio = train_ratio + val_ratio + test_ratio
         if not np.isclose(total_ratio, 1.0):
             raise ValueError(f"Split ratios must sum to 1.0, got {total_ratio}")
-        
+
         # Will be set in setup()
         self.dataset: Optional[ICUDataset] = None
         self.train_indices: List[int] = []
@@ -119,53 +118,55 @@ class ICUDataModule(L.LightningDataModule):
 
     def _get_patient_level_splits(self) -> Tuple[List[int], List[int], List[int]]:
         """Create patient-level train/val/test splits.
-        
+
         Uses deterministic hashing of patient_id to assign patients to splits.
         All stays from a patient go to the same split.
-        
+
         Returns:
             Tuple of (train_indices, val_indices, test_indices).
         """
         # Load static data to get patient_id mapping
         static_df = self.dataset.static_df
-        
+
         # Get stay_id -> patient_id mapping
-        stay_to_patient = dict(zip(
-            static_df["stay_id"].to_list(),
-            static_df["patient_id"].to_list()
-        ))
-        
+        stay_to_patient = dict(
+            zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
+        )
+
         # Get unique patients
         unique_patients = list(set(stay_to_patient.values()))
         n_patients = len(unique_patients)
-        
+
         # Shuffle patients deterministically using seed
         rng = np.random.RandomState(self.seed)
         patient_indices = np.arange(n_patients)
         rng.shuffle(patient_indices)
         shuffled_patients = [unique_patients[i] for i in patient_indices]
-        
+
         # Split patients
         n_train = int(n_patients * self.train_ratio)
         n_val = int(n_patients * self.val_ratio)
-        
+
         train_patients = set(shuffled_patients[:n_train])
-        val_patients = set(shuffled_patients[n_train:n_train + n_val])
-        test_patients = set(shuffled_patients[n_train + n_val:])
-        
+        val_patients = set(shuffled_patients[n_train : n_train + n_val])
+        test_patients = set(shuffled_patients[n_train + n_val :])
+
         # Verify no patient overlap between splits (data leakage check)
-        assert train_patients.isdisjoint(val_patients), \
-            "Patient leakage detected: train/val splits have overlapping patients"
-        assert train_patients.isdisjoint(test_patients), \
-            "Patient leakage detected: train/test splits have overlapping patients"
-        assert val_patients.isdisjoint(test_patients), \
-            "Patient leakage detected: val/test splits have overlapping patients"
-        
+        assert train_patients.isdisjoint(
+            val_patients
+        ), "Patient leakage detected: train/val splits have overlapping patients"
+        assert train_patients.isdisjoint(
+            test_patients
+        ), "Patient leakage detected: train/test splits have overlapping patients"
+        assert val_patients.isdisjoint(
+            test_patients
+        ), "Patient leakage detected: val/test splits have overlapping patients"
+
         # Map back to stay indices
         train_indices = []
         val_indices = []
         test_indices = []
-        
+
         for idx, stay_id in enumerate(self.dataset.stay_ids):
             patient_id = stay_to_patient.get(stay_id)
             if patient_id in train_patients:
@@ -174,24 +175,27 @@ class ICUDataModule(L.LightningDataModule):
                 val_indices.append(idx)
             else:
                 test_indices.append(idx)
-        
+
         return train_indices, val_indices, test_indices
-    
+
     def _save_split_info(self) -> None:
         """Save split information to file for reproducibility."""
         if self.dataset is None:
             return
-        
+
         static_df = self.dataset.static_df
-        stay_to_patient = dict(zip(
-            static_df["stay_id"].to_list(),
-            static_df["patient_id"].to_list()
-        ))
-        
-        train_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.train_indices})
+        stay_to_patient = dict(
+            zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
+        )
+
+        train_patients = sorted(
+            {stay_to_patient[self.dataset.stay_ids[i]] for i in self.train_indices}
+        )
         val_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.val_indices})
-        test_patients = sorted({stay_to_patient[self.dataset.stay_ids[i]] for i in self.test_indices})
-        
+        test_patients = sorted(
+            {stay_to_patient[self.dataset.stay_ids[i]] for i in self.test_indices}
+        )
+
         split_info = {
             "seed": self.seed,
             "train_ratio": self.train_ratio,
@@ -204,14 +208,14 @@ class ICUDataModule(L.LightningDataModule):
             "val_stays": len(self.val_indices),
             "test_stays": len(self.test_indices),
         }
-        
+
         split_path = self.processed_dir / "splits.yaml"
         with open(split_path, "w") as f:
             yaml.dump(split_info, f, default_flow_style=False)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Set up datasets for train/val/test.
-        
+
         Args:
             stage: Stage name ('fit', 'validate', 'test', or None).
         """
@@ -223,12 +227,10 @@ class ICUDataModule(L.LightningDataModule):
             normalize=self.normalize,
             impute_strategy=self.impute_strategy,
         )
-        
+
         # Create patient-level splits
-        self.train_indices, self.val_indices, self.test_indices = (
-            self._get_patient_level_splits()
-        )
-        
+        self.train_indices, self.val_indices, self.test_indices = self._get_patient_level_splits()
+
         # Save split information for reproducibility
         self._save_split_info()
 
@@ -236,7 +238,7 @@ class ICUDataModule(L.LightningDataModule):
         """Return training DataLoader."""
         if self.dataset is None:
             raise RuntimeError("Call setup() before train_dataloader()")
-        
+
         train_dataset = Subset(self.dataset, self.train_indices)
         return DataLoader(
             train_dataset,
@@ -252,7 +254,7 @@ class ICUDataModule(L.LightningDataModule):
         """Return validation DataLoader."""
         if self.dataset is None:
             raise RuntimeError("Call setup() before val_dataloader()")
-        
+
         val_dataset = Subset(self.dataset, self.val_indices)
         return DataLoader(
             val_dataset,
@@ -267,7 +269,7 @@ class ICUDataModule(L.LightningDataModule):
         """Return test DataLoader."""
         if self.dataset is None:
             raise RuntimeError("Call setup() before test_dataloader()")
-        
+
         test_dataset = Subset(self.dataset, self.test_indices)
         return DataLoader(
             test_dataset,
@@ -292,32 +294,31 @@ class ICUDataModule(L.LightningDataModule):
 
     def get_split_info(self) -> Dict[str, Any]:
         """Return information about data splits.
-        
+
         Returns:
             Dict with stay counts, patient counts, and actual ratios.
             Use this to verify splits are reasonable.
         """
         total_stays = len(self.dataset) if self.dataset else 0
-        
+
         # Count unique patients per split
         if self.dataset is not None:
             static_df = self.dataset.static_df
-            stay_to_patient = dict(zip(
-                static_df["stay_id"].to_list(),
-                static_df["patient_id"].to_list()
-            ))
-            
+            stay_to_patient = dict(
+                zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
+            )
+
             train_patients = {stay_to_patient[self.dataset.stay_ids[i]] for i in self.train_indices}
             val_patients = {stay_to_patient[self.dataset.stay_ids[i]] for i in self.val_indices}
             test_patients = {stay_to_patient[self.dataset.stay_ids[i]] for i in self.test_indices}
-            
+
             n_train_patients = len(train_patients)
             n_val_patients = len(val_patients)
             n_test_patients = len(test_patients)
             total_patients = n_train_patients + n_val_patients + n_test_patients
         else:
             n_train_patients = n_val_patients = n_test_patients = total_patients = 0
-        
+
         return {
             # Stay counts
             "train_stays": len(self.train_indices),
@@ -340,4 +341,3 @@ class ICUDataModule(L.LightningDataModule):
         if self.dataset is None:
             raise RuntimeError("Call setup() before get_label_statistics()")
         return self.dataset.get_label_statistics()
-

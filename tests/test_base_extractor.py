@@ -3,15 +3,12 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import patch, MagicMock
 
 import numpy as np
 import polars as pl
 import pytest
 import yaml
-
 from slices.data.extractors.base import BaseExtractor, ExtractorConfig
-from slices.data.labels import LabelConfig
 
 
 class MockExtractor(BaseExtractor):
@@ -19,7 +16,7 @@ class MockExtractor(BaseExtractor):
 
     def _get_dataset_name(self) -> str:
         """Get the name of the dataset for this extractor.
-        
+
         Returns:
             Dataset name 'mock' for testing.
         """
@@ -27,10 +24,10 @@ class MockExtractor(BaseExtractor):
 
     def _load_feature_mapping(self, feature_set: str) -> Dict[str, Any]:
         """Mock feature mapping for testing.
-        
+
         Args:
             feature_set: Name of feature set (ignored in mock).
-            
+
         Returns:
             Mock feature mapping with heart_rate and sbp.
         """
@@ -41,7 +38,7 @@ class MockExtractor(BaseExtractor):
 
     def extract_stays(self) -> pl.DataFrame:
         """Mock stay extraction.
-        
+
         Returns:
             DataFrame with mock ICU stay data.
         """
@@ -69,23 +66,23 @@ class MockExtractor(BaseExtractor):
         self, stay_ids: List[int], feature_mapping: Dict[str, Any]
     ) -> pl.DataFrame:
         """Mock raw events extraction.
-        
+
         Args:
             stay_ids: List of stay IDs to extract.
             feature_mapping: Feature mapping (not used in mock).
-            
+
         Returns:
             DataFrame with mock raw events.
         """
         # Get stay info to calculate charttime relative to intime
         stays = self.extract_stays().filter(pl.col("stay_id").is_in(stay_ids))
-        
+
         # Create mock events for each stay
         events = []
         for stay_row in stays.iter_rows(named=True):
             stay_id = stay_row["stay_id"]
             intime = stay_row["intime"]
-            
+
             # Create heart_rate events
             for hour in [0, 1, 2]:
                 charttime = intime + timedelta(hours=hour)
@@ -108,19 +105,19 @@ class MockExtractor(BaseExtractor):
                         "valuenum": 120.0 + hour,
                     }
                 )
-        
+
         return pl.DataFrame(events)
 
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
         """Mock data source extraction.
-        
+
         Args:
             source_name: Name of data source to extract.
             stay_ids: List of stay IDs to extract.
-            
+
         Returns:
             DataFrame with mock data for the specified source.
-            
+
         Raises:
             ValueError: If source_name is not recognized.
         """
@@ -143,10 +140,10 @@ class MockExtractor(BaseExtractor):
 @pytest.fixture
 def temp_parquet_structure(tmp_path):
     """Create temporary Parquet directory structure with test files.
-    
+
     Args:
         tmp_path: Pytest fixture providing temporary directory.
-        
+
     Returns:
         Path to Parquet root directory.
     """
@@ -232,7 +229,9 @@ class TestBaseExtractor:
         assert isinstance(timeseries, pl.DataFrame)
         # extract_timeseries now returns hourly binned data
         # With 2 stays and 3 hours each, we should get 6 rows
-        assert len(timeseries) >= 2  # At least 2 rows (one per stay, but likely more due to hourly bins)
+        assert (
+            len(timeseries) >= 2
+        )  # At least 2 rows (one per stay, but likely more due to hourly bins)
         assert "stay_id" in timeseries.columns
         assert "hour" in timeseries.columns
 
@@ -249,7 +248,7 @@ class TestBaseExtractor:
         extractor = MockExtractor(config)
 
         # _bin_to_hourly_grid is a protected method that should exist
-        assert hasattr(extractor, '_bin_to_hourly_grid')
+        assert hasattr(extractor, "_bin_to_hourly_grid")
         assert callable(extractor._bin_to_hourly_grid)
 
     def test_run_method_exists_and_creates_output_dir(self, temp_parquet_structure, tmp_path):
@@ -264,7 +263,7 @@ class TestBaseExtractor:
 
         # run() should exist (not raise NotImplementedError anymore)
         # Note: May fail due to missing mock feature config, but method exists
-        assert hasattr(extractor, 'run')
+        assert hasattr(extractor, "run")
         assert callable(extractor.run)
 
     def test_output_dir_created(self, temp_parquet_structure, tmp_path):
@@ -299,44 +298,46 @@ class TestCreateDenseTimeseries:
             seq_length_hours=6,
         )
         extractor = MockExtractor(config)
-        
+
         # Create sparse timeseries with gaps
-        sparse = pl.DataFrame({
-            "stay_id": [1, 1, 1, 2, 2],
-            "hour": [0, 2, 4, 0, 1],
-            "heart_rate": [70.0, 72.0, 74.0, 80.0, 82.0],
-            "sbp": [120.0, None, 125.0, 115.0, 118.0],
-            "heart_rate_mask": [True, True, True, True, True],
-            "sbp_mask": [True, False, True, True, True],
-        })
-        
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1, 1, 1, 2, 2],
+                "hour": [0, 2, 4, 0, 1],
+                "heart_rate": [70.0, 72.0, 74.0, 80.0, 82.0],
+                "sbp": [120.0, None, 125.0, 115.0, 118.0],
+                "heart_rate_mask": [True, True, True, True, True],
+                "sbp_mask": [True, False, True, True, True],
+            }
+        )
+
         stays = extractor.extract_stays()
         feature_names = ["heart_rate", "sbp"]
-        
+
         result = extractor._create_dense_timeseries(sparse, stays, feature_names)
-        
+
         # Check structure
         assert "stay_id" in result.columns
         assert "timeseries" in result.columns
         assert "mask" in result.columns
-        
+
         # Check shapes (should have 2 stays)
         assert len(result) == 2
-        
+
         # Check timeseries shape for stay 1
         stay1 = result.filter(pl.col("stay_id") == 1)
         ts1 = stay1["timeseries"][0]
         mask1 = stay1["mask"][0]
-        
+
         assert len(ts1) == 6  # seq_length_hours
         assert len(ts1[0]) == 2  # 2 features
-        
+
         # Hour 0 should have values
         assert ts1[0][0] == 70.0  # heart_rate
         assert ts1[0][1] == 120.0  # sbp
         assert mask1[0][0] is True
         assert mask1[0][1] is True
-        
+
         # Hour 1 should be NaN (no data in sparse)
         assert np.isnan(ts1[1][0])
         assert mask1[1][0] is False
@@ -348,28 +349,30 @@ class TestCreateDenseTimeseries:
             seq_length_hours=3,  # Short sequence
         )
         extractor = MockExtractor(config)
-        
+
         # Create sparse with data at hour 5 (beyond seq_length)
-        sparse = pl.DataFrame({
-            "stay_id": [1, 1, 1],
-            "hour": [0, 2, 5],  # Hour 5 is beyond seq_length
-            "heart_rate": [70.0, 72.0, 99.0],
-            "sbp": [120.0, 122.0, 199.0],
-            "heart_rate_mask": [True, True, True],
-            "sbp_mask": [True, True, True],
-        })
-        
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1, 1, 1],
+                "hour": [0, 2, 5],  # Hour 5 is beyond seq_length
+                "heart_rate": [70.0, 72.0, 99.0],
+                "sbp": [120.0, 122.0, 199.0],
+                "heart_rate_mask": [True, True, True],
+                "sbp_mask": [True, True, True],
+            }
+        )
+
         stays = extractor.extract_stays()
         feature_names = ["heart_rate", "sbp"]
-        
+
         result = extractor._create_dense_timeseries(sparse, stays, feature_names)
-        
+
         stay1 = result.filter(pl.col("stay_id") == 1)
         ts1 = stay1["timeseries"][0]
-        
+
         # Should have exactly seq_length_hours
         assert len(ts1) == 3
-        
+
         # Hour 5 data should not appear
         assert ts1[0][0] == 70.0
         assert ts1[2][0] == 72.0
@@ -383,22 +386,24 @@ class TestCreateDenseTimeseries:
             seq_length_hours=4,
         )
         extractor = MockExtractor(config)
-        
+
         # Sparse with data for only stay 1
-        sparse = pl.DataFrame({
-            "stay_id": [1],
-            "hour": [0],
-            "heart_rate": [70.0],
-            "sbp": [120.0],
-            "heart_rate_mask": [True],
-            "sbp_mask": [True],
-        })
-        
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "hour": [0],
+                "heart_rate": [70.0],
+                "sbp": [120.0],
+                "heart_rate_mask": [True],
+                "sbp_mask": [True],
+            }
+        )
+
         stays = extractor.extract_stays()
         feature_names = ["heart_rate", "sbp"]
-        
+
         result = extractor._create_dense_timeseries(sparse, stays, feature_names)
-        
+
         # Only stay 1 should be in result (stays with no data are not included)
         assert len(result) == 1
         assert result["stay_id"][0] == 1
@@ -410,27 +415,29 @@ class TestCreateDenseTimeseries:
             seq_length_hours=4,
         )
         extractor = MockExtractor(config)
-        
-        sparse = pl.DataFrame({
-            "stay_id": [1, 1],
-            "hour": [0, 1],
-            "heart_rate": [70.0, 75.0],
-            "sbp": [120.0, None],  # sbp missing at hour 1
-            "heart_rate_mask": [True, True],
-            "sbp_mask": [True, False],  # Explicitly marked as not observed
-        })
-        
+
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "hour": [0, 1],
+                "heart_rate": [70.0, 75.0],
+                "sbp": [120.0, None],  # sbp missing at hour 1
+                "heart_rate_mask": [True, True],
+                "sbp_mask": [True, False],  # Explicitly marked as not observed
+            }
+        )
+
         stays = extractor.extract_stays()
         feature_names = ["heart_rate", "sbp"]
-        
+
         result = extractor._create_dense_timeseries(sparse, stays, feature_names)
-        
+
         mask = result.filter(pl.col("stay_id") == 1)["mask"][0]
-        
+
         # Hour 0: both observed
         assert mask[0][0] is True  # heart_rate
         assert mask[0][1] is True  # sbp
-        
+
         # Hour 1: only heart_rate observed
         assert mask[1][0] is True  # heart_rate
         assert mask[1][1] is False  # sbp not observed
@@ -445,21 +452,21 @@ class TestExtractorRun:
         parquet_root = tmp_path / "parquet"
         output_dir = tmp_path / "output"
         tasks_dir = tmp_path / "tasks"
-        
+
         # Create parquet structure
         (parquet_root / "hosp").mkdir(parents=True)
         (parquet_root / "icu").mkdir(parents=True)
-        
+
         # Create minimal parquet files
         patients_df = pl.DataFrame({"subject_id": [1, 2], "gender": ["M", "F"]})
         patients_df.write_parquet(parquet_root / "hosp" / "patients.parquet")
-        
+
         icustays_df = pl.DataFrame({"stay_id": [1, 2], "subject_id": [1, 2]})
         icustays_df.write_parquet(parquet_root / "icu" / "icustays.parquet")
-        
+
         # Create task config directory and files
         tasks_dir.mkdir(parents=True)
-        
+
         # Create a minimal mortality task config
         mortality_config = {
             "task_name": "mortality_hospital",
@@ -470,7 +477,7 @@ class TestExtractorRun:
         }
         with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
             yaml.dump(mortality_config, f)
-        
+
         return {
             "parquet_root": parquet_root,
             "output_dir": output_dir,
@@ -480,7 +487,7 @@ class TestExtractorRun:
     def test_run_creates_output_directory(self, temp_extraction_setup):
         """Test that run() creates the output directory."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -490,20 +497,20 @@ class TestExtractorRun:
             min_stay_hours=0,  # Include all stays for testing
         )
         extractor = MockExtractor(config)
-        
+
         # Output dir shouldn't exist yet
         assert not setup["output_dir"].exists()
-        
+
         # Run extraction
         extractor.run()
-        
+
         # Output dir should be created
         assert setup["output_dir"].exists()
 
     def test_run_creates_all_output_files(self, temp_extraction_setup):
         """Test that run() creates all expected output files."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -514,9 +521,9 @@ class TestExtractorRun:
         )
         extractor = MockExtractor(config)
         extractor.run()
-        
+
         output_dir = setup["output_dir"]
-        
+
         # Check all files exist
         assert (output_dir / "static.parquet").exists()
         assert (output_dir / "timeseries.parquet").exists()
@@ -526,7 +533,7 @@ class TestExtractorRun:
     def test_run_metadata_content(self, temp_extraction_setup):
         """Test that metadata.yaml contains correct information."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -538,11 +545,11 @@ class TestExtractorRun:
         )
         extractor = MockExtractor(config)
         extractor.run()
-        
+
         # Load and check metadata
         with open(setup["output_dir"] / "metadata.yaml") as f:
             metadata = yaml.safe_load(f)
-        
+
         assert metadata["dataset"] == "mock"
         assert metadata["feature_set"] == "core"
         assert metadata["seq_length_hours"] == 6
@@ -555,7 +562,7 @@ class TestExtractorRun:
     def test_run_filters_short_stays(self, temp_extraction_setup):
         """Test that run() filters stays shorter than min_stay_hours."""
         setup = temp_extraction_setup
-        
+
         # Use a high min_stay_hours to filter out our mock stays (4 days = 96 hours)
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
@@ -566,14 +573,14 @@ class TestExtractorRun:
             min_stay_hours=200,  # Filter all stays (mock stays are 4 days = 96 hours)
         )
         extractor = MockExtractor(config)
-        
+
         # This should complete early with warning about no stays
         # When no stays remain, run() returns early without creating output files
         extractor.run()
-        
+
         # Output dir should be created but metadata may not exist (early return)
         assert setup["output_dir"].exists()
-        
+
         # The run method returns early when no stays remain, so no metadata file
         # This is the expected behavior - we're testing that filtering works
         metadata_path = setup["output_dir"] / "metadata.yaml"
@@ -586,7 +593,7 @@ class TestExtractorRun:
     def test_run_with_empty_tasks(self, temp_extraction_setup):
         """Test that run() works with empty task list."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -597,7 +604,7 @@ class TestExtractorRun:
         )
         extractor = MockExtractor(config)
         extractor.run()
-        
+
         # Labels should exist but only have stay_id column
         labels_df = pl.read_parquet(setup["output_dir"] / "labels.parquet")
         assert "stay_id" in labels_df.columns
@@ -606,7 +613,7 @@ class TestExtractorRun:
     def test_run_timeseries_format(self, temp_extraction_setup):
         """Test that output timeseries has correct dense format."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -617,14 +624,14 @@ class TestExtractorRun:
         )
         extractor = MockExtractor(config)
         extractor.run()
-        
+
         # Load timeseries
         ts_df = pl.read_parquet(setup["output_dir"] / "timeseries.parquet")
-        
+
         assert "stay_id" in ts_df.columns
         assert "timeseries" in ts_df.columns
         assert "mask" in ts_df.columns
-        
+
         # Check timeseries is nested list format
         # When loading from Parquet, Polars returns a Series element which is a list
         first_ts = ts_df["timeseries"].to_list()[0]
@@ -634,7 +641,7 @@ class TestExtractorRun:
     def test_run_static_contains_demographics(self, temp_extraction_setup):
         """Test that static output contains demographic information."""
         setup = temp_extraction_setup
-        
+
         config = ExtractorConfig(
             parquet_root=str(setup["parquet_root"]),
             output_dir=str(setup["output_dir"]),
@@ -645,9 +652,9 @@ class TestExtractorRun:
         )
         extractor = MockExtractor(config)
         extractor.run()
-        
+
         static_df = pl.read_parquet(setup["output_dir"] / "static.parquet")
-        
+
         # Should contain expected demographic columns
         assert "stay_id" in static_df.columns
         assert "patient_id" in static_df.columns
@@ -667,7 +674,7 @@ class TestLoadTaskConfigs:
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
         tasks_dir.mkdir(parents=True)
-        
+
         # Create a task config file
         task_config = {
             "task_name": "test_task",
@@ -678,16 +685,16 @@ class TestLoadTaskConfigs:
         }
         with open(tasks_dir / "test_task.yaml", "w") as f:
             yaml.dump(task_config, f)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             tasks_dir=str(tasks_dir),
         )
         extractor = MockExtractor(config)
-        
+
         # Load config
         loaded = extractor._load_task_configs(["test_task"])
-        
+
         assert len(loaded) == 1
         assert loaded[0].task_name == "test_task"
         assert loaded[0].task_type == "binary_classification"
@@ -700,16 +707,16 @@ class TestLoadTaskConfigs:
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
         tasks_dir.mkdir(parents=True)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             tasks_dir=str(tasks_dir),
         )
         extractor = MockExtractor(config)
-        
+
         # Load non-existent task
         loaded = extractor._load_task_configs(["nonexistent_task"])
-        
+
         # Should return empty list (task skipped)
         assert len(loaded) == 0
 
@@ -720,7 +727,7 @@ class TestLoadTaskConfigs:
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
         tasks_dir.mkdir(parents=True)
-        
+
         # Create multiple task configs
         for task_name, window in [("mortality_24h", 24), ("mortality_48h", 48)]:
             config_dict = {
@@ -731,15 +738,15 @@ class TestLoadTaskConfigs:
             }
             with open(tasks_dir / f"{task_name}.yaml", "w") as f:
                 yaml.dump(config_dict, f)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             tasks_dir=str(tasks_dir),
         )
         extractor = MockExtractor(config)
-        
+
         loaded = extractor._load_task_configs(["mortality_24h", "mortality_48h"])
-        
+
         assert len(loaded) == 2
         task_names = {tc.task_name for tc in loaded}
         assert "mortality_24h" in task_names
@@ -753,39 +760,39 @@ class TestPathResolution:
         """Test _get_project_root finds directory with pyproject.toml."""
         # Create pyproject.toml in tmp_path
         (tmp_path / "pyproject.toml").touch()
-        
+
         parquet_root = tmp_path / "data" / "parquet"
         parquet_root.mkdir(parents=True)
         (parquet_root / "icu").mkdir()
         (parquet_root / "hosp").mkdir()
-        
+
         config = ExtractorConfig(parquet_root=str(parquet_root))
         extractor = MockExtractor(config)
-        
+
         # Change working directory
         monkeypatch.chdir(tmp_path / "data")
-        
+
         result = extractor._get_project_root()
-        
+
         assert result == tmp_path
 
     def test_get_concepts_path_uses_explicit_config(self, tmp_path):
         """Test _get_concepts_path uses explicit concepts_dir when provided."""
         concepts_dir = tmp_path / "my_concepts"
         concepts_dir.mkdir(parents=True)
-        
+
         parquet_root = tmp_path / "parquet"
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             concepts_dir=str(concepts_dir),
         )
         extractor = MockExtractor(config)
-        
+
         result = extractor._get_concepts_path()
-        
+
         assert result == concepts_dir
 
     def test_get_concepts_path_raises_on_invalid_explicit_path(self, tmp_path):
@@ -793,31 +800,33 @@ class TestPathResolution:
         parquet_root = tmp_path / "parquet"
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             concepts_dir="/nonexistent/path",
         )
         extractor = MockExtractor(config)
-        
-        with pytest.raises(FileNotFoundError, match="Concepts directory specified in config not found"):
+
+        with pytest.raises(
+            FileNotFoundError, match="Concepts directory specified in config not found"
+        ):
             extractor._get_concepts_path()
 
     def test_get_tasks_path_uses_explicit_config(self, tmp_path):
         """Test _get_tasks_path uses explicit tasks_dir when provided."""
         tasks_dir = tmp_path / "my_tasks"
         tasks_dir.mkdir(parents=True)
-        
+
         parquet_root = tmp_path / "parquet"
         (parquet_root / "icu").mkdir(parents=True)
         (parquet_root / "hosp").mkdir(parents=True)
-        
+
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             tasks_dir=str(tasks_dir),
         )
         extractor = MockExtractor(config)
-        
+
         result = extractor._get_tasks_path()
-        
+
         assert result == tasks_dir

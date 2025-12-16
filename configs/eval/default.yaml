@@ -14,7 +14,7 @@ metrics:
   # Metrics to compute (null = use defaults for task type)
   # Defaults: binary/multiclass -> [auroc, auprc], multilabel -> [auroc]
   names: null
-  
+
   # Decision threshold for binary classification
   threshold: 0.5
 

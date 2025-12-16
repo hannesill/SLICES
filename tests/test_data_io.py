@@ -2,22 +2,19 @@
 
 import gzip
 import os
-from pathlib import Path
-from unittest.mock import Mock, patch
 
 import duckdb
 import pytest
-
 from slices.data.data_io import _csv_to_parquet_all, convert_csv_to_parquet
 
 
 @pytest.fixture
 def temp_csv_dir(tmp_path):
     """Create temporary CSV directory structure with test data.
-    
+
     Args:
         tmp_path: Pytest fixture providing temporary directory.
-        
+
     Returns:
         Path to CSV root directory.
     """
@@ -44,10 +41,10 @@ def temp_csv_dir(tmp_path):
 @pytest.fixture
 def temp_parquet_dir(tmp_path):
     """Create temporary Parquet output directory.
-    
+
     Args:
         tmp_path: Pytest fixture providing temporary directory.
-        
+
     Returns:
         Path to Parquet output directory.
     """
@@ -90,9 +87,7 @@ class TestCsvToParquetAll:
         # Read and verify
         con = duckdb.connect()
         patients_path = temp_parquet_dir / "hosp" / "patients.parquet"
-        result = con.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{patients_path}')"
-        ).fetchone()
+        result = con.execute(f"SELECT COUNT(*) FROM read_parquet('{patients_path}')").fetchone()
 
         assert result[0] == 2  # 2 patients in test data
         con.close()
@@ -104,9 +99,8 @@ class TestCsvToParquetAll:
         # Verify data content
         con = duckdb.connect()
         patients_path = temp_parquet_dir / "hosp" / "patients.parquet"
-        result = con.execute(
-            f"SELECT subject_id, gender, anchor_age FROM read_parquet('{patients_path}') ORDER BY subject_id"
-        ).fetchall()
+        sql = f"SELECT subject_id, gender, anchor_age FROM read_parquet('{patients_path}')"
+        result = con.execute(f"{sql} ORDER BY subject_id").fetchall()
 
         assert result[0] == (1, "M", 65)
         assert result[1] == (2, "F", 42)
@@ -156,9 +150,7 @@ class TestConvertCsvToParquet:
 
     def test_dataset_name_optional(self, temp_csv_dir, temp_parquet_dir):
         """Test that dataset_name is optional."""
-        success = convert_csv_to_parquet(
-            csv_root=temp_csv_dir, parquet_root=temp_parquet_dir
-        )
+        success = convert_csv_to_parquet(csv_root=temp_csv_dir, parquet_root=temp_parquet_dir)
 
         assert success is True
 

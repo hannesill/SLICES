@@ -289,4 +289,3 @@ See [LICENSE](LICENSE) file for details.
 ## Contributing
 
 This is a master's thesis project. Contributions welcome via issues and pull requests.
-

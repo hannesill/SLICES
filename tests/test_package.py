@@ -3,8 +3,6 @@
 Tests that the package is properly structured, importable, and has correct version.
 """
 
-import pytest
-
 
 class TestPackageStructure:
     """Tests for package structure and imports."""
@@ -21,33 +19,32 @@ class TestPackageStructure:
 
         assert hasattr(slices, "__version__")
         version = slices.__version__
-        
+
         # Version should be a string
         assert isinstance(version, str)
-        
+
         # Should follow semver (x.y.z)
         parts = version.split(".")
         assert len(parts) >= 2, f"Version {version} should have at least major.minor"
-        
+
         # Major and minor should be numeric
         assert parts[0].isdigit(), f"Major version should be numeric: {parts[0]}"
         assert parts[1].isdigit(), f"Minor version should be numeric: {parts[1]}"
 
     def test_data_subpackage_importable(self) -> None:
         """Test that data subpackage can be imported."""
-        from slices.data import extractors
-        from slices.data import labels
+        from slices.data import extractors, labels
 
         assert extractors is not None
         assert labels is not None
 
     def test_core_classes_importable(self) -> None:
         """Test that core classes can be imported from expected locations."""
+        from slices.data.datamodule import ICUDataModule, icu_collate_fn
+        from slices.data.dataset import ICUDataset
         from slices.data.extractors.base import BaseExtractor, ExtractorConfig
         from slices.data.extractors.mimic_iv import MIMICIVExtractor
-        from slices.data.dataset import ICUDataset
-        from slices.data.datamodule import ICUDataModule, icu_collate_fn
-        from slices.data.labels import LabelConfig, LabelBuilder, LabelBuilderFactory
+        from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
         from slices.data.labels.mortality import MortalityLabelBuilder
 
         # Verify classes exist and are the right type
@@ -91,8 +88,8 @@ class TestPackageStructure:
 
     def test_dataset_inherits_torch_dataset(self) -> None:
         """Test that ICUDataset inherits from torch Dataset."""
-        from torch.utils.data import Dataset
         from slices.data.dataset import ICUDataset
+        from torch.utils.data import Dataset
 
         assert issubclass(ICUDataset, Dataset)
 
@@ -102,11 +99,11 @@ class TestPackageDependencies:
 
     def test_core_dependencies_available(self) -> None:
         """Test that core dependencies can be imported."""
-        import torch
-        import polars
         import duckdb
-        import yaml
         import lightning.pytorch
+        import polars
+        import torch
+        import yaml
 
         assert torch is not None
         assert polars is not None

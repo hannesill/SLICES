@@ -14,13 +14,12 @@ The MAE objective learns representations by:
 - Minimizing reconstruction error on masked positions
 """
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
-from pathlib import Path
-from typing import Optional
-
 from slices.data.dataset import ICUDataset
-from slices.models.encoders import TransformerEncoder, TransformerConfig
+from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.pretraining import MAEConfig, MAEObjective, build_ssl_objective
 
 
@@ -33,7 +32,7 @@ def create_mae_model(
     mask_strategy: str = "random",
 ) -> nn.Module:
     """Create MAE model with transformer encoder.
-    
+
     Args:
         d_input: Input feature dimension.
         d_model: Transformer model dimension.
@@ -41,7 +40,7 @@ def create_mae_model(
         n_heads: Number of attention heads.
         mask_ratio: Fraction of input to mask.
         mask_strategy: Masking strategy (random, block, timestep, feature).
-    
+
     Returns:
         MAE objective module.
     """
@@ -58,7 +57,7 @@ def create_mae_model(
         prenorm=True,
     )
     encoder = TransformerEncoder(encoder_config)
-    
+
     # Configure MAE objective
     mae_config = MAEConfig(
         name="mae",
@@ -75,10 +74,10 @@ def create_mae_model(
         loss_on_observed_only=True,  # Only penalize on originally observed values
         norm_target=False,  # Whether to normalize reconstruction targets
     )
-    
+
     # Build MAE objective
     mae = MAEObjective(encoder, mae_config)
-    
+
     return mae
 
 
@@ -89,70 +88,70 @@ def train_mae_epoch(
     device: torch.device,
 ) -> dict:
     """Run one epoch of MAE training.
-    
+
     Args:
         model: MAE objective module.
         dataloader: Training dataloader.
         optimizer: Optimizer.
         device: Device to train on.
-    
+
     Returns:
         Dict of average metrics for the epoch.
     """
     model.train()
-    
+
     total_loss = 0.0
     total_metrics = {}
     n_batches = 0
-    
+
     for batch in dataloader:
         # Move batch to device
         timeseries = batch["timeseries"].to(device)  # (B, T, D)
         mask = batch["mask"].to(device)  # (B, T, D)
-        
+
         # Forward pass
         loss, metrics = model(timeseries, mask)
-        
+
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+
         # Accumulate metrics
         total_loss += loss.item()
         for key, value in metrics.items():
             if key not in total_metrics:
                 total_metrics[key] = 0.0
             total_metrics[key] += value.item() if torch.is_tensor(value) else value
-        
+
         n_batches += 1
-    
+
     # Average metrics
     avg_metrics = {
         "loss": total_loss / n_batches,
-        **{k: v / n_batches for k, v in total_metrics.items()}
+        **{k: v / n_batches for k, v in total_metrics.items()},
     }
-    
+
     return avg_metrics
 
 
 def main():
     """Main example demonstrating MAE pretraining."""
-    
+
     # Configuration
     data_dir = Path("data/processed/mimic-iv-demo")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     print("=" * 80)
     print("MAE Pretraining Example")
     print("=" * 80)
-    
+
     # Check if data exists
     if not data_dir.exists():
         print(f"\n❌ Data directory not found: {data_dir}")
         print("Please run setup_mimic_iv.py first to extract data.")
         return
-    
+
     # Load dataset
     print(f"\n1. Loading dataset from {data_dir}...")
     dataset = ICUDataset(
@@ -161,11 +160,11 @@ def main():
         impute_strategy="forward_fill",
         normalize=True,
     )
-    
+
     print(f"   ✓ Loaded {len(dataset)} ICU stays")
     print(f"   ✓ Feature dimension: {dataset.n_features}")
     print(f"   ✓ Sequence length: {dataset.seq_length}")
-    
+
     # Create dataloader
     batch_size = 32
     dataloader = torch.utils.data.DataLoader(
@@ -175,7 +174,7 @@ def main():
         num_workers=0,
     )
     print(f"   ✓ Created dataloader with batch_size={batch_size}")
-    
+
     # =========================================================================
     # Example 1: Random masking (BERT-style)
     # =========================================================================
@@ -188,35 +187,37 @@ def main():
         mask_ratio=0.15,  # Mask 15% of positions
         mask_strategy="random",
     ).to(device)
-    
+
     n_params = sum(p.numel() for p in mae_random.parameters())
     print(f"   ✓ Model created with {n_params:,} parameters")
-    print(f"   ✓ Masking: 15% random positions")
-    
+    print("   ✓ Masking: 15% random positions")
+
     # Create optimizer
     optimizer = torch.optim.AdamW(mae_random.parameters(), lr=1e-3)
-    
+
     # Train for a few batches
     print("\n3. Training with random masking...")
     mae_random.train()
-    
+
     for i, batch in enumerate(dataloader):
         if i >= 3:  # Just 3 batches for demo
             break
-        
+
         timeseries = batch["timeseries"].to(device)
         mask = batch["mask"].to(device)
-        
+
         loss, metrics = mae_random(timeseries, mask)
-        
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        print(f"   Batch {i+1}: loss={loss.item():.4f}, "
-              f"masked_loss={metrics['mae_recon_loss_masked'].item():.4f}, "
-              f"visible_loss={metrics['mae_recon_loss_visible'].item():.4f}")
-    
+
+        print(
+            f"   Batch {i+1}: loss={loss.item():.4f}, "
+            f"masked_loss={metrics['mae_recon_loss_masked'].item():.4f}, "
+            f"visible_loss={metrics['mae_recon_loss_visible'].item():.4f}"
+        )
+
     # =========================================================================
     # Example 2: Block masking (for temporal structure learning)
     # =========================================================================
@@ -229,31 +230,33 @@ def main():
         mask_ratio=0.15,
         mask_strategy="block",  # Mask contiguous time blocks
     ).to(device)
-    
-    print(f"   ✓ Model created with block masking")
-    print(f"   ✓ Masking: 15% in contiguous blocks (3-10 timesteps)")
-    
+
+    print("   ✓ Model created with block masking")
+    print("   ✓ Masking: 15% in contiguous blocks (3-10 timesteps)")
+
     optimizer = torch.optim.AdamW(mae_block.parameters(), lr=1e-3)
-    
+
     print("\n5. Training with block masking...")
     mae_block.train()
-    
+
     for i, batch in enumerate(dataloader):
         if i >= 3:
             break
-        
+
         timeseries = batch["timeseries"].to(device)
         mask = batch["mask"].to(device)
-        
+
         loss, metrics = mae_block(timeseries, mask)
-        
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        print(f"   Batch {i+1}: loss={loss.item():.4f}, "
-              f"mask_ratio={metrics['mae_mask_ratio_actual']:.3f}")
-    
+
+        print(
+            f"   Batch {i+1}: loss={loss.item():.4f}, "
+            f"mask_ratio={metrics['mae_mask_ratio_actual']:.3f}"
+        )
+
     # =========================================================================
     # Example 3: Timestep masking (mask entire timesteps)
     # =========================================================================
@@ -266,31 +269,32 @@ def main():
         mask_ratio=0.15,
         mask_strategy="timestep",  # Mask entire timesteps
     ).to(device)
-    
-    print(f"   ✓ Model created with timestep masking")
-    print(f"   ✓ Masking: 15% of timesteps (all features)")
-    
+
+    print("   ✓ Model created with timestep masking")
+    print("   ✓ Masking: 15% of timesteps (all features)")
+
     optimizer = torch.optim.AdamW(mae_timestep.parameters(), lr=1e-3)
-    
+
     print("\n7. Training with timestep masking...")
     mae_timestep.train()
-    
+
     for i, batch in enumerate(dataloader):
         if i >= 3:
             break
-        
+
         timeseries = batch["timeseries"].to(device)
         mask = batch["mask"].to(device)
-        
+
         loss, metrics = mae_timestep(timeseries, mask)
-        
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        print(f"   Batch {i+1}: loss={loss.item():.4f}, "
-              f"obs_ratio={metrics['mae_obs_ratio']:.3f}")
-    
+
+        print(
+            f"   Batch {i+1}: loss={loss.item():.4f}, " f"obs_ratio={metrics['mae_obs_ratio']:.3f}"
+        )
+
     # =========================================================================
     # Example 4: Feature masking (mask entire features)
     # =========================================================================
@@ -303,35 +307,35 @@ def main():
         mask_ratio=0.15,
         mask_strategy="feature",  # Mask entire features
     ).to(device)
-    
-    print(f"   ✓ Model created with feature masking")
-    print(f"   ✓ Masking: 15% of features (all timesteps)")
-    
+
+    print("   ✓ Model created with feature masking")
+    print("   ✓ Masking: 15% of features (all timesteps)")
+
     optimizer = torch.optim.AdamW(mae_feature.parameters(), lr=1e-3)
-    
+
     print("\n9. Training with feature masking...")
     mae_feature.train()
-    
+
     for i, batch in enumerate(dataloader):
         if i >= 3:
             break
-        
+
         timeseries = batch["timeseries"].to(device)
         mask = batch["mask"].to(device)
-        
+
         loss, metrics = mae_feature(timeseries, mask)
-        
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+
         print(f"   Batch {i+1}: loss={loss.item():.4f}")
-    
+
     # =========================================================================
     # Example 5: Using factory function for easy switching
     # =========================================================================
     print("\n10. Using factory function for easy SSL objective switching...")
-    
+
     # Create encoder
     encoder_config = TransformerConfig(
         d_input=dataset.n_features,
@@ -341,35 +345,35 @@ def main():
         pooling="none",
     )
     encoder = TransformerEncoder(encoder_config).to(device)
-    
+
     # Configure MAE
     mae_config = MAEConfig(
         name="mae",
         mask_ratio=0.20,
         mask_strategy="block",
     )
-    
+
     # Build using factory
     ssl_objective = build_ssl_objective(encoder, mae_config).to(device)
-    
+
     print(f"   ✓ Created SSL objective: {mae_config.name}")
     print(f"   ✓ Strategy: {mae_config.mask_strategy}")
     print(f"   ✓ Mask ratio: {mae_config.mask_ratio}")
-    
+
     # Train for one batch
     optimizer = torch.optim.AdamW(ssl_objective.parameters(), lr=1e-3)
-    
+
     batch = next(iter(dataloader))
     timeseries = batch["timeseries"].to(device)
     mask = batch["mask"].to(device)
-    
+
     loss, metrics = ssl_objective(timeseries, mask)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    
+
     print(f"   ✓ Trained one batch: loss={loss.item():.4f}")
-    
+
     # =========================================================================
     # Summary
     # =========================================================================

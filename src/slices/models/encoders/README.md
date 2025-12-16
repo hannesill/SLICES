@@ -40,7 +40,7 @@ embeddings = encoder(x)       # (batch, d_model)
 
 1. **Input Projection**: Linear layer maps raw features to model dimension
    - Input: `(B, T, d_input)` → Output: `(B, T, d_model)`
-   
+
 2. **Positional Encoding**: Sinusoidal position embeddings (optional)
    - Provides temporal ordering information
    - Can be disabled with `use_positional_encoding=False`
@@ -115,15 +115,15 @@ class TransformerConfig(EncoderConfig):
     d_input: int = 35            # Number of input features
     d_model: int = 128           # Model dimension
     max_seq_length: int = 168    # Maximum sequence length
-    
+
     # Architecture
     n_layers: int = 4            # Number of transformer layers
     n_heads: int = 8             # Number of attention heads
     d_ff: int = 512              # Feedforward dimension
-    
+
     # Regularization
     dropout: float = 0.1         # Dropout probability
-    
+
     # Options
     activation: str = "gelu"     # Activation: gelu, relu, silu
     prenorm: bool = True         # Pre-LN (True) or Post-LN (False)

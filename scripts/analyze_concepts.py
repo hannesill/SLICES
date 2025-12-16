@@ -19,12 +19,11 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import duckdb
 import numpy as np
 import polars as pl
-import yaml
 from omegaconf import OmegaConf
 from rich.console import Console
 from rich.table import Table
@@ -35,7 +34,7 @@ console = Console()
 try:
     import matplotlib.pyplot as plt
     import seaborn as sns
-    
+
     # Set style for plots
     sns.set_style("whitegrid")
     plt.rcParams["figure.figsize"] = (14, 8)
@@ -53,7 +52,7 @@ class ConceptAnalyzer:
 
     def __init__(self, concept_file: Path, parquet_root: Path):
         """Initialize analyzer.
-        
+
         Args:
             concept_file: Path to concept YAML file
             parquet_root: Path to MIMIC-IV Parquet files
@@ -61,15 +60,15 @@ class ConceptAnalyzer:
         self.concept_file = Path(concept_file)
         self.parquet_root = Path(parquet_root)
         self.conn = duckdb.connect()
-        
+
         if not self.concept_file.exists():
             raise FileNotFoundError(f"Concept file not found: {concept_file}")
         if not self.parquet_root.exists():
             raise FileNotFoundError(f"Parquet root not found: {parquet_root}")
-        
+
         # Load concept file
         self.concepts = OmegaConf.load(self.concept_file)
-        
+
         # Source table mappings
         self.source_to_table = {
             "chartevents": ("icu", "chartevents", "valuenum"),
@@ -87,20 +86,20 @@ class ConceptAnalyzer:
 
     def _get_total_measurements(self, source: str) -> int:
         """Get total number of measurements in a source table.
-        
+
         Args:
             source: Source name (chartevents, labevents, outputevents)
-            
+
         Returns:
             Total count of measurements with non-null values
         """
         schema, table, value_col = self.source_to_table[source]
         table_path = self._parquet_path(schema, table)
-        
+
         if not table_path.exists():
             console.print(f"[yellow]Warning: Table not found: {table_path}[/yellow]")
             return 0
-        
+
         sql = f"""
         SELECT COUNT(*) as total
         FROM read_parquet('{table_path}')
@@ -124,18 +123,18 @@ class ConceptAnalyzer:
         self, source: str, itemids: List[int], value_col: str
     ) -> Dict[str, Any]:
         """Get measurement statistics for a concept.
-        
+
         Args:
             source: Source name (chartevents, labevents, outputevents)
             itemids: List of item IDs for this concept
             value_col: Column name for values
-            
+
         Returns:
             Dictionary with measurement statistics
         """
         schema, table, _ = self.source_to_table[source]
         table_path = self._parquet_path(schema, table)
-        
+
         if not table_path.exists():
             return {
                 "total_measurements": 0,
@@ -143,9 +142,9 @@ class ConceptAnalyzer:
                 "unique_patients": 0,
                 "values": None,
             }
-        
+
         itemids_str = ",".join(map(str, itemids))
-        
+
         # Handle different table structures
         # chartevents and outputevents have stay_id directly
         # labevents has hadm_id, need to join with icustays
@@ -153,7 +152,7 @@ class ConceptAnalyzer:
             icustays_path = self._parquet_path("icu", "icustays")
             # Get basic counts with join to icustays for stay_id
             sql = f"""
-            SELECT 
+            SELECT
                 COUNT(*) as total_measurements,
                 COUNT(DISTINCT i.stay_id) as unique_stays,
                 COUNT(DISTINCT l.subject_id) as unique_patients,
@@ -172,7 +171,7 @@ class ConceptAnalyzer:
             WHERE l.itemid IN ({itemids_str})
                 AND l.{value_col} IS NOT NULL
             """
-            
+
             # Get all values for distribution (sample if too many)
             sql_values = f"""
             SELECT l.{value_col} as value
@@ -186,7 +185,7 @@ class ConceptAnalyzer:
         else:
             # chartevents and outputevents have stay_id directly
             sql = f"""
-            SELECT 
+            SELECT
                 COUNT(*) as total_measurements,
                 COUNT(DISTINCT stay_id) as unique_stays,
                 COUNT(DISTINCT subject_id) as unique_patients,
@@ -203,7 +202,7 @@ class ConceptAnalyzer:
             WHERE itemid IN ({itemids_str})
                 AND {value_col} IS NOT NULL
             """
-            
+
             # Get all values for distribution (sample if too many)
             sql_values = f"""
             SELECT {value_col} as value
@@ -212,15 +211,15 @@ class ConceptAnalyzer:
                 AND {value_col} IS NOT NULL
             LIMIT 100000
             """
-        
+
         stats = self._query(sql)
         values_df = self._query(sql_values)
         values = values_df["value"].to_numpy() if len(values_df) > 0 else np.array([])
-        
+
         if len(stats) > 0:
             # Convert first row to dict to ensure scalar values
             row_dict = stats.row(0, named=True)
-            
+
             def get_scalar(col_name):
                 val = row_dict.get(col_name)
                 if val is None:
@@ -232,7 +231,7 @@ class ConceptAnalyzer:
                 if isinstance(val, np.ndarray):
                     return val.item() if val.size > 0 else None
                 return val
-            
+
             return {
                 "total_measurements": int(get_scalar("total_measurements") or 0),
                 "unique_stays": int(get_scalar("unique_stays") or 0),
@@ -258,56 +257,56 @@ class ConceptAnalyzer:
 
     def analyze(self) -> Dict[str, Any]:
         """Run full analysis of concepts.
-        
+
         Returns:
             Dictionary with analysis results
         """
         console.print("[bold blue]Analyzing concepts...[/bold blue]")
-        
+
         results = {}
-        
+
         # Process each modality
         for modality in ["vitals", "labs", "outputs"]:
             if modality not in self.concepts:
                 continue
-            
+
             console.print(f"\n[bold]Analyzing {modality.upper()}[/bold]")
-            
+
             modality_concepts = self.concepts[modality]
             if not hasattr(modality_concepts, "items"):
                 continue
-            
+
             # Get source for this modality (assume all concepts in modality use same source)
             first_concept = list(modality_concepts.items())[0][1]
             source = first_concept.mimic_iv.source
-            
+
             # Get total measurements for this source
             total_source_measurements = self._get_total_measurements(source)
-            
+
             # Analyze each concept
             concept_stats = []
             total_concept_measurements = 0
-            
+
             for concept_name, concept_config in modality_concepts.items():
                 console.print(f"  Analyzing [cyan]{concept_name}[/cyan]...", end="")
-                
+
                 mimic_config = concept_config.mimic_iv
                 itemids = mimic_config.itemid
                 if isinstance(itemids, int):
                     itemids = [itemids]
                 elif not isinstance(itemids, list):
                     itemids = list(itemids)
-                
+
                 value_col = mimic_config.value_col
-                
+
                 # Get statistics
                 stats = self._get_concept_measurements(source, itemids, value_col)
-                
+
                 # Get expected min/max from config
                 expected_min = concept_config.get("min")
                 expected_max = concept_config.get("max")
                 units = concept_config.get("units", "N/A")
-                
+
                 # Check for outliers (values outside expected range)
                 outliers = 0
                 if stats["values"] is not None and len(stats["values"]) > 0:
@@ -315,7 +314,7 @@ class ConceptAnalyzer:
                         outliers += (stats["values"] < expected_min).sum()
                     if expected_max is not None:
                         outliers += (stats["values"] > expected_max).sum()
-                
+
                 concept_stat = {
                     "concept_name": concept_name,
                     "itemids": itemids,
@@ -336,22 +335,26 @@ class ConceptAnalyzer:
                     "p95": stats.get("p95"),
                     "p99": stats.get("p99"),
                     "outliers": outliers,
-                    "outlier_pct": (outliers / len(stats["values"]) * 100) if stats["values"] is not None and len(stats["values"]) > 0 else 0,
+                    "outlier_pct": (
+                        (outliers / len(stats["values"]) * 100)
+                        if stats["values"] is not None and len(stats["values"]) > 0
+                        else 0
+                    ),
                     "values": stats["values"],
                 }
-                
+
                 concept_stats.append(concept_stat)
                 total_concept_measurements += stats["total_measurements"]
-                
+
                 console.print(" ✓")
-            
+
             # Calculate coverage percentage
             coverage_pct = (
                 (total_concept_measurements / total_source_measurements * 100)
                 if total_source_measurements > 0
                 else 0
             )
-            
+
             results[modality] = {
                 "source": source,
                 "n_concepts": len(concept_stats),
@@ -360,13 +363,13 @@ class ConceptAnalyzer:
                 "coverage_pct": coverage_pct,
                 "concepts": concept_stats,
             }
-        
+
         return results
 
     def print_summary(self, results: Dict[str, Any]) -> None:
         """Print summary table of analysis results."""
         console.print("\n[bold green]=== SUMMARY ===[/bold green]\n")
-        
+
         # Overall summary
         summary_table = Table(title="Modality Coverage Summary")
         summary_table.add_column("Modality", style="cyan")
@@ -375,7 +378,7 @@ class ConceptAnalyzer:
         summary_table.add_column("Total Measurements", justify="right", style="green")
         summary_table.add_column("Concept Measurements", justify="right", style="yellow")
         summary_table.add_column("Coverage %", justify="right", style="bold")
-        
+
         for modality, data in results.items():
             summary_table.add_row(
                 modality.upper(),
@@ -385,13 +388,13 @@ class ConceptAnalyzer:
                 f"{data['total_concept_measurements']:,}",
                 f"{data['coverage_pct']:.2f}%",
             )
-        
+
         console.print(summary_table)
-        
+
         # Detailed per-concept statistics
         for modality, data in results.items():
             console.print(f"\n[bold]{modality.upper()} - Detailed Statistics[/bold]")
-            
+
             detail_table = Table(title=f"{modality.upper()} Concepts")
             detail_table.add_column("Concept", style="cyan", width=20)
             detail_table.add_column("ItemIDs", style="dim", width=15)
@@ -401,16 +404,24 @@ class ConceptAnalyzer:
             detail_table.add_column("Min", justify="right", width=10)
             detail_table.add_column("Max", justify="right", width=10)
             detail_table.add_column("Outliers", justify="right", width=10)
-            
+
             for concept in data["concepts"]:
                 itemids_str = ",".join(map(str, concept["itemids"][:3]))
                 if len(concept["itemids"]) > 3:
                     itemids_str += "..."
-                
-                min_val = f"{concept['actual_min']:.2f}" if concept["actual_min"] is not None else "N/A"
-                max_val = f"{concept['actual_max']:.2f}" if concept["actual_max"] is not None else "N/A"
-                outliers_str = f"{concept['outliers']:,} ({concept['outlier_pct']:.1f}%)" if concept["outliers"] > 0 else "0"
-                
+
+                min_val = (
+                    f"{concept['actual_min']:.2f}" if concept["actual_min"] is not None else "N/A"
+                )
+                max_val = (
+                    f"{concept['actual_max']:.2f}" if concept["actual_max"] is not None else "N/A"
+                )
+                outliers_str = (
+                    f"{concept['outliers']:,} ({concept['outlier_pct']:.1f}%)"
+                    if concept["outliers"] > 0
+                    else "0"
+                )
+
                 detail_table.add_row(
                     concept["concept_name"],
                     itemids_str,
@@ -421,12 +432,12 @@ class ConceptAnalyzer:
                     max_val,
                     outliers_str,
                 )
-            
+
             console.print(detail_table)
 
     def plot_distributions(self, results: Dict[str, Any], output_dir: Path) -> None:
         """Create distribution plots for each concept.
-        
+
         Args:
             results: Analysis results
             output_dir: Directory to save plots
@@ -437,70 +448,72 @@ class ConceptAnalyzer:
                 "Install with: uv add matplotlib seaborn[/yellow]"
             )
             return
-        
+
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         console.print("\n[bold blue]Generating distribution plots...[/bold blue]")
-        
+
         for modality, data in results.items():
             concepts = data["concepts"]
             n_concepts = len(concepts)
-            
+
             if n_concepts == 0:
                 continue
-            
+
             # For large numbers of concepts, split into multiple pages
             concepts_per_page = 16  # 4x4 grid max
             n_pages = (n_concepts + concepts_per_page - 1) // concepts_per_page
-            
+
             for page in range(n_pages):
                 start_idx = page * concepts_per_page
                 end_idx = min(start_idx + concepts_per_page, n_concepts)
                 page_concepts = concepts[start_idx:end_idx]
                 n_page_concepts = len(page_concepts)
-                
+
                 # Create subplots (arrange in grid)
                 n_cols = min(4, n_page_concepts)
                 n_rows = (n_page_concepts + n_cols - 1) // n_cols
-                
+
                 fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
                 if n_page_concepts == 1:
                     axes = [axes]
                 else:
                     axes = axes.flatten()
-                
+
                 title = f"{modality.upper()} - Value Distributions"
                 if n_pages > 1:
                     title += f" (Page {page + 1}/{n_pages})"
                 fig.suptitle(title, fontsize=16, fontweight="bold")
-            
+
                 for idx, concept in enumerate(page_concepts):
                     ax = axes[idx]
-                    
+
                     if concept["values"] is None or len(concept["values"]) == 0:
-                        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+                        ax.text(
+                            0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes
+                        )
                         ax.set_title(concept["concept_name"], fontsize=10)
                         continue
-                    
+
                     values = concept["values"]
-                    
+
                     # Improved adaptive binning that handles skewed distributions
                     # For data with many zeros or highly skewed, focus bins on non-zero range
                     non_zero_values = values[values != 0] if len(values) > 0 else values
                     zero_count = (values == 0).sum() if len(values) > 0 else 0
                     zero_pct = zero_count / len(values) if len(values) > 0 else 0
-                    
+
                     if len(non_zero_values) > 0:
                         # Calculate bin count based on non-zero data
                         # Use more bins for non-zero range to get better resolution
                         n_bins_nonzero = min(40, max(15, int(np.sqrt(len(non_zero_values)))))
-                        
+
                         # If many zeros, use separate bin for zero and focus bins on non-zero range
                         if zero_pct > 0.1:  # More than 10% zeros
                             # Create bins: one for zero, rest for non-zero range
                             non_zero_min = float(non_zero_values.min())
                             non_zero_max = float(non_zero_values.max())
-                            
+
                             # Create custom bins: [0, small_epsilon] for zeros, then non-zero range
                             if non_zero_max > non_zero_min:
                                 # Use log scale for highly skewed data (if range is large)
@@ -513,7 +526,9 @@ class ConceptAnalyzer:
                                     log_bins = np.unique(np.sort(log_bins))
                                     # Add zero bin: [0, small_value] then log bins
                                     # Make sure first log bin is > small_value to avoid overlap
-                                    small_epsilon = min(non_zero_min * 0.1, 0.01) if non_zero_min > 0 else 0.01
+                                    small_epsilon = (
+                                        min(non_zero_min * 0.1, 0.01) if non_zero_min > 0 else 0.01
+                                    )
                                     # Remove any log bins that are too close to zero
                                     log_bins = log_bins[log_bins > small_epsilon * 1.1]
                                     if len(log_bins) > 0:
@@ -523,7 +538,9 @@ class ConceptAnalyzer:
                                         bins = np.array([0, small_epsilon, non_zero_max * 1.1])
                                 else:
                                     # Linear bins for non-zero values
-                                    nonzero_bins = np.linspace(non_zero_min, non_zero_max, n_bins_nonzero)
+                                    nonzero_bins = np.linspace(
+                                        non_zero_min, non_zero_max, n_bins_nonzero
+                                    )
                                     # Ensure bins are unique and sorted
                                     nonzero_bins = np.unique(np.sort(nonzero_bins))
                                     # Add zero bin with small gap
@@ -548,8 +565,8 @@ class ConceptAnalyzer:
                     else:
                         # All zeros
                         bins = np.array([0, 0.1, 1])
-                    
-                    # Final safety check: ensure bins are unique, sorted, and monotonically increasing
+
+                    # Final safety check: ensure bins are unique, sorted, monotonic
                     if isinstance(bins, np.ndarray):
                         bins = np.unique(bins)
                         bins = np.sort(bins)
@@ -561,23 +578,56 @@ class ConceptAnalyzer:
                         if len(bins) > 1 and np.any(np.diff(bins) <= 0):
                             # If not strictly increasing, use simple binning
                             bins = min(40, max(15, int(np.sqrt(len(values)))))
-                    
+
                     ax.hist(values, bins=bins, alpha=0.7, edgecolor="gray", linewidth=0.5)
-                    
+
                     # Add vertical lines for min, max, percentiles
                     if concept["actual_min"] is not None:
-                        ax.axvline(concept["actual_min"], color="red", linestyle="--", linewidth=2, label="Min")
+                        ax.axvline(
+                            concept["actual_min"],
+                            color="red",
+                            linestyle="--",
+                            linewidth=2,
+                            label="Min",
+                        )
                     if concept["actual_max"] is not None:
-                        ax.axvline(concept["actual_max"], color="red", linestyle="--", linewidth=2, label="Max")
+                        ax.axvline(
+                            concept["actual_max"],
+                            color="red",
+                            linestyle="--",
+                            linewidth=2,
+                            label="Max",
+                        )
                     if concept["p50"] is not None:
-                        ax.axvline(concept["p50"], color="blue", linestyle="-", linewidth=1.5, label="Median", alpha=0.8)
-                    
+                        ax.axvline(
+                            concept["p50"],
+                            color="blue",
+                            linestyle="-",
+                            linewidth=1.5,
+                            label="Median",
+                            alpha=0.8,
+                        )
+
                     # Add expected range if available
                     if concept["expected_min"] is not None:
-                        ax.axvline(concept["expected_min"], color="orange", linestyle=":", linewidth=1, alpha=0.7, label="Expected Min")
+                        ax.axvline(
+                            concept["expected_min"],
+                            color="orange",
+                            linestyle=":",
+                            linewidth=1,
+                            alpha=0.7,
+                            label="Expected Min",
+                        )
                     if concept["expected_max"] is not None:
-                        ax.axvline(concept["expected_max"], color="orange", linestyle=":", linewidth=1, alpha=0.7, label="Expected Max")
-                    
+                        ax.axvline(
+                            concept["expected_max"],
+                            color="orange",
+                            linestyle=":",
+                            linewidth=1,
+                            alpha=0.7,
+                            label="Expected Max",
+                        )
+
                     # Title with stats
                     title = f"{concept['concept_name']}\n"
                     title += f"n={concept['total_measurements']:,}"
@@ -590,13 +640,13 @@ class ConceptAnalyzer:
                     if idx == 0:  # Only show legend on first plot to save space
                         ax.legend(fontsize=6, loc="upper right", framealpha=0.8)
                     ax.grid(True, alpha=0.2)
-            
+
                 # Hide unused subplots
                 for idx in range(n_page_concepts, len(axes)):
                     axes[idx].axis("off")
-                
+
                 plt.tight_layout()
-                
+
                 # Save plot
                 if n_pages > 1:
                     plot_path = output_dir / f"{modality}_distributions_page{page + 1}.png"
@@ -608,41 +658,43 @@ class ConceptAnalyzer:
 
     def save_report(self, results: Dict[str, Any], output_dir: Path) -> None:
         """Save detailed report to files.
-        
+
         Args:
             results: Analysis results
             output_dir: Directory to save reports
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Save summary CSV
         summary_rows = []
         for modality, data in results.items():
             for concept in data["concepts"]:
-                summary_rows.append({
-                    "modality": modality,
-                    "concept": concept["concept_name"],
-                    "n_itemids": concept["n_itemids"],
-                    "itemids": ",".join(map(str, concept["itemids"])),
-                    "units": concept["units"],
-                    "total_measurements": concept["total_measurements"],
-                    "unique_stays": concept["unique_stays"],
-                    "unique_patients": concept["unique_patients"],
-                    "actual_min": concept["actual_min"],
-                    "actual_max": concept["actual_max"],
-                    "mean": concept["mean"],
-                    "p5": concept["p5"],
-                    "p25": concept["p25"],
-                    "p50": concept["p50"],
-                    "p75": concept["p75"],
-                    "p95": concept["p95"],
-                    "p99": concept["p99"],
-                    "expected_min": concept["expected_min"],
-                    "expected_max": concept["expected_max"],
-                    "outliers": concept["outliers"],
-                    "outlier_pct": concept["outlier_pct"],
-                })
-        
+                summary_rows.append(
+                    {
+                        "modality": modality,
+                        "concept": concept["concept_name"],
+                        "n_itemids": concept["n_itemids"],
+                        "itemids": ",".join(map(str, concept["itemids"])),
+                        "units": concept["units"],
+                        "total_measurements": concept["total_measurements"],
+                        "unique_stays": concept["unique_stays"],
+                        "unique_patients": concept["unique_patients"],
+                        "actual_min": concept["actual_min"],
+                        "actual_max": concept["actual_max"],
+                        "mean": concept["mean"],
+                        "p5": concept["p5"],
+                        "p25": concept["p25"],
+                        "p50": concept["p50"],
+                        "p75": concept["p75"],
+                        "p95": concept["p95"],
+                        "p99": concept["p99"],
+                        "expected_min": concept["expected_min"],
+                        "expected_max": concept["expected_max"],
+                        "outliers": concept["outliers"],
+                        "outlier_pct": concept["outlier_pct"],
+                    }
+                )
+
         summary_df = pl.DataFrame(summary_rows)
         csv_path = output_dir / "concept_analysis_summary.csv"
         summary_df.write_csv(csv_path)
@@ -651,9 +703,7 @@ class ConceptAnalyzer:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Analyze concept files against MIMIC-IV data"
-    )
+    parser = argparse.ArgumentParser(description="Analyze concept files against MIMIC-IV data")
     parser.add_argument(
         "--concept-file",
         type=str,
@@ -672,34 +722,35 @@ def main():
         default="reports/concept_analysis",
         help="Output directory for reports and plots (default: reports/concept_analysis)",
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         analyzer = ConceptAnalyzer(
             concept_file=Path(args.concept_file),
             parquet_root=Path(args.parquet_root),
         )
-        
+
         # Run analysis
         results = analyzer.analyze()
-        
+
         # Print summary
         analyzer.print_summary(results)
-        
+
         # Generate plots
         output_dir = Path(args.output_dir)
         analyzer.plot_distributions(results, output_dir)
-        
+
         # Save report
         analyzer.save_report(results, output_dir)
-        
-        console.print(f"\n[bold green]✓ Analysis complete![/bold green]")
+
+        console.print("\n[bold green]✓ Analysis complete![/bold green]")
         console.print(f"Results saved to: {output_dir}")
-        
+
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

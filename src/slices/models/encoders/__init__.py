@@ -12,4 +12,3 @@ __all__ = [
     "build_encoder",
     "get_encoder_config_class",
 ]
-

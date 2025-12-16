@@ -171,7 +171,7 @@ class MyEncoder(BaseEncoder):
     def __init__(self, config: MyEncoderConfig):
         super().__init__(config)
         # ... build encoder
-    
+
     def forward(self, x, mask=None, padding_mask=None):
         # ... encode input
         return encoded
@@ -216,7 +216,7 @@ class MySSLObjective(BaseSSLObjective):
     def __init__(self, encoder, config: MySSLConfig):
         super().__init__(encoder, config)
         # ... build objective-specific components
-    
+
     def forward(self, x, mask):
         # ... compute SSL loss
         return loss, metrics
@@ -388,7 +388,7 @@ class MyTaskHead(BaseTaskHead):
     def __init__(self, config: TaskHeadConfig):
         super().__init__(config)
         # ... build head architecture
-    
+
     def forward(self, encoder_output):
         # ... compute predictions
         return {"logits": logits, "probs": probs}

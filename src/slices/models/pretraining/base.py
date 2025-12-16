@@ -21,7 +21,7 @@ class BaseSSLObjective(ABC, nn.Module):
 
     def __init__(self, encoder: nn.Module, config: SSLConfig) -> None:
         """Initialize SSL objective with encoder and configuration.
-        
+
         Args:
             encoder: Encoder module to use for feature extraction.
             config: SSL configuration.
@@ -37,12 +37,12 @@ class BaseSSLObjective(ABC, nn.Module):
         obs_mask: torch.Tensor,  # (B, T, D) observation mask
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute SSL loss.
-        
+
         Args:
             x: Input tensor of shape (B, T, D).
             obs_mask: Observation mask of shape (B, T, D) where True indicates
                      observed values and False indicates missing/imputed.
-        
+
         Returns:
             Tuple of:
             - loss: Scalar loss tensor
@@ -52,9 +52,8 @@ class BaseSSLObjective(ABC, nn.Module):
 
     def get_encoder(self) -> nn.Module:
         """Return the encoder for downstream use.
-        
+
         Returns:
             The encoder module.
         """
         return self.encoder
-

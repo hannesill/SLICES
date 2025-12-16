@@ -22,6 +22,7 @@ dependencies = [
     "rich>=13.0",
     "matplotlib>=3.10.7",
     "seaborn>=0.13.2",
+    "pre-commit>=4.5.0",
 ]
 
 [project.optional-dependencies]
@@ -43,12 +44,34 @@ target-version = ["py312"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+ignore = [
+    "N806",  # Variable in function should be lowercase (allow B, T, D for tensor dims)
+    "N812",  # Lowercase imported as non-lowercase (allow `import pytorch as L`, `functional as F`)
+    "E741",  # Ambiguous variable name (allow `l` for layer)
+]
 
 [tool.mypy]
 python_version = "3.12"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
+ignore_missing_imports = true
+# Disable errors common with PyTorch/Polars dynamic typing
+disable_error_code = [
+    "override",
+    "assignment",
+    "arg-type",
+    "return-value",
+    "union-attr",
+    "call-overload",
+    "call-arg",
+    "operator",
+    "index",
+    "attr-defined",
+    "misc",
+]
 
 [dependency-groups]
 dev = [

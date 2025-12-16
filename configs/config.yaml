@@ -23,4 +23,3 @@ logging:
   wandb_project: slices
   wandb_entity: null  # Set in environment
   log_every_n_steps: 50
-

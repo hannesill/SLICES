@@ -1,7 +1,6 @@
 """Tests for ExtractorConfig dataclass and validation."""
 
 import pytest
-
 from slices.data.extractors.base import ExtractorConfig
 
 
@@ -180,7 +179,7 @@ class TestExtractorConfigTasksParameter:
     def test_default_tasks_list(self):
         """Test that default tasks list contains expected mortality tasks."""
         config = ExtractorConfig(parquet_root="/path")
-        
+
         assert "mortality_24h" in config.tasks
         assert "mortality_48h" in config.tasks
         assert "mortality_hospital" in config.tasks
@@ -199,9 +198,9 @@ class TestExtractorConfigTasksParameter:
         """Test that default tasks list is not shared between instances."""
         config1 = ExtractorConfig(parquet_root="/path1")
         config2 = ExtractorConfig(parquet_root="/path2")
-        
+
         config1.tasks.append("new_task")
-        
+
         # config2's tasks should not be affected
         assert "new_task" not in config2.tasks
 

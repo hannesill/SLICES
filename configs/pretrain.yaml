@@ -23,13 +23,13 @@ data:
   # Path to processed data directory
   # This should contain: timeseries.parquet, static.parquet, metadata.yaml
   processed_dir: data/processed/mimic-iv-demo
-  
+
   # DataModule settings
   num_workers: 4
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
-  
+
   # Preprocessing
   normalize: true
   impute_strategy: forward_fill  # forward_fill | zero | mean | none
@@ -71,16 +71,16 @@ ssl:
 training:
   max_epochs: 100
   batch_size: 64
-  
+
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto  # auto | 1 | [0,1] | etc.
   precision: 32  # 32 | 16 | bf16
-  
+
   # Regularization
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  
+
   # Early stopping
   early_stopping_patience: 10
 
