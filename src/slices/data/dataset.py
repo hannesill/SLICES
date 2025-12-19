@@ -42,6 +42,7 @@ class ICUDataset(Dataset):
         seq_length: Optional[int] = None,
         normalize: bool = True,
         impute_strategy: str = "forward_fill",
+        train_indices: Optional[List[int]] = None,
     ) -> None:
         """Initialize dataset from extracted Parquet files.
 
@@ -53,11 +54,15 @@ class ICUDataset(Dataset):
             normalize: Whether to normalize features (z-score per feature).
             impute_strategy: Strategy for imputing missing values.
                            Options: 'forward_fill', 'zero', 'mean', 'none'
+            train_indices: Optional list of indices for training set. If provided,
+                          normalization statistics are computed only on these samples.
+                          This prevents data leakage from val/test sets.
         """
         self.data_dir = Path(data_dir)
         self.task_name = task_name
         self.normalize = normalize
         self.impute_strategy = impute_strategy
+        self.train_indices = train_indices
 
         # Validate directory exists
         if not self.data_dir.exists():
@@ -123,23 +128,40 @@ class ICUDataset(Dataset):
         raw_timeseries = self.timeseries_df["timeseries"].to_list()
         raw_masks = self.timeseries_df["mask"].to_list()
 
+        # Try to load existing normalization stats (for reproducibility)
+        cached_stats = self._load_normalization_stats()
+
         # Pre-compute tensors for all samples (much faster __getitem__)
-        self._precompute_tensors(raw_timeseries, raw_masks)
+        self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
 
     def _precompute_tensors(
-        self, raw_timeseries: List[List[List[float]]], raw_masks: List[List[List[bool]]]
+        self,
+        raw_timeseries: List[List[List[float]]],
+        raw_masks: List[List[List[bool]]],
+        train_indices: Optional[List[int]] = None,
+        cached_stats: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Pre-compute all tensors at initialization for fast __getitem__.
 
         This converts raw nested lists to tensors and applies imputation/normalization
         once, rather than on every access.
 
+        IMPORTANT: If train_indices is provided, normalization statistics are computed
+        ONLY on training samples to prevent data leakage from validation/test sets.
+
+        Normalization statistics are cached to metadata for reproducibility across
+        dataset reloads.
+
         Args:
             raw_timeseries: List of timeseries arrays (n_samples x seq_len x n_features).
             raw_masks: List of mask arrays (n_samples x seq_len x n_features).
+            train_indices: Optional list of indices for training set. If provided,
+                          normalization stats computed only on these samples.
+            cached_stats: Optional cached normalization statistics. If provided, uses
+                         these instead of recomputing (for reproducibility).
         """
         n_samples = len(raw_timeseries)
 
@@ -151,6 +173,16 @@ class ICUDataset(Dataset):
         observed_sums = torch.zeros(self.n_features)
         observed_sq_sums = torch.zeros(self.n_features)
         observed_counts = torch.zeros(self.n_features)
+
+        # Determine which indices to use for statistics computation
+        # If train_indices is provided, ONLY use those for normalization stats
+        # Otherwise, use ALL samples (backwards compatible with existing code)
+        indices_for_stats = (
+            set(train_indices) if train_indices is not None else set(range(n_samples))
+        )
+
+        # If cached stats exist, skip computation
+        should_compute_stats = cached_stats is None and self.normalize
 
         for i in range(n_samples):
             ts_data = raw_timeseries[i]
@@ -169,7 +201,8 @@ class ICUDataset(Dataset):
                     mask_tensor[t, f] = mask_val
                     if val is not None and not math.isnan(val):
                         ts_tensor[t, f] = val
-                        if mask_val:  # Only observed values for stats
+                        # Only accumulate stats for training set samples if computing
+                        if should_compute_stats and mask_val and i in indices_for_stats:
                             observed_sums[f] += val
                             observed_sq_sums[f] += val * val
                             observed_counts[f] += 1
@@ -177,17 +210,25 @@ class ICUDataset(Dataset):
             timeseries_list.append(ts_tensor)
             mask_list.append(mask_tensor)
 
-        # Compute mean and std from observed values
+        # Compute mean and std from observed values or load from cache
         self.feature_means = torch.zeros(self.n_features)
         self.feature_stds = torch.ones(self.n_features)
 
-        for f in range(self.n_features):
-            if observed_counts[f] > 0:
-                mean = observed_sums[f] / observed_counts[f]
-                variance = (observed_sq_sums[f] / observed_counts[f]) - (mean * mean)
-                std = math.sqrt(max(variance, 0))
-                self.feature_means[f] = mean
-                self.feature_stds[f] = std if std > 1e-6 else 1.0
+        if cached_stats is not None:
+            # Use cached statistics for reproducibility
+            self.feature_means = torch.tensor(cached_stats["feature_means"], dtype=torch.float32)
+            self.feature_stds = torch.tensor(cached_stats["feature_stds"], dtype=torch.float32)
+        elif should_compute_stats:
+            # Compute stats from training data
+            for f in range(self.n_features):
+                if observed_counts[f] > 0:
+                    mean = observed_sums[f] / observed_counts[f]
+                    variance = (observed_sq_sums[f] / observed_counts[f]) - (mean * mean)
+                    std = math.sqrt(max(variance, 0))
+                    self.feature_means[f] = mean
+                    self.feature_stds[f] = std if std > 1e-6 else 1.0
+            # Save computed stats for reproducibility
+            self._save_normalization_stats(train_indices)
 
         # Second pass: apply imputation and normalization
         self._timeseries_tensors = []
@@ -241,6 +282,61 @@ class ICUDataset(Dataset):
             return imputed
 
         raise ValueError(f"Unknown imputation strategy: {self.impute_strategy}")
+
+    def _load_normalization_stats(self) -> Optional[Dict[str, Any]]:
+        """Load cached normalization statistics from file if they exist.
+
+        Returns:
+            Dictionary with 'feature_means' and 'feature_stds' if file exists, None otherwise.
+        """
+        if not self.normalize:
+            return None
+
+        stats_path = self.data_dir / "normalization_stats.yaml"
+        if not stats_path.exists():
+            return None
+
+        try:
+            with open(stats_path) as f:
+                stats = yaml.safe_load(f)
+            return stats
+        except Exception as e:
+            import warnings
+
+            warnings.warn(
+                f"Failed to load normalization stats from {stats_path}: {e}. "
+                "Will recompute statistics.",
+                UserWarning,
+            )
+            return None
+
+    def _save_normalization_stats(self, train_indices: Optional[List[int]]) -> None:
+        """Save computed normalization statistics to file for reproducibility.
+
+        Args:
+            train_indices: Optional list of training indices used to compute stats.
+        """
+        stats_path = self.data_dir / "normalization_stats.yaml"
+
+        stats = {
+            "feature_means": self.feature_means.tolist(),
+            "feature_stds": self.feature_stds.tolist(),
+            "feature_names": self.feature_names,
+            "train_indices": train_indices,
+            "normalize": self.normalize,
+            "impute_strategy": self.impute_strategy,
+        }
+
+        try:
+            with open(stats_path, "w") as f:
+                yaml.dump(stats, f, default_flow_style=False)
+        except Exception as e:
+            import warnings
+
+            warnings.warn(
+                f"Failed to save normalization stats to {stats_path}: {e}",
+                UserWarning,
+            )
 
     def _precompute_labels_and_static(self) -> None:
         """Pre-compute labels and static features for fast __getitem__ access."""
