@@ -14,7 +14,7 @@ name: mimic_iv
 #   ${csv_root}/icu/icustays.csv.gz
 #   ${csv_root}/icu/chartevents.csv.gz
 #   etc.
-csv_root: data/raw/mimic-iv-demo # default to demo data
+csv_root: data/raw/mimic-iv # default to demo data
 
 # Required: Path to Parquet files (used by extraction pipeline)
 # - If starting with CSVs: this will be created by convert_csv_to_parquet.py
@@ -25,14 +25,14 @@ csv_root: data/raw/mimic-iv-demo # default to demo data
 #   ${parquet_root}/icu/icustays.parquet
 #   ${parquet_root}/icu/chartevents.parquet
 #   etc.
-parquet_root: data/parquet/mimic-iv-demo # default to demo data
+parquet_root: data/parquet/mimic-iv # default to full data
 
 # ============================================================================
 # OUTPUT PATHS
 # ============================================================================
 
 # Output directory for extracted/processed features
-output_dir: data/processed/mimic-iv-demo # default to demo data
+output_dir: data/processed/mimic-iv # default to full data
 
 # ============================================================================
 # EXTRACTION SETTINGS
