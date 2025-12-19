@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import lightning.pytorch as L
 import numpy as np
+import polars as pl
 import torch
 import yaml
 from torch.utils.data import DataLoader, Subset
@@ -117,16 +118,26 @@ class ICUDataModule(L.LightningDataModule):
         self.test_indices: List[int] = []
 
     def _get_patient_level_splits(self) -> Tuple[List[int], List[int], List[int]]:
-        """Create patient-level train/val/test splits.
+        """Create patient-level train/val/test splits from parquet files.
 
-        Uses deterministic hashing of patient_id to assign patients to splits.
+        Loads static and timeseries data directly without requiring the full dataset
+        to be initialized. This is called BEFORE dataset creation to ensure
+        normalization statistics use only training data (prevents data leakage).
+
+        Uses deterministic shuffling of patient_id to assign patients to splits.
         All stays from a patient go to the same split.
 
         Returns:
             Tuple of (train_indices, val_indices, test_indices).
         """
-        # Load static data to get patient_id mapping
-        static_df = self.dataset.static_df
+        # Load static data directly (no need for full dataset)
+        static_path = self.processed_dir / "static.parquet"
+        static_df = pl.read_parquet(static_path)
+
+        # Also need timeseries to get stay_ids in correct order
+        timeseries_path = self.processed_dir / "timeseries.parquet"
+        timeseries_df = pl.read_parquet(timeseries_path)
+        stay_ids = timeseries_df["stay_id"].to_list()
 
         # Get stay_id -> patient_id mapping
         stay_to_patient = dict(
@@ -167,7 +178,7 @@ class ICUDataModule(L.LightningDataModule):
         val_indices = []
         test_indices = []
 
-        for idx, stay_id in enumerate(self.dataset.stay_ids):
+        for idx, stay_id in enumerate(stay_ids):
             patient_id = stay_to_patient.get(stay_id)
             if patient_id in train_patients:
                 train_indices.append(idx)
@@ -216,20 +227,26 @@ class ICUDataModule(L.LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         """Set up datasets for train/val/test.
 
+        Creates patient-level splits BEFORE initializing the dataset to ensure
+        normalization statistics are computed only on training data (no leakage).
+
         Args:
             stage: Stage name ('fit', 'validate', 'test', or None).
         """
-        # Create full dataset (loads data once)
+        # CRITICAL: Get splits FIRST before creating dataset
+        # This ensures normalization stats are computed only on training set
+        self.train_indices, self.val_indices, self.test_indices = self._get_patient_level_splits()
+
+        # Create dataset with training indices for normalization
+        # This ensures statistics are computed only on train set, preventing data leakage
         self.dataset = ICUDataset(
             data_dir=self.processed_dir,
             task_name=self.task_name,
             seq_length=self.seq_length,
             normalize=self.normalize,
             impute_strategy=self.impute_strategy,
+            train_indices=self.train_indices,  # Pass train indices for proper normalization
         )
-
-        # Create patient-level splits
-        self.train_indices, self.val_indices, self.test_indices = self._get_patient_level_splits()
 
         # Save split information for reproducibility
         self._save_split_info()

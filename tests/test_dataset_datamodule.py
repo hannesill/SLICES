@@ -720,3 +720,136 @@ class TestCollateFn:
 
         assert "label" not in batch
         assert batch["timeseries"].shape == (2, 48, 3)
+
+    def test_normalization_uses_only_train_set(self, mock_extracted_data):
+        """Verify normalization stats exclude val/test data (prevents data leakage).
+
+        This is a CRITICAL test for the normalization leakage fix.
+        The issue was that normalization statistics were computed over ALL data
+        before splits were created, causing test set information to leak into training.
+        """
+        data_dir = mock_extracted_data
+
+        # Verify that the DataModule properly passes train_indices to the dataset
+        dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name="mortality_24h",
+            batch_size=4,
+            train_ratio=0.7,
+            val_ratio=0.15,
+            test_ratio=0.15,
+            normalize=True,
+        )
+        dm.setup()
+
+        # The dataset should have been created with train_indices
+        assert dm.dataset is not None
+        assert len(dm.train_indices) > 0
+        assert dm.dataset.train_indices is not None, (
+            "Dataset should have received train_indices from DataModule. "
+            "This is the core of the normalization leakage fix."
+        )
+        assert set(dm.dataset.train_indices) == set(
+            dm.train_indices
+        ), "Dataset train_indices should match DataModule train_indices"
+
+        # Verify no patient overlap (existing check)
+        train_patients = {
+            dm.dataset.static_df.filter(pl.col("stay_id") == dm.dataset.stay_ids[i])[
+                "patient_id"
+            ].item()
+            for i in dm.train_indices
+        }
+        val_patients = {
+            dm.dataset.static_df.filter(pl.col("stay_id") == dm.dataset.stay_ids[i])[
+                "patient_id"
+            ].item()
+            for i in dm.val_indices
+        }
+        test_patients = {
+            dm.dataset.static_df.filter(pl.col("stay_id") == dm.dataset.stay_ids[i])[
+                "patient_id"
+            ].item()
+            for i in dm.test_indices
+        }
+
+        assert (
+            train_patients.isdisjoint(val_patients)
+            and val_patients.isdisjoint(test_patients)
+            and train_patients.isdisjoint(test_patients)
+        ), "Patient leakage between splits"
+
+        # Verify that normalization is applied correctly to val/test data
+        # using training statistics (not val/test statistics)
+        sample_train = dm.dataset[dm.train_indices[0]]
+        sample_val = dm.dataset[dm.val_indices[0]]
+
+        # Both should have normalized values (within reasonable range)
+        assert torch.all(
+            ~torch.isnan(sample_train["timeseries"])
+        ), "Training sample should not have NaN after normalization"
+        assert torch.all(
+            ~torch.isnan(sample_val["timeseries"])
+        ), "Validation sample should not have NaN after normalization"
+
+        # Both should have reasonable normalized values
+        # After z-score normalization with training stats, test values
+        # could be outside [-3, 3] if they're outliers, but shouldn't be extreme
+        assert (
+            torch.max(torch.abs(sample_val["timeseries"][sample_val["mask"]])) < 100
+        ), "Normalized values seem too extreme; normalization might not be working"
+
+    def test_normalization_stats_persistence(self, mock_extracted_data):
+        """Verify normalization statistics are saved and reloaded for reproducibility.
+
+        This test ensures that:
+        1. Normalization stats are computed and saved to normalization_stats.yaml
+        2. When dataset is reloaded, it uses cached stats instead of recomputing
+        3. The cached stats produce identical results
+        """
+        data_dir = mock_extracted_data
+
+        # Create first dataset (should compute and save stats)
+        dataset1 = ICUDataset(
+            data_dir=data_dir,
+            task_name="mortality_24h",
+            normalize=True,
+            train_indices=[0, 1, 2, 3],  # Only first 4 samples are training
+        )
+
+        stats_file = data_dir / "normalization_stats.yaml"
+        assert stats_file.exists(), "normalization_stats.yaml should be created"
+
+        # Get stats from first dataset
+        means1 = dataset1.feature_means.clone()
+        stds1 = dataset1.feature_stds.clone()
+
+        # Create second dataset (should load cached stats)
+        dataset2 = ICUDataset(
+            data_dir=data_dir,
+            task_name="mortality_24h",
+            normalize=True,
+            train_indices=[0, 1, 2, 3],  # Same training indices
+        )
+
+        # Stats should be identical (loaded from cache)
+        means2 = dataset2.feature_means
+        stds2 = dataset2.feature_stds
+
+        assert torch.allclose(
+            means1, means2, rtol=1e-5
+        ), "Feature means should match when using cached stats"
+        assert torch.allclose(
+            stds1, stds2, rtol=1e-5
+        ), "Feature stds should match when using cached stats"
+
+        # Verify that samples are identically normalized in both datasets
+        sample1_data = dataset1[0]
+        sample2_data = dataset2[0]
+
+        assert torch.allclose(
+            sample1_data["timeseries"], sample2_data["timeseries"], rtol=1e-5
+        ), "Samples should be identically normalized"
+        assert torch.allclose(
+            sample1_data["mask"].float(), sample2_data["mask"].float()
+        ), "Masks should be identical"
