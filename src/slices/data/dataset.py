@@ -6,12 +6,48 @@ returns (timeseries, mask, labels, static_features) tuples for training.
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 import torch
 import yaml
 from torch.utils.data import Dataset
+
+
+def _log_label_filtering(
+    task_name: str,
+    original_count: int,
+    removed_count: int,
+    kept_count: int,
+    removal_pct: float,
+) -> None:
+    """Log label filtering results to console.
+
+    Args:
+        task_name: Name of the task with missing labels.
+        original_count: Original number of samples.
+        removed_count: Number of samples removed.
+        kept_count: Number of samples kept.
+        removal_pct: Percentage of samples removed.
+    """
+    try:
+        from rich.console import Console
+
+        console = Console()
+        console.print(
+            f"[yellow]⚠️  Label Filtering for task '{task_name}'[/yellow]\n"
+            f"  Original samples: {original_count:,}\n"
+            f"  Removed (missing labels): {removed_count:,} ({removal_pct:.1f}%)\n"
+            f"  Kept: {kept_count:,}\n"
+        )
+    except ImportError:
+        # Fallback if rich is not available
+        print(
+            f"Warning: Label Filtering for task '{task_name}'\n"
+            f"  Original samples: {original_count}\n"
+            f"  Removed (missing labels): {removed_count} ({removal_pct:.1f}%)\n"
+            f"  Kept: {kept_count}"
+        )
 
 
 class ICUDataset(Dataset):
@@ -38,11 +74,12 @@ class ICUDataset(Dataset):
     def __init__(
         self,
         data_dir: Union[str, Path],
-        task_name: Optional[str] = None,
-        seq_length: Optional[int] = None,
-        normalize: bool = True,
+        task_name: Optional[str] = None,  # TODO: Add support for multiple tasks
+        seq_length: Optional[int] = None,  # TODO: Add support for different sequence lengths
+        normalize: bool = True,  # TODO: Add support for different normalization strategies
         impute_strategy: str = "forward_fill",
         train_indices: Optional[List[int]] = None,
+        handle_missing_labels: str = "filter",
     ) -> None:
         """Initialize dataset from extracted Parquet files.
 
@@ -57,12 +94,23 @@ class ICUDataset(Dataset):
             train_indices: Optional list of indices for training set. If provided,
                           normalization statistics are computed only on these samples.
                           This prevents data leakage from val/test sets.
+            handle_missing_labels: How to handle stays with missing labels when task_name
+                                  is specified. Options:
+                                  - 'filter': Remove samples with missing labels (default)
+                                  - 'raise': Raise ValueError if any labels are missing
         """
         self.data_dir = Path(data_dir)
         self.task_name = task_name
         self.normalize = normalize
         self.impute_strategy = impute_strategy
         self.train_indices = train_indices
+        self.handle_missing_labels = handle_missing_labels
+
+        if handle_missing_labels not in ("filter", "raise"):
+            raise ValueError(
+                f"Invalid handle_missing_labels='{handle_missing_labels}'. "
+                "Must be 'filter' or 'raise'."
+            )
 
         # Validate directory exists
         if not self.data_dir.exists():
@@ -91,8 +139,14 @@ class ICUDataset(Dataset):
                 f"Available tasks: {self.task_names}"
             )
 
+        # Track removed samples due to missing labels
+        self.removed_samples: List[Tuple[int, str]] = []  # List of (stay_id, reason) tuples
+
         # Load Parquet files and pre-compute all tensors
         self._load_data()
+
+        # Save dataset metadata (including removed samples) for reproducibility
+        self._save_dataset_metadata()
 
     def _load_data(self) -> None:
         """Load data from Parquet files into memory."""
@@ -338,38 +392,120 @@ class ICUDataset(Dataset):
                 UserWarning,
             )
 
-    def _precompute_labels_and_static(self) -> None:
-        """Pre-compute labels and static features for fast __getitem__ access."""
-        # n_samples = len(self.stay_ids) - available via len(self.stay_ids)
+    def _save_dataset_metadata(self) -> None:
+        """Save dataset metadata including removed samples for reproducibility.
 
+        Creates or updates dataset_metadata.yaml with information about:
+        - Number of samples used (original vs. final after filtering)
+        - Removed samples and reasons for removal
+        - Task name and label handling strategy
+        """
+        if not self.removed_samples:
+            return  # Nothing to save if no samples were removed
+
+        metadata_path = self.data_dir / "dataset_metadata.yaml"
+
+        metadata = {
+            "task_name": self.task_name,
+            "handle_missing_labels": self.handle_missing_labels,
+            "removed_samples_count": len(self.removed_samples),
+            "removed_samples": [
+                {"stay_id": stay_id, "reason": reason} for stay_id, reason in self.removed_samples
+            ],
+        }
+
+        try:
+            with open(metadata_path, "w") as f:
+                yaml.dump(metadata, f, default_flow_style=False)
+        except Exception as e:
+            import warnings
+
+            warnings.warn(
+                f"Failed to save dataset metadata to {metadata_path}: {e}",
+                UserWarning,
+            )
+
+    def _precompute_labels_and_static(self) -> None:
+        """Pre-compute labels and static features for fast __getitem__ access.
+
+        When task_name is specified, validates that all samples have labels.
+        Missing labels are either filtered out or raise an error based on
+        handle_missing_labels setting.
+        """
         # Create lookup dicts for fast access
         labels_by_stay = {row["stay_id"]: row for row in self.labels_df.iter_rows(named=True)}
         static_by_stay = {row["stay_id"]: row for row in self.static_df.iter_rows(named=True)}
 
         # Pre-compute labels
-        self._labels_tensors = []
-        for stay_id in self.stay_ids:
-            if self.task_name is not None:
+        self._labels_tensors: List[Optional[torch.Tensor]] = []
+        indices_to_keep = []  # Track which samples to keep
+        original_count = len(self.stay_ids)
+
+        if self.task_name is not None:
+            # Validate labels exist for all samples
+            missing_label_stays = []
+
+            for idx, stay_id in enumerate(self.stay_ids):
                 label_row = labels_by_stay.get(stay_id, {})
                 label_val = label_row.get(self.task_name)
+
                 if label_val is not None:
                     self._labels_tensors.append(torch.tensor(label_val, dtype=torch.float32))
+                    indices_to_keep.append(idx)
                 else:
-                    self._labels_tensors.append(torch.tensor(float("nan"), dtype=torch.float32))
-            else:
-                self._labels_tensors.append(None)
+                    missing_label_stays.append(stay_id)
 
-        # Pre-compute static features
+            # Handle missing labels based on configuration
+            if missing_label_stays:
+                if self.handle_missing_labels == "raise":
+                    raise ValueError(
+                        f"Missing labels for {len(missing_label_stays)} stays out of "
+                        f"{original_count} total. Task: '{self.task_name}'. "
+                        f"First 5 missing: {missing_label_stays[:5]}. "
+                        "Use task_name=None for unsupervised training or "
+                        "handle_missing_labels='filter' to remove them."
+                    )
+                elif self.handle_missing_labels == "filter":
+                    # Track removed samples
+                    for stay_id in missing_label_stays:
+                        self.removed_samples.append((stay_id, f"missing_{self.task_name}_label"))
+
+                    # Filter out stays with missing labels
+                    self.stay_ids = [sid for sid in self.stay_ids if sid not in missing_label_stays]
+
+                    # Filter tensors (must be done after they're precomputed)
+                    self._timeseries_tensors = [
+                        self._timeseries_tensors[idx] for idx in indices_to_keep
+                    ]
+                    self._mask_tensors = [self._mask_tensors[idx] for idx in indices_to_keep]
+
+                    # Log filtering to console
+                    removal_pct = (len(missing_label_stays) / original_count) * 100
+                    _log_label_filtering(
+                        task_name=self.task_name,
+                        original_count=original_count,
+                        removed_count=len(missing_label_stays),
+                        kept_count=len(self.stay_ids),
+                        removal_pct=removal_pct,
+                    )
+        else:
+            # No labels required for unsupervised training
+            self._labels_tensors = [None] * len(self.stay_ids)
+            indices_to_keep = list(range(len(self.stay_ids)))
+
+        # Pre-compute static features (only for kept samples)
         self._static_data = []
-        for stay_id in self.stay_ids:
-            static_row = static_by_stay.get(stay_id, {})
-            self._static_data.append(
-                {
-                    "age": static_row.get("age"),
-                    "gender": static_row.get("gender"),
-                    "los_days": static_row.get("los_days"),
-                }
-            )
+        for idx in indices_to_keep:
+            if idx < len(self.stay_ids):
+                stay_id = self.stay_ids[idx]
+                static_row = static_by_stay.get(stay_id, {})
+                self._static_data.append(
+                    {
+                        "age": static_row.get("age"),
+                        "gender": static_row.get("gender"),
+                        "los_days": static_row.get("los_days"),
+                    }
+                )
 
     def __len__(self) -> int:
         """Return number of ICU stays in dataset."""
