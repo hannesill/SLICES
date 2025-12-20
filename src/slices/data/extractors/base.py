@@ -4,14 +4,18 @@ Reads from local Parquet files using DuckDB for efficient SQL queries.
 Users specify parquet_root pointing to their local Parquet files.
 """
 
+import os
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from tempfile import NamedTemporaryFile
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 import duckdb
 import polars as pl
+import portalocker
 import yaml
 from omegaconf import OmegaConf
 from rich.console import Console
@@ -689,6 +693,9 @@ class BaseExtractor(ABC):
         stay_ids = sparse_timeseries["stay_id"].unique().to_list()
 
         results = []
+        global_overflow_count = 0
+        global_overflow_max_hour = 0
+
         for stay_id in stay_ids:
             # Get data for this stay
             stay_data = sparse_timeseries.filter(pl.col("stay_id") == stay_id)
@@ -696,6 +703,10 @@ class BaseExtractor(ABC):
             # Initialize dense arrays with NaN/False
             dense_values = [[float("nan")] * n_features for _ in range(seq_length)]
             dense_mask = [[False] * n_features for _ in range(seq_length)]
+
+            # Track overflow for this stay
+            stay_overflow_count = 0
+            stay_overflow_max_hour = 0
 
             # Fill in observed values
             for row in stay_data.iter_rows(named=True):
@@ -708,6 +719,13 @@ class BaseExtractor(ABC):
                         if value is not None and mask_val:
                             dense_values[hour][feat_idx] = float(value)
                             dense_mask[hour][feat_idx] = True
+                elif hour >= seq_length:
+                    stay_overflow_count += 1
+                    stay_overflow_max_hour = max(stay_overflow_max_hour, hour)
+
+            # Accumulate global overflow stats
+            global_overflow_count += stay_overflow_count
+            global_overflow_max_hour = max(global_overflow_max_hour, stay_overflow_max_hour)
 
             results.append(
                 {
@@ -715,6 +733,14 @@ class BaseExtractor(ABC):
                     "timeseries": dense_values,
                     "mask": dense_mask,
                 }
+            )
+
+        # Warn if data was truncated
+        if global_overflow_count > 0:
+            console.print(
+                f"[yellow]Warning: Discarded {global_overflow_count} data points beyond "
+                f"seq_length={seq_length} (max hour observed: {global_overflow_max_hour}). "
+                f"Consider increasing seq_length_hours if late observations are important.[/yellow]"
             )
 
         return pl.DataFrame(results)
@@ -769,6 +795,91 @@ class BaseExtractor(ABC):
         except Exception as e:
             console.print(f"[yellow]Warning: Could not load existing extraction: {e}[/yellow]")
             return None
+
+    @contextmanager
+    def _with_file_lock(self, path: Path) -> Generator[None, None, None]:
+        """Context manager for file locking to prevent race conditions.
+
+        Uses cross-platform file locking (portalocker) to ensure only one process
+        can write to a file at a time. This prevents data duplication and corruption
+        during concurrent extraction operations.
+
+        Works on Windows, macOS, and Linux.
+
+        Args:
+            path: Path to the file to lock
+
+        Yields:
+            None
+
+        Raises:
+            portalocker.exceptions.LockException: If locking fails
+        """
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        lock_file = None
+        try:
+            lock_file = open(lock_path, "w")
+            portalocker.lock(lock_file, portalocker.LOCK_EX)
+            try:
+                yield
+            finally:
+                portalocker.unlock(lock_file)
+        finally:
+            if lock_file is not None:
+                lock_file.close()
+                # Clean up lock file
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass  # Lock file might be in use by another process
+
+    def _atomic_write(self, path: Path, write_fn: Callable[[str], None], suffix: str = "") -> None:
+        """Write file atomically using temp file + rename.
+
+        Works with any file format by accepting a callback function that
+        performs the actual write. Ensures atomic writes on POSIX and Windows by:
+        1. Writing to a temporary file
+        2. Atomically renaming to the target path
+
+        This prevents partial/corrupted files if the process crashes
+        or is interrupted during write.
+
+        Args:
+            path: Target path for the file
+            write_fn: Callable that takes temp file path and writes to it
+            suffix: File suffix for temp file (e.g., ".parquet", ".yaml")
+
+        Example:
+            # Write parquet
+            self._atomic_write(
+                path,
+                lambda tmp: df.write_parquet(tmp),
+                suffix=".parquet"
+            )
+
+            # Write YAML
+            self._atomic_write(
+                path,
+                lambda tmp: yaml.dump(metadata, open(tmp, "w")),
+                suffix=".yaml"
+            )
+        """
+        if not suffix:
+            suffix = path.suffix
+
+        with NamedTemporaryFile(dir=path.parent, suffix=suffix, delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            write_fn(tmp_path)
+            os.replace(tmp_path, path)  # Atomic on POSIX and Windows
+        except Exception:
+            # Clean up temp file if write failed
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def run(self) -> None:
         """Execute full extraction pipeline.
@@ -919,45 +1030,54 @@ class BaseExtractor(ABC):
             console.print("[yellow]No task configs found - labels will be empty[/yellow]")
 
         # -------------------------------------------------------------------------
-        # Step 4: Merge with existing data (if resuming)
+        # Step 4-5: Merge with existing data and save (with file locking)
         # -------------------------------------------------------------------------
-        if existing_data is not None:
-            console.print("\n[bold]Merging with existing data...[/bold]")
-
-            # Merge stays
-            stays_filtered = pl.concat([existing_data["stays"], stays_filtered])
-            console.print(f"  ✓ Merged stays: {len(stays_filtered)} total")
-
-            # Merge timeseries
-            dense_timeseries = pl.concat([existing_data["timeseries"], dense_timeseries])
-            console.print(f"  ✓ Merged timeseries: {len(dense_timeseries)} total")
-
-            # Merge labels
-            labels = pl.concat([existing_data["labels"], labels])
-            console.print(f"  ✓ Merged labels: {len(labels)} total")
-
-        # -------------------------------------------------------------------------
-        # Step 5: Save to Parquet
-        # -------------------------------------------------------------------------
-        console.print("\n[bold]Saving to Parquet...[/bold]")
-
-        # Static features (demographics, admission info)
+        # Use file locking to prevent race conditions when merging and saving.
+        # This protects against TOCTOU (time-of-check-to-time-of-use) race conditions
+        # where two concurrent processes might both try to merge and write.
         static_path = self.output_dir / "static.parquet"
-        stays_filtered.write_parquet(static_path)
-        console.print(f"  ✓ Static features: {static_path} ({len(stays_filtered)} stays)")
-
-        # Time-series (dense format with masks)
         timeseries_path = self.output_dir / "timeseries.parquet"
-        dense_timeseries.write_parquet(timeseries_path)
-        console.print(f"  ✓ Timeseries: {timeseries_path} ({len(dense_timeseries)} stays)")
-
-        # Labels
         labels_path = self.output_dir / "labels.parquet"
-        labels.write_parquet(labels_path)
-        console.print(f"  ✓ Labels: {labels_path} ({len(labels)} stays)")
 
-        # Validate labels consistency
-        self._validate_labels(labels, stay_ids)
+        with self._with_file_lock(static_path):
+            # Re-check for existing data inside the lock to handle race conditions
+            # Another process might have written new data while we were extracting
+            existing_data_locked = self._check_existing_extraction()
+
+            if existing_data_locked is not None:
+                console.print("\n[bold]Merging with existing data...[/bold]")
+
+                # Merge stays
+                stays_filtered = pl.concat([existing_data_locked["stays"], stays_filtered])
+                console.print(f"  ✓ Merged stays: {len(stays_filtered)} total")
+
+                # Merge timeseries
+                dense_timeseries = pl.concat([existing_data_locked["timeseries"], dense_timeseries])
+                console.print(f"  ✓ Merged timeseries: {len(dense_timeseries)} total")
+
+                # Merge labels
+                labels = pl.concat([existing_data_locked["labels"], labels])
+                console.print(f"  ✓ Merged labels: {len(labels)} total")
+
+            # -------------------------------------------------------------------------
+            # Step 5: Save to Parquet (atomic writes inside lock)
+            # -------------------------------------------------------------------------
+            console.print("\n[bold]Saving to Parquet...[/bold]")
+
+            # Static features (demographics, admission info)
+            self._atomic_write(static_path, lambda tmp: stays_filtered.write_parquet(tmp))
+            console.print(f"  ✓ Static features: {static_path} ({len(stays_filtered)} stays)")
+
+            # Time-series (dense format with masks)
+            self._atomic_write(timeseries_path, lambda tmp: dense_timeseries.write_parquet(tmp))
+            console.print(f"  ✓ Timeseries: {timeseries_path} ({len(dense_timeseries)} stays)")
+
+            # Labels
+            self._atomic_write(labels_path, lambda tmp: labels.write_parquet(tmp))
+            console.print(f"  ✓ Labels: {labels_path} ({len(labels)} stays)")
+
+            # Validate labels consistency
+            self._validate_labels(labels, stay_ids)
 
         # Metadata (for ICUDataset to know feature names, etc.)
         metadata = {
@@ -982,8 +1102,11 @@ class BaseExtractor(ABC):
         }
 
         metadata_path = self.output_dir / "metadata.yaml"
-        with open(metadata_path, "w") as f:
-            yaml.dump(metadata, f, default_flow_style=False)
+        self._atomic_write(
+            metadata_path,
+            lambda tmp: yaml.dump(metadata, open(tmp, "w"), default_flow_style=False),
+            suffix=".yaml",
+        )
         console.print(f"  ✓ Metadata: {metadata_path}")
 
         console.print("\n[bold green]Extraction complete![/bold green]")

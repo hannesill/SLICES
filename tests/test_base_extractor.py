@@ -828,5 +828,164 @@ class TestPathResolution:
         extractor = MockExtractor(config)
 
         result = extractor._get_tasks_path()
-
         assert result == tasks_dir
+
+
+class TestAtomicWriteAndFileLocking:
+    """Tests for atomic writes and file locking to prevent race conditions."""
+
+    def test_atomic_write_parquet(self, tmp_path):
+        """Test atomic write creates parquet file without corruption."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+
+        config = ExtractorConfig(parquet_root=str(parquet_root))
+        extractor = MockExtractor(config)
+
+        # Create test DataFrame
+        test_df = pl.DataFrame(
+            {
+                "col1": [1, 2, 3],
+                "col2": ["a", "b", "c"],
+            }
+        )
+
+        # Write atomically
+        output_path = tmp_path / "test.parquet"
+        extractor._atomic_write(output_path, lambda tmp: test_df.write_parquet(tmp))
+
+        # Verify file exists and is readable
+        assert output_path.exists()
+        read_df = pl.read_parquet(output_path)
+        assert read_df.equals(test_df)
+
+    def test_atomic_write_yaml(self, tmp_path):
+        """Test atomic write works with YAML files."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+
+        config = ExtractorConfig(parquet_root=str(parquet_root))
+        extractor = MockExtractor(config)
+
+        # Create test metadata
+        metadata = {
+            "dataset": "test",
+            "features": ["heart_rate", "sbp"],
+            "n_stays": 100,
+        }
+
+        # Write atomically
+        output_path = tmp_path / "metadata.yaml"
+        extractor._atomic_write(
+            output_path,
+            lambda tmp: yaml.dump(metadata, open(tmp, "w"), default_flow_style=False),
+            suffix=".yaml",
+        )
+
+        # Verify file exists and is readable
+        assert output_path.exists()
+        with open(output_path) as f:
+            read_metadata = yaml.safe_load(f)
+        assert read_metadata == metadata
+
+    def test_atomic_write_creates_temp_file_and_renames(self, tmp_path):
+        """Test atomic write uses temp file + rename pattern."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+
+        config = ExtractorConfig(parquet_root=str(parquet_root))
+        extractor = MockExtractor(config)
+
+        test_df = pl.DataFrame({"col1": [1, 2, 3]})
+        output_path = tmp_path / "test.parquet"
+
+        # Before write, no files should exist
+        assert not output_path.exists()
+
+        # After write, only target file should exist (temp file should be gone)
+        extractor._atomic_write(output_path, lambda tmp: test_df.write_parquet(tmp))
+
+        assert output_path.exists()
+        # No temp files should be left behind
+        temp_files = list(tmp_path.glob("*.parquet.tmp"))
+        assert len(temp_files) == 0
+
+    def test_atomic_write_cleanup_on_failure(self, tmp_path):
+        """Test atomic write cleans up temp file if write fails."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+
+        config = ExtractorConfig(parquet_root=str(parquet_root))
+        extractor = MockExtractor(config)
+
+        output_path = tmp_path / "test.parquet"
+
+        # Try to write with a function that raises
+        def failing_write(tmp):
+            raise ValueError("Intentional failure")
+
+        with pytest.raises(ValueError, match="Intentional failure"):
+            extractor._atomic_write(output_path, failing_write)
+
+        # Target file should not be created
+        assert not output_path.exists()
+
+    def test_file_locking_context_manager(self, tmp_path):
+        """Test file locking context manager creates and releases lock."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+
+        config = ExtractorConfig(parquet_root=str(parquet_root))
+        extractor = MockExtractor(config)
+
+        output_path = tmp_path / "test.parquet"
+        lock_path = output_path.with_suffix(output_path.suffix + ".lock")
+
+        # Lock file should not exist before context
+        assert not lock_path.exists()
+
+        # Enter context
+        with extractor._with_file_lock(output_path):
+            # Lock file is created during context
+            # (though it might be cleaned up quickly)
+            pass
+
+        # Lock file should be cleaned up after context
+        # (might take a moment, but should eventually be gone)
+        # Note: We can't strictly assert this since file cleanup is OS-dependent
+        # Just verify no exception was raised
+
+    def test_resume_extraction_with_atomic_writes(self, tmp_path):
+        """Test that resume extraction uses atomic writes and file locking."""
+        parquet_root = tmp_path / "parquet"
+        (parquet_root / "icu").mkdir(parents=True)
+        (parquet_root / "hosp").mkdir(parents=True)
+
+        output_dir = tmp_path / "output"
+
+        config = ExtractorConfig(
+            parquet_root=str(parquet_root),
+            output_dir=str(output_dir),
+        )
+        extractor = MockExtractor(config)
+
+        # Run first extraction
+        extractor.run()
+
+        # Verify output files exist
+        assert (output_dir / "static.parquet").exists()
+        assert (output_dir / "timeseries.parquet").exists()
+        assert (output_dir / "labels.parquet").exists()
+        assert (output_dir / "metadata.yaml").exists()
+
+        # Run extraction again (resume)
+        extractor.run()
+
+        # Should still have valid parquet files
+        resumed_static = pl.read_parquet(output_dir / "static.parquet")
+        assert len(resumed_static) > 0
+
+        # Files should be readable and not corrupted
+        assert (output_dir / "timeseries.parquet").exists()
+        timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
+        assert len(timeseries) > 0

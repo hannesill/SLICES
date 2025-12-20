@@ -23,6 +23,7 @@ dependencies = [
     "matplotlib>=3.10.7",
     "seaborn>=0.13.2",
     "pre-commit>=4.5.0",
+    "portalocker>=2.8.0",
 ]
 
 [project.optional-dependencies]
