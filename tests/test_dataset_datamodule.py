@@ -361,6 +361,182 @@ class TestICUDataset:
         sample = dataset[0]
         assert sample["timeseries"].shape == (10, 1)
 
+    def test_missing_labels_filter_default_behavior(self, tmp_path):
+        """Test that missing labels are filtered by default (handle_missing_labels='filter').
+
+        This tests the fix for Issue #5: Missing labels should not silently become NaN.
+        Instead, samples with missing labels should be removed with a warning.
+        """
+        data_dir = tmp_path / "missing_labels"
+        data_dir.mkdir(parents=True)
+
+        # Create metadata
+        metadata = {
+            "dataset": "mock",
+            "feature_set": "core",
+            "feature_names": ["heart_rate"],
+            "n_features": 1,
+            "seq_length_hours": 10,
+            "min_stay_hours": 1,
+            "task_names": ["mortality_24h"],
+            "n_stays": 5,
+        }
+
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        # Create static data
+        static_df = pl.DataFrame(
+            {
+                "stay_id": list(range(1, 6)),
+                "patient_id": [100, 101, 102, 103, 104],
+                "age": [65, 45, 70, 55, 60],
+                "gender": ["M", "F", "M", "F", "M"],
+                "los_days": [2.0, 3.0, 2.5, 3.5, 2.0],
+            }
+        )
+        static_df.write_parquet(data_dir / "static.parquet")
+
+        # Create timeseries for all 5 stays
+        ts_data = [np.random.randn(10, 1).tolist() for _ in range(5)]
+        mask_data = [[[True] for _ in range(10)] for _ in range(5)]
+        timeseries_df = pl.DataFrame(
+            {
+                "stay_id": list(range(1, 6)),
+                "timeseries": ts_data,
+                "mask": mask_data,
+            }
+        )
+        timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+
+        # Create labels with missing values for stays 3 and 5
+        labels_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "mortality_24h": [0.0, 1.0, None, 0.0, None],  # Stays 3 and 5 missing
+            }
+        )
+        labels_df.write_parquet(data_dir / "labels.parquet")
+
+        # Load dataset with default handle_missing_labels='filter'
+        dataset = ICUDataset(data_dir, task_name="mortality_24h")
+
+        # Should have only 3 samples (stay_ids 1, 2, 4)
+        assert len(dataset) == 3
+        assert set(dataset.stay_ids) == {1, 2, 4}
+
+        # Should have tracked removed samples
+        assert len(dataset.removed_samples) == 2
+        assert (3, "missing_mortality_24h_label") in dataset.removed_samples
+        assert (5, "missing_mortality_24h_label") in dataset.removed_samples
+
+        # Should have saved metadata
+        metadata_file = data_dir / "dataset_metadata.yaml"
+        assert metadata_file.exists()
+
+        with open(metadata_file) as f:
+            saved_metadata = yaml.safe_load(f)
+
+        assert saved_metadata["removed_samples_count"] == 2
+        assert saved_metadata["task_name"] == "mortality_24h"
+        assert saved_metadata["handle_missing_labels"] == "filter"
+
+    def test_missing_labels_raise_error(self, tmp_path):
+        """Test that missing labels raise ValueError when handle_missing_labels='raise'.
+
+        This allows strict validation if users want to ensure no data loss.
+        """
+        data_dir = tmp_path / "missing_labels_strict"
+        data_dir.mkdir(parents=True)
+
+        # Create metadata
+        metadata = {
+            "dataset": "mock",
+            "feature_set": "core",
+            "feature_names": ["heart_rate"],
+            "n_features": 1,
+            "seq_length_hours": 10,
+            "min_stay_hours": 1,
+            "task_names": ["mortality_24h"],
+            "n_stays": 3,
+        }
+
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        # Create static data
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "patient_id": [100, 101, 102],
+                "age": [65, 45, 70],
+                "gender": ["M", "F", "M"],
+                "los_days": [2.0, 3.0, 2.5],
+            }
+        )
+        static_df.write_parquet(data_dir / "static.parquet")
+
+        # Create timeseries
+        ts_data = [np.random.randn(10, 1).tolist() for _ in range(3)]
+        mask_data = [[[True] for _ in range(10)] for _ in range(3)]
+        timeseries_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "timeseries": ts_data,
+                "mask": mask_data,
+            }
+        )
+        timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+
+        # Create labels with missing value
+        labels_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "mortality_24h": [0.0, 1.0, None],  # Stay 3 missing
+            }
+        )
+        labels_df.write_parquet(data_dir / "labels.parquet")
+
+        # Should raise ValueError when handle_missing_labels='raise'
+        with pytest.raises(ValueError, match="Missing labels for 1 stays"):
+            ICUDataset(data_dir, task_name="mortality_24h", handle_missing_labels="raise")
+
+    def test_no_nan_labels_in_output(self, mock_extracted_data):
+        """Verify that labels are never NaN in the output (core fix for Issue #5).
+
+        This is the critical assertion: with the fix, we should NEVER see NaN labels,
+        which would corrupt gradient computation during training.
+        """
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+
+        # Check all samples
+        for i in range(len(dataset)):
+            sample = dataset[i]
+            label = sample["label"]
+
+            # Label should never be NaN
+            assert not torch.isnan(label).any(), (
+                f"Sample {i} has NaN label - this would cause silent training failure. "
+                "Labels should be filtered out or raise an error before reaching this point."
+            )
+
+            # Label should be valid 0 or 1
+            assert label.item() in (0.0, 1.0), f"Label should be 0 or 1, got {label.item()}"
+
+    def test_all_samples_have_labels_when_task_specified(self, mock_extracted_data):
+        """Test that all loaded samples have labels when task_name is specified."""
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+
+        # Should have same number of label tensors as samples
+        assert len(dataset._labels_tensors) == len(dataset.stay_ids)
+
+        # All labels should be non-None tensors
+        for label in dataset._labels_tensors:
+            assert label is not None
+            assert isinstance(label, torch.Tensor)
+            assert label.dtype == torch.float32
+            assert not torch.isnan(label).any()
+
 
 class TestICUDataModule:
     """Tests for ICUDataModule class."""
