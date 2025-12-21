@@ -3,10 +3,13 @@
 from typing import Any, Dict, List
 
 import polars as pl
+from rich.console import Console
 
 from slices.data.callbacks import get_callback
 
 from .base import BaseExtractor
+
+console = Console()
 
 
 class MIMICIVExtractor(BaseExtractor):
@@ -16,6 +19,14 @@ class MIMICIVExtractor(BaseExtractor):
     1. Low-level data source extraction (mortality_info, creatinine, etc.)
     2. Time-series feature extraction for SSL pretraining
     """
+
+    # Expected schema for raw events extracted from MIMIC-IV sources
+    EXPECTED_RAW_EVENTS_SCHEMA = {
+        "stay_id": pl.Int64,
+        "charttime": pl.Datetime,
+        "feature_name": pl.Utf8,
+        "valuenum": pl.Float64,
+    }
 
     def _get_dataset_name(self) -> str:
         """Get dataset name for config parsing."""
@@ -85,6 +96,37 @@ class MIMICIVExtractor(BaseExtractor):
 
         return self._query(sql)
 
+    def _validate_raw_events_schema(self, df: pl.DataFrame) -> None:
+        """Validate raw events DataFrame schema matches expected structure.
+
+        Args:
+            df: DataFrame to validate.
+
+        Raises:
+            ValueError: If schema doesn't match expectations.
+        """
+        if df.is_empty():
+            # Empty DataFrames are valid
+            return
+
+        # Check that all expected columns exist
+        for col in self.EXPECTED_RAW_EVENTS_SCHEMA:
+            if col not in df.columns:
+                raise ValueError(
+                    f"Missing required column '{col}' in raw events. "
+                    f"Expected columns: {list(self.EXPECTED_RAW_EVENTS_SCHEMA.keys())}, "
+                    f"Got: {df.columns}"
+                )
+
+        # Check column types match expectations
+        for col, expected_dtype in self.EXPECTED_RAW_EVENTS_SCHEMA.items():
+            actual_dtype = df[col].dtype
+            if actual_dtype != expected_dtype:
+                raise ValueError(
+                    f"Column '{col}' has type {actual_dtype}, expected {expected_dtype}. "
+                    f"This may indicate a Polars version change or data source schema change."
+                )
+
     def _extract_raw_events(
         self, stay_ids: List[int], feature_mapping: Dict[str, Any]
     ) -> pl.DataFrame:
@@ -117,11 +159,15 @@ class MIMICIVExtractor(BaseExtractor):
             )
 
         if not raw_event_batches:
-            return pl.DataFrame(
+            result = pl.DataFrame(
                 {"stay_id": [], "charttime": [], "feature_name": [], "valuenum": []}
             )
+        else:
+            result = pl.concat(raw_event_batches)
 
-        return pl.concat(raw_event_batches)
+        # Validate schema before returning
+        self._validate_raw_events_schema(result)
+        return result
 
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
         """Extract raw data for a specific source.
@@ -315,6 +361,10 @@ class MIMICIVExtractor(BaseExtractor):
             }
         )
 
-        return raw_events.join(itemid_mapping_df, on="itemid", how="inner").select(
+        result = raw_events.join(itemid_mapping_df, on="itemid", how="inner").select(
             ["stay_id", "charttime", "feature_name", "valuenum"]
         )
+
+        # Validate schema before returning
+        self._validate_raw_events_schema(result)
+        return result
