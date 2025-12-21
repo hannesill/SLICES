@@ -173,6 +173,21 @@ class ICUDataModule(L.LightningDataModule):
             test_patients
         ), "Patient leakage detected: val/test splits have overlapping patients"
 
+        # Verify all patients are accounted for in exactly one split
+        all_patients_in_splits = train_patients | val_patients | test_patients
+        all_unique_patients = set(unique_patients)
+        missing_patients = all_unique_patients - all_patients_in_splits
+        extra_patients = all_patients_in_splits - all_unique_patients
+
+        assert not missing_patients, (
+            f"Patient split validation failed: {len(missing_patients)} patients "
+            f"not assigned to any split. First 5: {list(missing_patients)[:5]}"
+        )
+        assert not extra_patients, (
+            f"Patient split validation failed: {len(extra_patients)} patients "
+            f"in splits but not in data. First 5: {list(extra_patients)[:5]}"
+        )
+
         # Map back to stay indices
         train_indices = []
         val_indices = []
@@ -180,12 +195,29 @@ class ICUDataModule(L.LightningDataModule):
 
         for idx, stay_id in enumerate(stay_ids):
             patient_id = stay_to_patient.get(stay_id)
+            if patient_id is None:
+                raise ValueError(
+                    f"Stay {stay_id} has no patient_id mapping. "
+                    "Patient IDs are required for patient-level splits."
+                )
             if patient_id in train_patients:
                 train_indices.append(idx)
             elif patient_id in val_patients:
                 val_indices.append(idx)
-            else:
+            elif patient_id in test_patients:
                 test_indices.append(idx)
+            else:
+                raise ValueError(
+                    f"Stay {stay_id} has patient_id {patient_id} which is not "
+                    "in any split. This indicates a bug in split computation."
+                )
+
+        # Final validation: all stays should be accounted for
+        total_assigned = len(train_indices) + len(val_indices) + len(test_indices)
+        assert total_assigned == len(stay_ids), (
+            f"Split validation failed: {total_assigned} stays assigned but "
+            f"{len(stay_ids)} total stays in dataset"
+        )
 
         return train_indices, val_indices, test_indices
 

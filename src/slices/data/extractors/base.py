@@ -294,6 +294,13 @@ class BaseExtractor(ABC):
                 for feature_name, feature_config in category_config.items():
                     # Check if this feature has config for our dataset
                     if dataset_name in feature_config:
+                        # Check for duplicate feature names across categories
+                        if feature_name in feature_mapping:
+                            raise ValueError(
+                                f"Duplicate feature name '{feature_name}' found in "
+                                f"category '{category}'. Feature names must be unique "
+                                f"across all categories in {config_path}"
+                            )
                         # Convert OmegaConf to dict for easier manipulation
                         feature_mapping[feature_name] = OmegaConf.to_container(
                             feature_config[dataset_name], resolve=True
@@ -372,7 +379,13 @@ class BaseExtractor(ABC):
             pl.concat(aggregated_parts)
             if aggregated_parts
             else pl.DataFrame(
-                {"stay_id": [], "hour": [], "feature_name": [], "value": [], "observed": []}
+                schema={
+                    "stay_id": pl.Int64,
+                    "hour": pl.Int64,
+                    "feature_name": pl.Utf8,
+                    "value": pl.Float64,
+                    "observed": pl.Boolean,
+                }
             )
         )
 
@@ -483,6 +496,14 @@ class BaseExtractor(ABC):
 
         # Load feature mapping for this dataset
         feature_mapping = self._load_feature_mapping(feature_set)
+
+        # Validate feature mapping is non-empty
+        if not feature_mapping:
+            raise ValueError(
+                f"No features loaded from concept set '{feature_set}' for dataset "
+                f"'{self._get_dataset_name()}'. Check that your YAML config has "
+                f"entries for this dataset under each feature."
+            )
 
         # Extract raw events (dataset-specific implementation)
         raw_events = self._extract_raw_events(stay_ids, feature_mapping)
@@ -1079,35 +1100,36 @@ class BaseExtractor(ABC):
             # Validate labels consistency
             self._validate_labels(labels, stay_ids)
 
-        # Metadata (for ICUDataset to know feature names, etc.)
-        metadata = {
-            "dataset": self._get_dataset_name(),
-            "feature_set": self.config.feature_set,
-            "feature_names": feature_names,
-            "n_features": len(feature_names),
-            "seq_length_hours": self.config.seq_length_hours,
-            "min_stay_hours": self.config.min_stay_hours,
-            "task_names": task_names,
-            "n_stays": len(stays_filtered),
-            # Extraction configuration for reproducibility
-            "extraction_config": {
-                "parquet_root": str(self.parquet_root),
-                "output_dir": str(self.output_dir),
+            # Metadata (for ICUDataset to know feature names, etc.)
+            # Written inside lock to ensure consistency with data files
+            metadata = {
+                "dataset": self._get_dataset_name(),
                 "feature_set": self.config.feature_set,
+                "feature_names": feature_names,
+                "n_features": len(feature_names),
                 "seq_length_hours": self.config.seq_length_hours,
                 "min_stay_hours": self.config.min_stay_hours,
-                "tasks": self.config.tasks,
-                "extraction_timestamp": datetime.now().isoformat(),
-            },
-        }
+                "task_names": task_names,
+                "n_stays": len(stays_filtered),
+                # Extraction configuration for reproducibility
+                "extraction_config": {
+                    "parquet_root": str(self.parquet_root),
+                    "output_dir": str(self.output_dir),
+                    "feature_set": self.config.feature_set,
+                    "seq_length_hours": self.config.seq_length_hours,
+                    "min_stay_hours": self.config.min_stay_hours,
+                    "tasks": self.config.tasks,
+                    "extraction_timestamp": datetime.now().isoformat(),
+                },
+            }
 
-        metadata_path = self.output_dir / "metadata.yaml"
+            metadata_path = self.output_dir / "metadata.yaml"
 
-        def write_metadata(tmp: str) -> None:
-            with open(tmp, "w") as f:
-                yaml.dump(metadata, f, default_flow_style=False)
+            def write_metadata(tmp: str) -> None:
+                with open(tmp, "w") as f:
+                    yaml.dump(metadata, f, default_flow_style=False)
 
-        self._atomic_write(metadata_path, write_metadata, suffix=".yaml")
-        console.print(f"  ✓ Metadata: {metadata_path}")
+            self._atomic_write(metadata_path, write_metadata, suffix=".yaml")
+            console.print(f"  ✓ Metadata: {metadata_path}")
 
         console.print("\n[bold green]Extraction complete![/bold green]")
