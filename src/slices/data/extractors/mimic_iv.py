@@ -274,7 +274,12 @@ class MIMICIVExtractor(BaseExtractor):
 
         if not all_itemids:
             return pl.DataFrame(
-                {"stay_id": [], "charttime": [], "feature_name": [], "valuenum": []}
+                schema={
+                    "stay_id": pl.Int64,
+                    "charttime": pl.Datetime,
+                    "feature_name": pl.Utf8,
+                    "valuenum": pl.Float64,
+                }
             )
 
         if len(value_cols) > 1:
