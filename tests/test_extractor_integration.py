@@ -421,3 +421,112 @@ class TestEdgeCases:
 
                 # Verify no duplicate columns
                 assert len(labels.columns) == len(set(labels.columns))
+
+
+class TestSchemaValidation:
+    """Test schema validation for extracted data."""
+
+    @pytest.fixture
+    def mock_extractor(self, tmp_path):
+        """Create a mock extractor with temporary paths."""
+        config = ExtractorConfig(
+            parquet_root=str(tmp_path / "mimic-iv"),
+            output_dir=str(tmp_path / "processed"),
+        )
+        (tmp_path / "mimic-iv" / "icu").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "mimic-iv" / "hosp").mkdir(parents=True, exist_ok=True)
+        return MIMICIVExtractor(config)
+
+    def test_validate_raw_events_schema_valid_data(self, mock_extractor):
+        """Test validation passes for correctly formatted raw events."""
+        valid_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "charttime": [
+                    datetime(2020, 1, 1, 10, 0),
+                    datetime(2020, 1, 1, 11, 0),
+                    datetime(2020, 1, 1, 12, 0),
+                ],
+                "feature_name": ["heart_rate", "sbp", "heart_rate"],
+                "valuenum": [75.0, 120.0, 78.0],
+            }
+        )
+        # Should not raise any exception
+        mock_extractor._validate_raw_events_schema(valid_df)
+
+    def test_validate_raw_events_schema_empty_dataframe(self, mock_extractor):
+        """Test validation passes for empty DataFrames."""
+        empty_df = pl.DataFrame(
+            {
+                "stay_id": [],
+                "charttime": [],
+                "feature_name": [],
+                "valuenum": [],
+            }
+        )
+        # Should not raise any exception
+        mock_extractor._validate_raw_events_schema(empty_df)
+
+    def test_validate_raw_events_schema_missing_column(self, mock_extractor):
+        """Test validation fails when required columns are missing."""
+        invalid_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
+                # Missing feature_name
+                "valuenum": [75.0, 120.0],
+            }
+        )
+        with pytest.raises(ValueError, match="Missing required column 'feature_name'"):
+            mock_extractor._validate_raw_events_schema(invalid_df)
+
+    def test_validate_raw_events_schema_wrong_column_type(self, mock_extractor):
+        """Test validation fails when column types don't match."""
+        invalid_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
+                "feature_name": ["heart_rate", "sbp"],
+                "valuenum": ["75", "120"],  # Should be float, not string
+            }
+        )
+        with pytest.raises(ValueError, match="has type.*expected"):
+            mock_extractor._validate_raw_events_schema(invalid_df)
+
+    def test_extract_raw_events_validates_schema(self, mock_extractor):
+        """Test that _extract_raw_events validates schema before returning."""
+        # Mock _extract_events_for_source to return valid data
+        valid_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
+                "feature_name": ["heart_rate", "sbp"],
+                "valuenum": [75.0, 120.0],
+            }
+        )
+
+        with patch.object(mock_extractor, "_extract_events_for_source", return_value=valid_df):
+            # Should not raise any exception
+            result = mock_extractor._extract_raw_events(
+                stay_ids=[1, 2], feature_mapping={"heart_rate": {"source": "chartevents"}}
+            )
+            assert result.shape[0] == 2
+
+    def test_extract_raw_events_schema_mismatch_raises_error(self, mock_extractor):
+        """Test that schema validation catches Polars version changes."""
+        # Mock _extract_events_for_source to return data with wrong types
+        invalid_df = pl.DataFrame(
+            {
+                "stay_id": ["1", "2"],  # Wrong type: should be Int64
+                "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
+                "feature_name": ["heart_rate", "sbp"],
+                "valuenum": [75.0, 120.0],
+            }
+        )
+
+        with patch.object(mock_extractor, "_extract_events_for_source", return_value=invalid_df):
+            with pytest.raises(ValueError, match="has type.*expected"):
+                mock_extractor._extract_raw_events(
+                    stay_ids=[1, 2],
+                    feature_mapping={"heart_rate": {"source": "chartevents"}},
+                )
