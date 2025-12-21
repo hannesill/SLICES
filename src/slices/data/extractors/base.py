@@ -1102,11 +1102,12 @@ class BaseExtractor(ABC):
         }
 
         metadata_path = self.output_dir / "metadata.yaml"
-        self._atomic_write(
-            metadata_path,
-            lambda tmp: yaml.dump(metadata, open(tmp, "w"), default_flow_style=False),
-            suffix=".yaml",
-        )
+
+        def write_metadata(tmp: str) -> None:
+            with open(tmp, "w") as f:
+                yaml.dump(metadata, f, default_flow_style=False)
+
+        self._atomic_write(metadata_path, write_metadata, suffix=".yaml")
         console.print(f"  ✓ Metadata: {metadata_path}")
 
         console.print("\n[bold green]Extraction complete![/bold green]")

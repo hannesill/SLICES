@@ -183,7 +183,7 @@ class ICUDataset(Dataset):
         raw_masks = self.timeseries_df["mask"].to_list()
 
         # Try to load existing normalization stats (for reproducibility)
-        cached_stats = self._load_normalization_stats()
+        cached_stats = self._load_normalization_stats(self.train_indices)
 
         # Pre-compute tensors for all samples (much faster __getitem__)
         self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
@@ -337,11 +337,21 @@ class ICUDataset(Dataset):
 
         raise ValueError(f"Unknown imputation strategy: {self.impute_strategy}")
 
-    def _load_normalization_stats(self) -> Optional[Dict[str, Any]]:
-        """Load cached normalization statistics from file if they exist.
+    def _load_normalization_stats(
+        self, current_train_indices: Optional[List[int]]
+    ) -> Optional[Dict[str, Any]]:
+        """Load cached normalization statistics from file if they exist and match current split.
+
+        Validates that cached statistics were computed on the same training set to prevent
+        data leakage from validation/test sets.
+
+        Args:
+            current_train_indices: List of training indices for current split,
+                                 or None for unsupervised.
 
         Returns:
-            Dictionary with 'feature_means' and 'feature_stds' if file exists, None otherwise.
+            Dictionary with 'feature_means' and 'feature_stds' if file exists and split matches,
+            None otherwise.
         """
         if not self.normalize:
             return None
@@ -353,6 +363,24 @@ class ICUDataset(Dataset):
         try:
             with open(stats_path) as f:
                 stats = yaml.safe_load(f)
+
+            # Validate that cached stats were computed on the same training split
+            cached_train_indices = stats.get("train_indices")
+            current_train_set = set(current_train_indices) if current_train_indices else None
+            cached_train_set = set(cached_train_indices) if cached_train_indices else None
+
+            if current_train_set != cached_train_set:
+                import warnings
+
+                warnings.warn(
+                    f"Cached normalization stats were computed on a different training split. "
+                    f"Cached: {len(cached_train_set) if cached_train_set else 0} samples, "
+                    f"Current: {len(current_train_set) if current_train_set else 0} samples. "
+                    "Recomputing statistics to prevent data leakage.",
+                    UserWarning,
+                )
+                return None
+
             return stats
         except Exception as e:
             import warnings
@@ -495,17 +523,15 @@ class ICUDataset(Dataset):
 
         # Pre-compute static features (only for kept samples)
         self._static_data = []
-        for idx in indices_to_keep:
-            if idx < len(self.stay_ids):
-                stay_id = self.stay_ids[idx]
-                static_row = static_by_stay.get(stay_id, {})
-                self._static_data.append(
-                    {
-                        "age": static_row.get("age"),
-                        "gender": static_row.get("gender"),
-                        "los_days": static_row.get("los_days"),
-                    }
-                )
+        for stay_id in self.stay_ids:
+            static_row = static_by_stay.get(stay_id, {})
+            self._static_data.append(
+                {
+                    "age": static_row.get("age"),
+                    "gender": static_row.get("gender"),
+                    "los_days": static_row.get("los_days"),
+                }
+            )
 
     def __len__(self) -> int:
         """Return number of ICU stays in dataset."""
