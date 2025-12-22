@@ -2,12 +2,17 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 
 import numpy as np
 import polars as pl
 import pytest
 import yaml
+from slices.data.config_schemas import (
+    AggregationType,
+    ItemIDSource,
+    TimeSeriesConceptConfig,
+)
 from slices.data.extractors.base import BaseExtractor, ExtractorConfig
 
 
@@ -22,7 +27,7 @@ class MockExtractor(BaseExtractor):
         """
         return "mock"
 
-    def _load_feature_mapping(self, feature_set: str) -> Dict[str, Any]:
+    def _load_feature_mapping(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
         """Mock feature mapping for testing.
 
         Args:
@@ -32,8 +37,32 @@ class MockExtractor(BaseExtractor):
             Mock feature mapping with heart_rate and sbp.
         """
         return {
-            "heart_rate": {"source": "chartevents", "itemid": [220045]},
-            "sbp": {"source": "chartevents", "itemid": [220050]},
+            "heart_rate": TimeSeriesConceptConfig(
+                description="Heart rate",
+                units="bpm",
+                aggregation=AggregationType.MEAN,
+                mock=[
+                    ItemIDSource(
+                        table="chartevents",
+                        itemid=[220045],
+                        value_col="valuenum",
+                        time_col="charttime",
+                    )
+                ],
+            ),
+            "sbp": TimeSeriesConceptConfig(
+                description="Systolic blood pressure",
+                units="mmHg",
+                aggregation=AggregationType.MEAN,
+                mock=[
+                    ItemIDSource(
+                        table="chartevents",
+                        itemid=[220050],
+                        value_col="valuenum",
+                        time_col="charttime",
+                    )
+                ],
+            ),
         }
 
     def extract_stays(self) -> pl.DataFrame:
@@ -63,7 +92,7 @@ class MockExtractor(BaseExtractor):
         )
 
     def _extract_raw_events(
-        self, stay_ids: List[int], feature_mapping: Dict[str, Any]
+        self, stay_ids: List[int], feature_mapping: Dict[str, TimeSeriesConceptConfig]
     ) -> pl.DataFrame:
         """Mock raw events extraction.
 

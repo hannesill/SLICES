@@ -1,5 +1,5 @@
 defaults:
-  - data: mimic_iv
+  - extraction: mimic_iv
   - model: transformer
   - _self_
 

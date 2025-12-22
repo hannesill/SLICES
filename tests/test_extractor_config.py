@@ -1,6 +1,7 @@
-"""Tests for ExtractorConfig dataclass and validation."""
+"""Tests for ExtractorConfig Pydantic model and validation."""
 
 import pytest
+from pydantic import ValidationError
 from slices.data.extractors.base import ExtractorConfig
 
 
@@ -14,8 +15,8 @@ class TestExtractorConfigBasic:
         assert config.parquet_root == "/path/to/parquet"
 
     def test_missing_parquet_root_raises_error(self):
-        """Test that missing parquet_root raises TypeError."""
-        with pytest.raises(TypeError):
+        """Test that missing parquet_root raises ValidationError."""
+        with pytest.raises(ValidationError, match="parquet_root"):
             ExtractorConfig()
 
     def test_default_values(self):
@@ -57,18 +58,18 @@ class TestExtractorConfigParquetRootValidation:
     """Test parquet_root validation."""
 
     def test_empty_string_raises_error(self):
-        """Test that empty string parquet_root raises ValueError."""
-        with pytest.raises(ValueError, match="parquet_root cannot be empty"):
+        """Test that empty string parquet_root raises ValidationError."""
+        with pytest.raises(ValidationError, match="Path cannot be empty"):
             ExtractorConfig(parquet_root="")
 
     def test_whitespace_only_raises_error(self):
-        """Test that whitespace-only parquet_root raises ValueError."""
-        with pytest.raises(ValueError, match="parquet_root cannot be empty"):
+        """Test that whitespace-only parquet_root raises ValidationError."""
+        with pytest.raises(ValidationError, match="Path cannot be empty"):
             ExtractorConfig(parquet_root="   ")
 
     def test_whitespace_only_tabs_raises_error(self):
-        """Test that tabs-only parquet_root raises ValueError."""
-        with pytest.raises(ValueError, match="parquet_root cannot be empty"):
+        """Test that tabs-only parquet_root raises ValidationError."""
+        with pytest.raises(ValidationError, match="Path cannot be empty"):
             ExtractorConfig(parquet_root="\t\t")
 
     def test_valid_path_with_spaces_accepted(self):
@@ -86,13 +87,13 @@ class TestExtractorConfigSeqLengthValidation:
     """Test seq_length_hours validation."""
 
     def test_zero_raises_error(self):
-        """Test that zero seq_length_hours raises ValueError."""
-        with pytest.raises(ValueError, match="seq_length_hours must be positive"):
+        """Test that zero seq_length_hours raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than 0"):
             ExtractorConfig(parquet_root="/path", seq_length_hours=0)
 
     def test_negative_raises_error(self):
-        """Test that negative seq_length_hours raises ValueError."""
-        with pytest.raises(ValueError, match="seq_length_hours must be positive"):
+        """Test that negative seq_length_hours raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than 0"):
             ExtractorConfig(parquet_root="/path", seq_length_hours=-24)
 
     def test_positive_value_accepted(self):
@@ -110,8 +111,8 @@ class TestExtractorConfigMinStayValidation:
     """Test min_stay_hours validation."""
 
     def test_negative_raises_error(self):
-        """Test that negative min_stay_hours raises ValueError."""
-        with pytest.raises(ValueError, match="min_stay_hours cannot be negative"):
+        """Test that negative min_stay_hours raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
             ExtractorConfig(parquet_root="/path", min_stay_hours=-1)
 
     def test_zero_accepted(self):
@@ -139,18 +140,18 @@ class TestExtractorConfigFeatureSetValidation:
         assert config.feature_set == "extended"
 
     def test_invalid_feature_set_raises_error(self):
-        """Test that invalid feature_set raises ValueError."""
-        with pytest.raises(ValueError, match="feature_set must be one of"):
+        """Test that invalid feature_set raises ValidationError."""
+        with pytest.raises(ValidationError, match="feature_set must be one of"):
             ExtractorConfig(parquet_root="/path", feature_set="invalid")
 
     def test_empty_feature_set_raises_error(self):
-        """Test that empty feature_set raises ValueError."""
-        with pytest.raises(ValueError, match="feature_set must be one of"):
+        """Test that empty feature_set raises ValidationError."""
+        with pytest.raises(ValidationError, match="feature_set must be one of"):
             ExtractorConfig(parquet_root="/path", feature_set="")
 
     def test_case_sensitive(self):
         """Test that feature_set validation is case-sensitive."""
-        with pytest.raises(ValueError, match="feature_set must be one of"):
+        with pytest.raises(ValidationError, match="feature_set must be one of"):
             ExtractorConfig(parquet_root="/path", feature_set="CORE")
 
 
@@ -158,13 +159,13 @@ class TestExtractorConfigOutputDirValidation:
     """Test output_dir validation."""
 
     def test_empty_output_dir_raises_error(self):
-        """Test that empty output_dir raises ValueError."""
-        with pytest.raises(ValueError, match="output_dir cannot be empty"):
+        """Test that empty output_dir raises ValidationError."""
+        with pytest.raises(ValidationError, match="Path cannot be empty"):
             ExtractorConfig(parquet_root="/path", output_dir="")
 
     def test_whitespace_only_output_dir_raises_error(self):
-        """Test that whitespace-only output_dir raises ValueError."""
-        with pytest.raises(ValueError, match="output_dir cannot be empty"):
+        """Test that whitespace-only output_dir raises ValidationError."""
+        with pytest.raises(ValidationError, match="Path cannot be empty"):
             ExtractorConfig(parquet_root="/path", output_dir="   ")
 
     def test_valid_output_dir_accepted(self):

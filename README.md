@@ -184,7 +184,7 @@ SLICES uses [Hydra](https://hydra.cc/) for configuration management. All configs
 
 ### Data Paths Configuration
 
-Edit `configs/data/mimic_iv.yaml` or override via command line:
+Edit `configs/extraction/mimic_iv.yaml` or override via command line:
 
 ```yaml
 # Optional: Path to raw CSV.gz files (if starting from CSVs)
