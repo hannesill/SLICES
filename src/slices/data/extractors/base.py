@@ -7,28 +7,28 @@ Users specify parquet_root pointing to their local Parquet files.
 import os
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Callable, Dict, Generator, List, Optional
 
 import duckdb
 import polars as pl
 import portalocker
 import yaml
-from omegaconf import OmegaConf
+from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
+from slices.data.config_loader import load_timeseries_concepts
+from slices.data.config_schemas import AggregationType, TimeSeriesConceptConfig
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 console = Console()
 
 
-@dataclass
-class ExtractorConfig:
-    """Configuration for data extraction.
+class ExtractorConfig(BaseModel):
+    """Configuration for data extraction using Pydantic validation.
 
     Users must specify parquet_root - the path to their local Parquet files.
 
@@ -38,49 +38,42 @@ class ExtractorConfig:
         seq_length_hours: Length of time-series sequences in hours (must be > 0).
         feature_set: Feature set to extract ('core' or 'extended').
         concepts_dir: Path to concepts directory (auto-detected if None).
+        datasets_dir: Path to dataset configs directory (auto-detected if None).
         tasks_dir: Path to task config directory (auto-detected if None).
         tasks: List of task names to extract labels for.
         min_stay_hours: Minimum ICU stay length to include (must be >= 0).
-
-    Raises:
-        ValueError: If validation fails for any parameter.
     """
 
     parquet_root: str
     output_dir: str = "data/processed"
-    seq_length_hours: int = 48
+    seq_length_hours: int = Field(default=48, gt=0)
     feature_set: str = "core"  # core | extended
-    concepts_dir: Optional[str] = None  # Path to concepts directory (auto-detected if None)
-    tasks_dir: Optional[str] = None  # Path to task config directory (auto-detected if None)
-    tasks: List[str] = field(
+    concepts_dir: Optional[str] = None
+    datasets_dir: Optional[str] = None  # Path to dataset configs (auto-detected if None)
+    tasks_dir: Optional[str] = None
+    tasks: List[str] = Field(
         default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"]
     )
-    min_stay_hours: int = 6  # Minimum ICU stay length to include
+    min_stay_hours: int = Field(default=6, ge=0)
 
-    def __post_init__(self) -> None:
-        """Validate configuration after initialization."""
-        # Validate parquet_root is not empty/whitespace
-        if not self.parquet_root or not self.parquet_root.strip():
-            raise ValueError("parquet_root cannot be empty or whitespace-only")
+    model_config = {"extra": "forbid"}
 
-        # Validate seq_length_hours is positive
-        if self.seq_length_hours <= 0:
-            raise ValueError(f"seq_length_hours must be positive, got {self.seq_length_hours}")
+    @field_validator("parquet_root", "output_dir")
+    @classmethod
+    def validate_non_empty(cls, v: str) -> str:
+        """Validate that path is not empty or whitespace-only."""
+        if not v or not v.strip():
+            raise ValueError("Path cannot be empty or whitespace-only")
+        return v
 
-        # Validate min_stay_hours is non-negative
-        if self.min_stay_hours < 0:
-            raise ValueError(f"min_stay_hours cannot be negative, got {self.min_stay_hours}")
-
-        # Validate feature_set is a known value
+    @field_validator("feature_set")
+    @classmethod
+    def validate_feature_set(cls, v: str) -> str:
+        """Validate that feature_set is a known value."""
         valid_feature_sets = {"core", "extended"}
-        if self.feature_set not in valid_feature_sets:
-            raise ValueError(
-                f"feature_set must be one of {valid_feature_sets}, got '{self.feature_set}'"
-            )
-
-        # Validate output_dir is not empty
-        if not self.output_dir or not self.output_dir.strip():
-            raise ValueError("output_dir cannot be empty or whitespace-only")
+        if v not in valid_feature_sets:
+            raise ValueError(f"feature_set must be one of {valid_feature_sets}, got '{v}'")
+        return v
 
 
 class BaseExtractor(ABC):
@@ -230,6 +223,43 @@ class BaseExtractor(ABC):
             "3. Ensure configs/tasks exists relative to source tree"
         )
 
+    def _get_datasets_path(self) -> Path:
+        """Get path to datasets directory with robust fallback strategy.
+
+        Returns:
+            Path to datasets directory containing dataset config YAML files.
+
+        Raises:
+            FileNotFoundError: If datasets directory cannot be found.
+        """
+        # Strategy 1: Explicit config path
+        if self.config.datasets_dir is not None:
+            datasets_path = Path(self.config.datasets_dir)
+            if datasets_path.exists():
+                return datasets_path
+            raise FileNotFoundError(
+                f"Datasets directory specified in config not found: {datasets_path}"
+            )
+
+        # Strategy 2: Try to find project root
+        project_root = self._get_project_root()
+        if project_root:
+            datasets_dir = project_root / "configs" / "datasets"
+            if datasets_dir.exists():
+                return datasets_dir
+
+        # Strategy 3: Relative to source file
+        relative_path = Path(__file__).parents[4] / "configs" / "datasets"
+        if relative_path.exists():
+            return relative_path
+
+        raise FileNotFoundError(
+            "Could not locate datasets directory. Options:\n"
+            "1. Set 'datasets_dir' in ExtractorConfig\n"
+            "2. Run from project root containing pyproject.toml\n"
+            "3. Ensure configs/datasets exists relative to source tree"
+        )
+
     def _load_task_configs(self, task_names: List[str]) -> List[LabelConfig]:
         """Load task configurations from YAML files.
 
@@ -255,61 +285,39 @@ class BaseExtractor(ABC):
 
         return task_configs
 
-    def _load_feature_mapping(self, feature_set: str) -> Dict[str, Any]:
-        """Load feature mapping from YAML config (generic).
+    def _load_feature_mapping(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
+        """Load feature mapping from YAML config files.
 
-        This method loads the concept YAML and extracts dataset-specific mappings.
-        Subclasses don't need to override this unless they have special requirements.
+        Uses the new config_loader to load validated Pydantic models from
+        split concept files (vitals.yaml, labs.yaml, outputs.yaml, etc.).
 
         Args:
             feature_set: Name of feature set to load (e.g., 'core').
 
         Returns:
-            Dictionary with dataset-specific feature configuration.
-            Structure depends on dataset implementation.
+            Dictionary mapping feature names to validated TimeSeriesConceptConfig.
 
         Raises:
-            FileNotFoundError: If feature config file cannot be found.
+            FileNotFoundError: If concepts directory cannot be found.
+            ValueError: If no features found for this dataset.
         """
-        config_path = self._get_concepts_path() / f"{feature_set}_features.yaml"
-
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Feature config not found: {config_path}\n"
-                f"Tried concepts_dir: {self._get_concepts_path()}\n"
-                f"Hint: Set 'concepts_dir' in ExtractorConfig to your configs/concepts dir"
-            )
-
-        config = OmegaConf.load(config_path)
+        concepts_dir = self._get_concepts_path()
         dataset_name = self._get_dataset_name()
 
-        # Extract dataset-specific feature configuration
-        feature_mapping = {}
-
-        # Process all feature categories (vitals, labs, etc.)
-        for category in config:
-            category_config = config[category]
-            # OmegaConf objects may not be recognized by isinstance(dict)
-            if category_config is not None and hasattr(category_config, "items"):
-                for feature_name, feature_config in category_config.items():
-                    # Check if this feature has config for our dataset
-                    if dataset_name in feature_config:
-                        # Check for duplicate feature names across categories
-                        if feature_name in feature_mapping:
-                            raise ValueError(
-                                f"Duplicate feature name '{feature_name}' found in "
-                                f"category '{category}'. Feature names must be unique "
-                                f"across all categories in {config_path}"
-                            )
-                        # Convert OmegaConf to dict for easier manipulation
-                        feature_mapping[feature_name] = OmegaConf.to_container(
-                            feature_config[dataset_name], resolve=True
-                        )
+        # Use new config loader to load validated Pydantic models
+        feature_mapping = load_timeseries_concepts(
+            concepts_dir=concepts_dir,
+            dataset_name=dataset_name,
+            feature_set=feature_set,
+        )
 
         return feature_mapping
 
     def _bin_to_hourly_grid(
-        self, raw_events: pl.DataFrame, stay_ids: List[int], feature_mapping: Dict[str, Any]
+        self,
+        raw_events: pl.DataFrame,
+        stay_ids: List[int],
+        feature_mapping: Dict[str, TimeSeriesConceptConfig],
     ) -> pl.DataFrame:
         """Bin raw events to hourly grid and create observation masks (generic).
 
@@ -319,7 +327,7 @@ class BaseExtractor(ABC):
         Args:
             raw_events: Raw events DataFrame with standardized schema.
             stay_ids: List of ICU stay IDs.
-            feature_mapping: Feature mapping (only used to get expected feature names).
+            feature_mapping: Feature mapping with TimeSeriesConceptConfig values.
 
         Returns:
             Wide-format DataFrame with hourly bins and observation masks.
@@ -344,36 +352,55 @@ class BaseExtractor(ABC):
             .filter(pl.col("hour") >= 0)
         )
 
-        # Aggregate by stay_id, hour, feature_name (mean for multiple values in same hour)
-        # Also track that we observed at least one value
-        aggregation_strategy = {}
+        # Group features by aggregation type
+        agg_groups: Dict[AggregationType, List[str]] = {}
         for feature_name, config in feature_mapping.items():
-            # Prefer explicit aggregation if provided; otherwise infer sensible default
-            agg = config.get("aggregation")
-            if agg is None:
-                source = config.get("source")
-                agg = "sum" if source == "outputevents" else "mean"
-            aggregation_strategy[feature_name] = agg
+            agg_type = config.aggregation
+            agg_groups.setdefault(agg_type, []).append(feature_name)
 
         aggregated_parts: List[pl.DataFrame] = []
 
-        # Sum-aggregated features (e.g., urine output)
-        sum_features = [f for f, agg in aggregation_strategy.items() if agg == "sum"]
-        if sum_features:
-            aggregated_parts.append(
-                events_with_hours.filter(pl.col("feature_name").is_in(sum_features))
-                .group_by(["stay_id", "hour", "feature_name"])
-                .agg([pl.col("valuenum").sum().alias("value"), pl.lit(True).alias("observed")])
-            )
+        # Process each aggregation type
+        for agg_type, features in agg_groups.items():
+            filtered = events_with_hours.filter(pl.col("feature_name").is_in(features))
+            if filtered.is_empty():
+                continue
 
-        # Mean-aggregated features (default)
-        mean_features = [f for f, agg in aggregation_strategy.items() if agg != "sum"]
-        if mean_features:
-            aggregated_parts.append(
-                events_with_hours.filter(pl.col("feature_name").is_in(mean_features))
-                .group_by(["stay_id", "hour", "feature_name"])
-                .agg([pl.col("valuenum").mean().alias("value"), pl.lit(True).alias("observed")])
-            )
+            grouped = filtered.group_by(["stay_id", "hour", "feature_name"])
+
+            if agg_type == AggregationType.MEAN:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").mean().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.SUM:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").sum().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.MAX:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").max().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.MIN:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").min().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.LAST:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").last().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.FIRST:
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").first().alias("value"), pl.lit(True).alias("observed")]
+                )
+            elif agg_type == AggregationType.ANY:
+                agg_df = grouped.agg([pl.lit(True).alias("value"), pl.lit(True).alias("observed")])
+            else:
+                # Fallback to mean
+                agg_df = grouped.agg(
+                    [pl.col("valuenum").mean().alias("value"), pl.lit(True).alias("observed")]
+                )
+
+            aggregated_parts.append(agg_df)
 
         aggregated = (
             pl.concat(aggregated_parts)
@@ -453,7 +480,7 @@ class BaseExtractor(ABC):
 
     @abstractmethod
     def _extract_raw_events(
-        self, stay_ids: List[int], feature_mapping: Dict[str, Any]
+        self, stay_ids: List[int], feature_mapping: Dict[str, TimeSeriesConceptConfig]
     ) -> pl.DataFrame:
         """Extract raw time-series events for specified features (dataset-specific).
 
@@ -462,7 +489,7 @@ class BaseExtractor(ABC):
 
         Args:
             stay_ids: List of ICU stay IDs to extract.
-            feature_mapping: Dataset-specific feature mapping from _load_feature_mapping.
+            feature_mapping: Dictionary mapping feature names to TimeSeriesConceptConfig.
 
         Returns:
             DataFrame with columns:

@@ -1,0 +1,34 @@
+# Source-level configuration for MIMIC-IV v3.0
+# Defines time handling, ID columns, and table paths for the extractor.
+
+name: mimic_iv
+description: MIMIC-IV v3.0 (Beth Israel Deaconess Medical Center)
+
+# Time handling configuration
+time:
+  format: timestamp           # Uses absolute timestamps (datetime)
+  reference_table: icu/icustays
+  reference_col: intime       # ICU admission time for relative hour calculation
+
+# ID column names
+ids:
+  stay: stay_id               # ICU stay identifier
+  patient: subject_id         # Patient identifier
+  admission: hadm_id          # Hospital admission identifier
+
+# Table paths (relative to parquet_root)
+tables:
+  # ICU module tables
+  chartevents: icu/chartevents
+  outputevents: icu/outputevents
+  inputevents: icu/inputevents
+  icustays: icu/icustays
+  procedureevents: icu/procedureevents
+
+  # Hospital module tables
+  labevents: hosp/labevents
+  prescriptions: hosp/prescriptions
+  patients: hosp/patients
+  admissions: hosp/admissions
+  diagnoses_icd: hosp/diagnoses_icd
+  procedures_icd: hosp/procedures_icd

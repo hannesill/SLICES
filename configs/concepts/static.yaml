@@ -1,0 +1,71 @@
+# Static: Demographics and per-stay attributes
+# Features that don't vary over time within an ICU stay
+# Extracted once per stay, not hourly binned
+
+age:
+  description: Patient age at admission
+  dtype: numeric
+  units: years
+  min: 18
+  max: 100
+  mimic_iv:
+    table: patients
+    column: anchor_age
+
+gender:
+  description: Patient gender
+  dtype: categorical
+  categories: [M, F]
+  mimic_iv:
+    table: patients
+    column: gender
+
+race:
+  description: Patient race/ethnicity
+  dtype: categorical
+  mimic_iv:
+    table: admissions
+    column: race
+
+admission_type:
+  description: Type of hospital admission
+  dtype: categorical
+  mimic_iv:
+    table: admissions
+    column: admission_type
+
+insurance:
+  description: Insurance type
+  dtype: categorical
+  mimic_iv:
+    table: admissions
+    column: insurance
+
+first_careunit:
+  description: First ICU unit type
+  dtype: categorical
+  mimic_iv:
+    table: icustays
+    column: first_careunit
+
+height:
+  description: Patient height (admission value)
+  dtype: numeric
+  units: cm
+  min: 100
+  max: 250
+  mimic_iv:
+    table: chartevents
+    column: valuenum
+    itemid: 226730
+
+weight:
+  description: Patient weight (admission value)
+  dtype: numeric
+  units: kg
+  min: 30
+  max: 300
+  mimic_iv:
+    table: chartevents
+    column: valuenum
+    itemid: 226512

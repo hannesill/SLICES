@@ -495,38 +495,221 @@ class TestSchemaValidation:
 
     def test_extract_raw_events_validates_schema(self, mock_extractor):
         """Test that _extract_raw_events validates schema before returning."""
-        # Mock _extract_events_for_source to return valid data
+        from slices.data.config_schemas import ItemIDSource, TimeSeriesConceptConfig
+
+        # Mock _extract_by_itemid to return valid data
         valid_df = pl.DataFrame(
             {
                 "stay_id": [1, 2],
                 "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
-                "feature_name": ["heart_rate", "sbp"],
-                "valuenum": [75.0, 120.0],
+                "feature_name": ["heart_rate", "heart_rate"],
+                "valuenum": [75.0, 80.0],
             }
         )
 
-        with patch.object(mock_extractor, "_extract_events_for_source", return_value=valid_df):
+        feature_mapping = {
+            "heart_rate": TimeSeriesConceptConfig(
+                description="Heart rate",
+                units="bpm",
+                mimic_iv=[
+                    ItemIDSource(
+                        table="chartevents",
+                        itemid=[220045],
+                        value_col="valuenum",
+                        time_col="charttime",
+                    )
+                ],
+            )
+        }
+
+        with patch.object(mock_extractor, "_extract_by_itemid", return_value=valid_df):
             # Should not raise any exception
             result = mock_extractor._extract_raw_events(
-                stay_ids=[1, 2], feature_mapping={"heart_rate": {"source": "chartevents"}}
+                stay_ids=[1, 2], feature_mapping=feature_mapping
             )
             assert result.shape[0] == 2
 
     def test_extract_raw_events_schema_mismatch_raises_error(self, mock_extractor):
         """Test that schema validation catches Polars version changes."""
-        # Mock _extract_events_for_source to return data with wrong types
+        from slices.data.config_schemas import ItemIDSource, TimeSeriesConceptConfig
+
+        # Mock _extract_by_itemid to return data with wrong types
         invalid_df = pl.DataFrame(
             {
                 "stay_id": ["1", "2"],  # Wrong type: should be Int64
                 "charttime": [datetime(2020, 1, 1, 10, 0), datetime(2020, 1, 1, 11, 0)],
-                "feature_name": ["heart_rate", "sbp"],
-                "valuenum": [75.0, 120.0],
+                "feature_name": ["heart_rate", "heart_rate"],
+                "valuenum": [75.0, 80.0],
             }
         )
 
-        with patch.object(mock_extractor, "_extract_events_for_source", return_value=invalid_df):
+        feature_mapping = {
+            "heart_rate": TimeSeriesConceptConfig(
+                description="Heart rate",
+                units="bpm",
+                mimic_iv=[
+                    ItemIDSource(
+                        table="chartevents",
+                        itemid=[220045],
+                        value_col="valuenum",
+                        time_col="charttime",
+                    )
+                ],
+            )
+        }
+
+        with patch.object(mock_extractor, "_extract_by_itemid", return_value=invalid_df):
             with pytest.raises(ValueError, match="has type.*expected"):
                 mock_extractor._extract_raw_events(
                     stay_ids=[1, 2],
-                    feature_mapping={"heart_rate": {"source": "chartevents"}},
+                    feature_mapping=feature_mapping,
                 )
+
+
+class TestStaticFeatureExtraction:
+    """Tests for static feature extraction."""
+
+    @pytest.fixture
+    def mock_extractor(self, tmp_path):
+        """Create a mock extractor with temporary paths."""
+        config = ExtractorConfig(
+            parquet_root=str(tmp_path / "mimic-iv"),
+            output_dir=str(tmp_path / "processed"),
+        )
+
+        # Create mock parquet directory structure
+        (tmp_path / "mimic-iv" / "icu").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "mimic-iv" / "hosp").mkdir(parents=True, exist_ok=True)
+
+        return MIMICIVExtractor(config)
+
+    def test_extract_static_features_method_exists(self, mock_extractor):
+        """Test that extract_static_features method exists."""
+        assert hasattr(mock_extractor, "extract_static_features")
+        assert callable(mock_extractor.extract_static_features)
+
+    def test_extract_static_columns_success(self, mock_extractor):
+        """Test that _extract_static_columns extracts column-based features."""
+        from slices.data.config_schemas import StaticConceptConfig, StaticExtractionSource
+
+        # Create mock static concepts
+        concepts = {
+            "age": StaticConceptConfig(
+                description="Patient age",
+                dtype="numeric",
+                mimic_iv=StaticExtractionSource(table="patients", column="anchor_age"),
+            ),
+            "gender": StaticConceptConfig(
+                description="Patient gender",
+                dtype="categorical",
+                mimic_iv=StaticExtractionSource(table="patients", column="gender"),
+            ),
+        }
+
+        # Mock the _query method
+        mock_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "age": [65, 45, 70],
+                "gender": ["M", "F", "M"],
+            }
+        )
+
+        with patch.object(mock_extractor, "_query", return_value=mock_df):
+            result = mock_extractor._extract_static_columns([1, 2, 3], concepts)
+
+        assert "stay_id" in result.columns
+        assert "age" in result.columns
+        assert "gender" in result.columns
+        assert len(result) == 3
+
+    def test_extract_static_by_itemid_success(self, mock_extractor):
+        """Test that _extract_static_by_itemid extracts itemid-based features."""
+        from slices.data.config_schemas import StaticConceptConfig, StaticExtractionSource
+
+        # Create mock static concepts for height/weight
+        concepts = {
+            "height": StaticConceptConfig(
+                description="Patient height",
+                dtype="numeric",
+                mimic_iv=StaticExtractionSource(
+                    table="chartevents", column="valuenum", itemid=226730
+                ),
+            ),
+            "weight": StaticConceptConfig(
+                description="Patient weight",
+                dtype="numeric",
+                mimic_iv=StaticExtractionSource(
+                    table="chartevents", column="valuenum", itemid=226512
+                ),
+            ),
+        }
+
+        # Mock the _query method to return height and weight dataframes
+        def mock_query(sql):
+            if "226730" in sql:  # height itemid
+                return pl.DataFrame({"stay_id": [1, 2], "height": [170.0, 165.0]})
+            elif "226512" in sql:  # weight itemid
+                return pl.DataFrame({"stay_id": [1, 2, 3], "weight": [80.0, 60.0, 75.0]})
+            return pl.DataFrame()
+
+        with patch.object(mock_extractor, "_query", side_effect=mock_query):
+            result = mock_extractor._extract_static_by_itemid([1, 2, 3], concepts)
+
+        assert "stay_id" in result.columns
+        assert "height" in result.columns
+        assert "weight" in result.columns
+        assert len(result) == 3
+
+    def test_extract_static_features_integration(self, mock_extractor):
+        """Test full extract_static_features integration."""
+        from slices.data.config_schemas import StaticConceptConfig, StaticExtractionSource
+
+        # Mock static concepts to include both column-based and itemid-based
+        mock_concepts = {
+            "age": StaticConceptConfig(
+                description="Patient age",
+                dtype="numeric",
+                mimic_iv=StaticExtractionSource(table="patients", column="anchor_age"),
+            ),
+            "height": StaticConceptConfig(
+                description="Patient height",
+                dtype="numeric",
+                mimic_iv=StaticExtractionSource(
+                    table="chartevents", column="valuenum", itemid=226730
+                ),
+            ),
+        }
+
+        # Mock the config loader and query methods
+        with (
+            patch(
+                "slices.data.extractors.mimic_iv.load_static_concepts",
+                return_value=mock_concepts,
+            ),
+            patch.object(
+                mock_extractor,
+                "_extract_static_columns",
+                return_value=pl.DataFrame({"stay_id": [1, 2], "age": [65, 45]}),
+            ),
+            patch.object(
+                mock_extractor,
+                "_extract_static_by_itemid",
+                return_value=pl.DataFrame({"stay_id": [1, 2], "height": [170.0, 165.0]}),
+            ),
+        ):
+            result = mock_extractor.extract_static_features([1, 2])
+
+        assert "stay_id" in result.columns
+        assert "age" in result.columns
+        assert "height" in result.columns
+        assert len(result) == 2
+
+    def test_extract_static_features_empty_config(self, mock_extractor):
+        """Test extract_static_features with empty config returns base DataFrame."""
+        with patch("slices.data.extractors.mimic_iv.load_static_concepts", return_value={}):
+            result = mock_extractor.extract_static_features([1, 2, 3])
+
+        assert "stay_id" in result.columns
+        assert len(result) == 3
+        assert result["stay_id"].to_list() == [1, 2, 3]

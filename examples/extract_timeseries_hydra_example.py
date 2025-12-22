@@ -4,16 +4,16 @@ This demonstrates the recommended way to configure the extractor using Hydra,
 which makes it robust for both development and production deployments.
 
 Usage:
-    # Default config (configs/data/mimic_iv.yaml)
+    # Default config (configs/extraction/mimic_iv.yaml)
     uv run python examples/extract_timeseries_hydra_example.py
 
     # Override parquet root
     uv run python examples/extract_timeseries_hydra_example.py \
-        data.parquet_root=/path/to/mimic-iv
+        extraction.parquet_root=/path/to/mimic-iv
 
     # Explicit concepts directory (production deployment)
     uv run python examples/extract_timeseries_hydra_example.py \
-        data.concepts_dir=/opt/slices/configs/concepts
+        extraction.concepts_dir=/opt/slices/configs/concepts
 """
 
 import hydra
@@ -27,7 +27,7 @@ def main(cfg: DictConfig) -> None:
 
     # Convert Hydra config to ExtractorConfig
     # Filter only fields that ExtractorConfig accepts
-    data_config = OmegaConf.to_container(cfg.data, resolve=True)
+    extraction_config = OmegaConf.to_container(cfg.extraction, resolve=True)
     extractor_fields = {
         "parquet_root",
         "output_dir",
@@ -35,7 +35,7 @@ def main(cfg: DictConfig) -> None:
         "feature_set",
         "concepts_dir",
     }
-    filtered_config = {k: v for k, v in data_config.items() if k in extractor_fields}
+    filtered_config = {k: v for k, v in extraction_config.items() if k in extractor_fields}
 
     extractor_config = ExtractorConfig(**filtered_config)
 

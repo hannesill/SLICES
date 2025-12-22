@@ -6,10 +6,10 @@ This script automatically:
 
 Example usage:
     # Start with CSV files
-    python scripts/setup_mimic_iv.py data.csv_root=/path/to/mimic-iv-csv
+    python scripts/setup_mimic_iv.py extraction.csv_root=/path/to/mimic-iv-csv
 
     # Start with Parquet files (skip conversion)
-    python scripts/setup_mimic_iv.py data.parquet_root=/path/to/mimic-iv-parquet
+    python scripts/setup_mimic_iv.py extraction.parquet_root=/path/to/mimic-iv-parquet
 """
 
 import sys
@@ -28,13 +28,13 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra configuration object. Expects:
-            - data.csv_root: Optional path to CSV files
-            - data.parquet_root: Path to/for Parquet files
-            - data.output_dir: Path for processed output
+            - extraction.csv_root: Optional path to CSV files
+            - extraction.parquet_root: Path to/for Parquet files
+            - extraction.output_dir: Path for processed output
     """
-    csv_root_str = cfg.data.get("csv_root")
-    parquet_root = Path(cfg.data.parquet_root)
-    dataset_name = cfg.data.get("name", "dataset")
+    csv_root_str = cfg.extraction.get("csv_root")
+    parquet_root = Path(cfg.extraction.parquet_root)
+    dataset_name = cfg.extraction.get("name", "dataset")
 
     print(f"=== SLICES Data Setup: {dataset_name} ===\n")
 
@@ -67,8 +67,8 @@ def main(cfg: DictConfig) -> None:
         if not parquet_root.exists():
             print(f"Error: Parquet root not found: {parquet_root}")
             print("\nPlease provide either:")
-            print("  - data.csv_root=/path/to/csv (will convert to Parquet)")
-            print("  - data.parquet_root=/path/to/existing/parquet")
+            print("  - extraction.csv_root=/path/to/csv (will convert to Parquet)")
+            print("  - extraction.parquet_root=/path/to/existing/parquet")
             sys.exit(1)
 
         print("Step 1/2: Skipping CSV conversion (Parquet files already exist)")
@@ -77,9 +77,9 @@ def main(cfg: DictConfig) -> None:
 
     # Step 2: Extract features
     print("Step 2/2: Extracting features from Parquet...")
-    print(f"  Output directory: {cfg.data.output_dir}")
-    print(f"  Sequence length: {cfg.data.seq_length_hours} hours")
-    print(f"  Feature set: {cfg.data.feature_set}")
+    print(f"  Output directory: {cfg.extraction.output_dir}")
+    print(f"  Sequence length: {cfg.extraction.seq_length_hours} hours")
+    print(f"  Feature set: {cfg.extraction.feature_set}")
     print()
 
     # Convert Hydra config to ExtractorConfig
@@ -95,8 +95,8 @@ def main(cfg: DictConfig) -> None:
         "min_stay_hours",
     }
 
-    data_config = OmegaConf.to_container(cfg.data, resolve=True)
-    filtered_config = {k: v for k, v in data_config.items() if k in extractor_fields}
+    extraction_config = OmegaConf.to_container(cfg.extraction, resolve=True)
+    filtered_config = {k: v for k, v in extraction_config.items() if k in extractor_fields}
 
     # Handle tasks (may be a list in config)
     if "tasks" not in filtered_config or filtered_config["tasks"] is None:
@@ -119,7 +119,7 @@ def main(cfg: DictConfig) -> None:
 
     print("\n=== Setup Summary ===")
     print(f"Parquet files: {parquet_root}")
-    print(f"Processed data: {cfg.data.output_dir}")
+    print(f"Processed data: {cfg.extraction.output_dir}")
 
 
 if __name__ == "__main__":
