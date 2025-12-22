@@ -1,11 +1,13 @@
 """MIMIC-IV data extractor using DuckDB on local Parquet files."""
 
-from typing import Any, Dict, List
+from typing import Dict, List
 
 import polars as pl
 from rich.console import Console
 
-from slices.data.callbacks import get_callback
+from slices.data.config_loader import load_static_concepts
+from slices.data.config_schemas import ItemIDSource, StaticConceptConfig, TimeSeriesConceptConfig
+from slices.data.value_transforms import get_transform
 
 from .base import BaseExtractor
 
@@ -128,14 +130,13 @@ class MIMICIVExtractor(BaseExtractor):
                 )
 
     def _extract_raw_events(
-        self, stay_ids: List[int], feature_mapping: Dict[str, Any]
+        self, stay_ids: List[int], feature_mapping: Dict[str, TimeSeriesConceptConfig]
     ) -> pl.DataFrame:
         """Extract raw events for all configured sources (MIMIC-IV specific).
 
         Args:
             stay_ids: List of ICU stay IDs to extract.
-            feature_mapping: Dict mapping feature_name -> mimic_iv config
-                            (with 'source', 'itemid', 'value_col' keys).
+            feature_mapping: Dict mapping feature_name -> TimeSeriesConceptConfig.
 
         Returns:
             DataFrame with standardized schema:
@@ -144,23 +145,38 @@ class MIMICIVExtractor(BaseExtractor):
                 - feature_name: Canonical feature name
                 - valuenum: Numeric value
         """
-        # Group features by source (chartevents, labevents, outputevents, ...)
-        features_by_source: Dict[str, list[tuple[str, Dict[str, Any]]]] = {}
-        for feature_name, config in feature_mapping.items():
-            source = config.get("source")
-            if source is None:
-                continue
-            features_by_source.setdefault(source, []).append((feature_name, config))
-
         raw_event_batches: List[pl.DataFrame] = []
-        for source, features in features_by_source.items():
-            raw_event_batches.append(
-                self._extract_events_for_source(source=source, stay_ids=stay_ids, features=features)
-            )
+
+        # Process each concept's extraction sources
+        for feature_name, config in feature_mapping.items():
+            sources = config.mimic_iv
+            if sources is None:
+                continue
+
+            for source in sources:
+                # Currently only itemid extraction is implemented for MIMIC-IV
+                if isinstance(source, ItemIDSource):
+                    batch = self._extract_by_itemid(
+                        source=source,
+                        stay_ids=stay_ids,
+                        concept_name=feature_name,
+                    )
+                    if not batch.is_empty():
+                        raw_event_batches.append(batch)
+                else:
+                    console.print(
+                        f"[yellow]Warning: Extraction type '{source.type}' not yet "
+                        f"implemented for MIMIC-IV. Skipping source for {feature_name}[/yellow]"
+                    )
 
         if not raw_event_batches:
             result = pl.DataFrame(
-                {"stay_id": [], "charttime": [], "feature_name": [], "valuenum": []}
+                schema={
+                    "stay_id": pl.Int64,
+                    "charttime": pl.Datetime,
+                    "feature_name": pl.Utf8,
+                    "valuenum": pl.Float64,
+                }
             )
         else:
             result = pl.concat(raw_event_batches)
@@ -168,6 +184,102 @@ class MIMICIVExtractor(BaseExtractor):
         # Validate schema before returning
         self._validate_raw_events_schema(result)
         return result
+
+    def _extract_by_itemid(
+        self,
+        source: ItemIDSource,
+        stay_ids: List[int],
+        concept_name: str,
+    ) -> pl.DataFrame:
+        """Extract events using itemid matching.
+
+        Args:
+            source: ItemIDSource config with table, itemid, value_col, time_col, transform.
+            stay_ids: List of ICU stay IDs to extract.
+            concept_name: Name of the concept for the feature_name column.
+
+        Returns:
+            DataFrame with columns: stay_id, charttime, feature_name, valuenum.
+        """
+        # Map table names to schema paths
+        table_to_path = {
+            "chartevents": ("icu", "chartevents"),
+            "labevents": ("hosp", "labevents"),
+            "outputevents": ("icu", "outputevents"),
+            "inputevents": ("icu", "inputevents"),
+        }
+
+        if source.table not in table_to_path:
+            raise ValueError(
+                f"Unsupported table '{source.table}' for MIMIC-IV extractor. "
+                f"Supported: {list(table_to_path.keys())}"
+            )
+
+        schema, table = table_to_path[source.table]
+        parquet_path = self._parquet_path(schema, table)
+        stay_ids_str = ",".join(map(str, stay_ids))
+        itemids_str = ",".join(map(str, source.itemid))
+
+        # labevents doesn't have stay_id directly - needs join with icustays
+        if source.table == "labevents":
+            icustays_path = self._parquet_path("icu", "icustays")
+            sql = f"""
+            SELECT
+                i.stay_id,
+                l.{source.time_col} AS charttime,
+                l.itemid,
+                CAST(l.{source.value_col} AS DOUBLE) AS valuenum
+            FROM
+                read_parquet('{parquet_path}') AS l
+            INNER JOIN
+                read_parquet('{icustays_path}') AS i
+                ON l.hadm_id = i.hadm_id
+            WHERE
+                i.stay_id IN ({stay_ids_str})
+                AND l.itemid IN ({itemids_str})
+                AND l.{source.value_col} IS NOT NULL
+            ORDER BY
+                i.stay_id, l.{source.time_col}
+            """
+        else:
+            # chartevents and outputevents have stay_id directly
+            sql = f"""
+            SELECT
+                stay_id,
+                {source.time_col} AS charttime,
+                itemid,
+                CAST({source.value_col} AS DOUBLE) AS valuenum
+            FROM
+                read_parquet('{parquet_path}')
+            WHERE
+                stay_id IN ({stay_ids_str})
+                AND itemid IN ({itemids_str})
+                AND {source.value_col} IS NOT NULL
+            ORDER BY
+                stay_id, {source.time_col}
+            """
+
+        raw_events = self._query(sql)
+
+        # Apply transform if specified
+        if source.transform and not raw_events.is_empty():
+            transform_func = get_transform(source.transform)
+            # Try simple series transform first
+            try:
+                raw_events = raw_events.with_columns(
+                    transform_func(pl.col("valuenum")).alias("valuenum")
+                )
+            except TypeError:
+                # Fall back to DataFrame transform (e.g., to_celsius that checks itemid)
+                raw_events = transform_func(raw_events, {"itemid": source.itemid})
+
+        # Add feature name column
+        if not raw_events.is_empty():
+            raw_events = raw_events.with_columns(pl.lit(concept_name).alias("feature_name")).select(
+                ["stay_id", "charttime", "feature_name", "valuenum"]
+            )
+
+        return raw_events
 
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
         """Extract raw data for a specific source.
@@ -236,140 +348,190 @@ class MIMICIVExtractor(BaseExtractor):
         return self._query(sql)
 
     # -------------------------------------------------------------------------
-    # Private helpers
+    # Static feature extraction
     # -------------------------------------------------------------------------
 
-    def _extract_events_for_source(
-        self,
-        source: str,
-        stay_ids: List[int],
-        features: list[tuple[str, Dict[str, Any]]],
-    ) -> pl.DataFrame:
-        """Extract events for a single source (chartevents, labevents, outputevents)."""
-        source_to_table = {
-            "chartevents": ("icu", "chartevents", "charttime"),
-            "labevents": ("hosp", "labevents", "charttime"),
-            "outputevents": ("icu", "outputevents", "charttime"),
-        }
+    def extract_static_features(self, stay_ids: List[int]) -> pl.DataFrame:
+        """Extract static/demographic features from MIMIC-IV.
 
-        if source not in source_to_table:
-            raise ValueError(f"Unsupported source '{source}' for MIMIC-IV extractor")
+        Uses the static.yaml config to extract features in a config-driven way.
+        Supports two extraction patterns:
+        1. Column extraction: Direct column from table (e.g., age from patients.anchor_age)
+        2. Itemid extraction: First value from chartevents by itemid (e.g., height, weight)
 
-        schema, table, time_col = source_to_table[source]
+        Args:
+            stay_ids: List of ICU stay IDs to extract.
 
-        itemid_to_feature: Dict[int, str] = {}
-        all_itemids: List[int] = []
-        value_cols = set()
+        Returns:
+            DataFrame with one row per stay_id and one column per static feature.
+        """
+        # Load static concept configs
+        concepts_dir = self._get_concepts_path()
+        static_configs = load_static_concepts(concepts_dir, self._get_dataset_name())
 
-        for feature_name, config in features:
-            itemids = config.get("itemid", [])
-            if isinstance(itemids, int):
-                itemids = [itemids]
+        if not static_configs:
+            console.print("[yellow]Warning: No static concepts found for MIMIC-IV[/yellow]")
+            return pl.DataFrame({"stay_id": stay_ids})
 
-            value_cols.add(config.get("value_col", "valuenum"))
+        # Start with base stays data
+        result = pl.DataFrame({"stay_id": stay_ids})
 
-            for itemid in itemids:
-                itemid_to_feature[itemid] = feature_name
-                all_itemids.append(itemid)
+        # Group concepts by extraction type
+        column_concepts: Dict[str, StaticConceptConfig] = {}
+        itemid_concepts: Dict[str, StaticConceptConfig] = {}
 
-        if not all_itemids:
-            return pl.DataFrame(
-                schema={
-                    "stay_id": pl.Int64,
-                    "charttime": pl.Datetime,
-                    "feature_name": pl.Utf8,
-                    "valuenum": pl.Float64,
-                }
-            )
-
-        if len(value_cols) > 1:
-            raise ValueError(
-                f"Mixed value columns for source '{source}': {value_cols}. "
-                "Configure a consistent value_col per source."
-            )
-
-        value_col = next(iter(value_cols))
-        parquet_path = self._parquet_path(schema, table)
-        stay_ids_str = ",".join(map(str, stay_ids))
-        itemids_str = ",".join(map(str, all_itemids))
-
-        # labevents doesn't have stay_id directly - needs join with icustays
-        if source == "labevents":
-            icustays_path = self._parquet_path("icu", "icustays")
-            sql = f"""
-            SELECT
-                i.stay_id,
-                l.{time_col} AS charttime,
-                l.itemid,
-                l.{value_col} AS valuenum
-            FROM
-                read_parquet('{parquet_path}') AS l
-            INNER JOIN
-                read_parquet('{icustays_path}') AS i
-                ON l.hadm_id = i.hadm_id
-            WHERE
-                i.stay_id IN ({stay_ids_str})
-                AND l.itemid IN ({itemids_str})
-                AND l.{value_col} IS NOT NULL
-            ORDER BY
-                i.stay_id, l.{time_col}
-            """
-        else:
-            # chartevents and outputevents have stay_id directly
-            sql = f"""
-            SELECT
-                stay_id,
-                {time_col} AS charttime,
-                itemid,
-                {value_col} AS valuenum
-            FROM
-                read_parquet('{parquet_path}')
-            WHERE
-                stay_id IN ({stay_ids_str})
-                AND itemid IN ({itemids_str})
-                AND {value_col} IS NOT NULL
-            ORDER BY
-                stay_id, {time_col}
-            """
-
-        raw_events = self._query(sql)
-
-        # Apply callbacks before mapping itemids to feature names
-        for feature_name, config in features:
-            if "transform" not in config:
+        for name, config in static_configs.items():
+            source = config.mimic_iv
+            if source is None:
                 continue
 
-            itemids = config.get("itemid", [])
-            if isinstance(itemids, int):
-                itemids = [itemids]
+            if source.itemid is not None:
+                itemid_concepts[name] = config
+            else:
+                column_concepts[name] = config
 
-            callback_name = config["transform"]
-            callback_func = get_callback(callback_name)
+        # Extract column-based features
+        if column_concepts:
+            column_df = self._extract_static_columns(stay_ids, column_concepts)
+            result = result.join(column_df, on="stay_id", how="left")
 
-            feature_mask = pl.col("itemid").is_in(itemids)
-            feature_rows = raw_events.filter(feature_mask)
+        # Extract itemid-based features (height, weight)
+        if itemid_concepts:
+            itemid_df = self._extract_static_by_itemid(stay_ids, itemid_concepts)
+            result = result.join(itemid_df, on="stay_id", how="left")
 
-            if len(feature_rows) > 0:
-                transformed = callback_func(feature_rows, config)
-                raw_events = pl.concat(
-                    [
-                        raw_events.filter(~feature_mask),
-                        transformed,
-                    ]
-                ).sort(["stay_id", "charttime"])
+        return result
 
-        # Map itemid to feature_name using join (robust across Polars versions)
-        itemid_mapping_df = pl.DataFrame(
-            {
-                "itemid": list(itemid_to_feature.keys()),
-                "feature_name": list(itemid_to_feature.values()),
-            }
-        )
+    def _extract_static_columns(
+        self,
+        stay_ids: List[int],
+        concepts: Dict[str, StaticConceptConfig],
+    ) -> pl.DataFrame:
+        """Extract static features from direct table columns.
 
-        result = raw_events.join(itemid_mapping_df, on="itemid", how="inner").select(
-            ["stay_id", "charttime", "feature_name", "valuenum"]
-        )
+        Args:
+            stay_ids: List of ICU stay IDs.
+            concepts: Dict mapping feature_name -> StaticConceptConfig with column-based sources.
 
-        # Validate schema before returning
-        self._validate_raw_events_schema(result)
+        Returns:
+            DataFrame with stay_id and extracted feature columns.
+        """
+        # Map table names to (schema, table_name) paths
+        table_to_path = {
+            "patients": ("hosp", "patients"),
+            "admissions": ("hosp", "admissions"),
+            "icustays": ("icu", "icustays"),
+        }
+
+        # Group concepts by source table
+        table_concepts: Dict[str, Dict[str, str]] = {}  # table -> {feature_name: column}
+        for name, config in concepts.items():
+            source = config.mimic_iv
+            if source is None:
+                continue
+            table_concepts.setdefault(source.table, {})[name] = source.column
+
+        icu_path = self._parquet_path("icu", "icustays")
+        patients_path = self._parquet_path("hosp", "patients")
+        admissions_path = self._parquet_path("hosp", "admissions")
+
+        stay_ids_str = ",".join(map(str, stay_ids))
+
+        # Build SELECT clause for each table's columns
+        select_parts = ["i.stay_id"]
+
+        for table, columns in table_concepts.items():
+            if table not in table_to_path:
+                console.print(
+                    f"[yellow]Warning: Unknown table '{table}' for static extraction[/yellow]"
+                )
+                continue
+
+            alias = table[0]  # Use first letter as alias (p, a, i)
+            if table == "patients":
+                alias = "p"
+            elif table == "admissions":
+                alias = "a"
+            elif table == "icustays":
+                alias = "i"
+
+            for feature_name, column in columns.items():
+                select_parts.append(f"{alias}.{column} AS {feature_name}")
+
+        sql = f"""
+        SELECT
+            {', '.join(select_parts)}
+        FROM
+            read_parquet('{icu_path}') AS i
+        LEFT JOIN
+            read_parquet('{patients_path}') AS p
+            ON i.subject_id = p.subject_id
+        LEFT JOIN
+            read_parquet('{admissions_path}') AS a
+            ON i.hadm_id = a.hadm_id
+        WHERE
+            i.stay_id IN ({stay_ids_str})
+        """
+
+        return self._query(sql)
+
+    def _extract_static_by_itemid(
+        self,
+        stay_ids: List[int],
+        concepts: Dict[str, StaticConceptConfig],
+    ) -> pl.DataFrame:
+        """Extract static features from chartevents using itemid (e.g., height, weight).
+
+        Takes the first recorded value per stay for each feature.
+
+        Args:
+            stay_ids: List of ICU stay IDs.
+            concepts: Dict mapping feature_name -> StaticConceptConfig with itemid sources.
+
+        Returns:
+            DataFrame with stay_id and extracted feature columns.
+        """
+        chartevents_path = self._parquet_path("icu", "chartevents")
+        stay_ids_str = ",".join(map(str, stay_ids))
+
+        feature_dfs = []
+
+        for feature_name, config in concepts.items():
+            source = config.mimic_iv
+            if source is None or source.itemid is None:
+                continue
+
+            # Get first value per stay for this itemid
+            sql = f"""
+            WITH ranked AS (
+                SELECT
+                    c.stay_id,
+                    c.{source.column} AS value,
+                    ROW_NUMBER() OVER (PARTITION BY c.stay_id ORDER BY c.charttime) AS rn
+                FROM
+                    read_parquet('{chartevents_path}') AS c
+                WHERE
+                    c.stay_id IN ({stay_ids_str})
+                    AND c.itemid = {source.itemid}
+                    AND c.{source.column} IS NOT NULL
+            )
+            SELECT
+                stay_id,
+                value AS {feature_name}
+            FROM ranked
+            WHERE rn = 1
+            """
+
+            df = self._query(sql)
+            if not df.is_empty():
+                feature_dfs.append(df)
+
+        if not feature_dfs:
+            return pl.DataFrame({"stay_id": stay_ids})
+
+        # Join all feature dataframes
+        result = pl.DataFrame({"stay_id": stay_ids})
+        for df in feature_dfs:
+            result = result.join(df, on="stay_id", how="left")
+
         return result

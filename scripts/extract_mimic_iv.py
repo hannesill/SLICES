@@ -5,15 +5,15 @@ Example usage:
     uv run python scripts/extract_mimic_iv.py
 
     # Override parquet path
-    uv run python scripts/extract_mimic_iv.py data.parquet_root=/path/to/mimic-iv-parquet
+    uv run python scripts/extract_mimic_iv.py extraction.parquet_root=/path/to/mimic-iv-parquet
 
     # Specify different tasks
-    uv run python scripts/extract_mimic_iv.py 'data.tasks=[mortality_24h,mortality_hospital]'
+    uv run python scripts/extract_mimic_iv.py 'extraction.tasks=[mortality_24h,mortality_hospital]'
 
     # Use full MIMIC-IV
-    uv run python scripts/extract_mimic_iv.py \\
-        data.parquet_root=/path/to/mimic-iv \\
-        data.output_dir=data/processed/mimic-iv-full
+    uv run python scripts/extract_mimic_iv.py \
+        extraction.parquet_root=/path/to/mimic-iv \
+        extraction.output_dir=data/processed/mimic-iv-full
 """
 
 import sys
@@ -31,20 +31,22 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra configuration object. Expects:
-            - data.parquet_root: Path to Parquet files
-            - data.output_dir: Path for processed output
-            - data.seq_length_hours: Sequence length
-            - data.feature_set: Feature set to extract
-            - data.tasks: List of task names for label extraction
+            - extraction.parquet_root: Path to Parquet files
+            - extraction.output_dir: Path for processed output
+            - extraction.seq_length_hours: Sequence length
+            - extraction.feature_set: Feature set to extract
+            - extraction.tasks: List of task names for label extraction
     """
-    parquet_root = Path(cfg.data.parquet_root)
+    parquet_root = Path(cfg.extraction.parquet_root)
 
     if not parquet_root.exists():
         print(f"Error: Parquet root directory not found: {parquet_root}")
         print("\nIf you have CSV files, run conversion first:")
-        print("  uv run python scripts/convert_csv_to_parquet.py data.csv_root=/path/to/csv")
+        print("  uv run python scripts/convert_csv_to_parquet.py extraction.csv_root=/path/to/csv")
         print("\nOr provide the correct path:")
-        print("  uv run python scripts/extract_mimic_iv.py data.parquet_root=/path/to/parquet")
+        print(
+            "  uv run python scripts/extract_mimic_iv.py extraction.parquet_root=/path/to/parquet"
+        )
         sys.exit(1)
 
     # Convert Hydra config to ExtractorConfig
@@ -60,8 +62,8 @@ def main(cfg: DictConfig) -> None:
         "min_stay_hours",
     }
 
-    data_config = OmegaConf.to_container(cfg.data, resolve=True)
-    filtered_config = {k: v for k, v in data_config.items() if k in extractor_fields}
+    extraction_config = OmegaConf.to_container(cfg.extraction, resolve=True)
+    filtered_config = {k: v for k, v in extraction_config.items() if k in extractor_fields}
 
     # Handle tasks (may be a list in config)
     if "tasks" not in filtered_config or filtered_config["tasks"] is None:

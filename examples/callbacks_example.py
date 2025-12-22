@@ -140,37 +140,48 @@ def example_yaml_usage():
     print("\n=== Example: Using callbacks in YAML configs ===")
 
     yaml_example = """
-# In configs/concepts/core_features.yaml:
+# In configs/concepts/vitals.yaml:
 
-vitals:
-  temperature:
-    mimic_iv:
-      source: chartevents
-      itemid: [223761, 223762]  # Fahrenheit, Celsius
+temperature:
+  description: Body temperature
+  units: celsius
+  min: 32
+  max: 42
+  mimic_iv:
+    # Fahrenheit - needs conversion
+    - table: chartevents
+      type: itemid
+      itemid: [223761]
       value_col: valuenum
-      transform: to_celsius  # <-- Apply callback here
-    units: celsius
-    min: 32
-    max: 42
+      time_col: charttime
+      transform: fahrenheit_to_celsius  # <-- Apply transform here
+    # Celsius - no conversion needed
+    - table: chartevents
+      type: itemid
+      itemid: [223762]
+      value_col: valuenum
+      time_col: charttime
 
-# Future example with custom callback:
-labs:
-  glucose:
-    mimic_iv:
-      source: labevents
+# Example with custom transform in configs/concepts/labs.yaml:
+glucose:
+  description: Glucose (lab)
+  units: mmol/L
+  min: 2
+  max: 30
+  mimic_iv:
+    - table: labevents
+      type: itemid
       itemid: [50931, 50809]
       value_col: valuenum
-      transform: glucose_to_mmol  # Custom callback
-    units: mmol/L
-    min: 2
-    max: 30
+      time_col: charttime
+      transform: mg_dl_to_mmol_l_glucose  # Custom transform
 """
 
     print(yaml_example)
     print("\nThe extractor automatically:")
-    print("1. Loads the concept YAML")
+    print("1. Loads the concept YAML files from concepts directory")
     print("2. Extracts raw data from the database")
-    print("3. Applies the specified callback transformation")
+    print("3. Applies the specified transform to each source")
     print("4. Returns transformed values in standardized units")
 
 
@@ -190,14 +201,14 @@ def main():
     print("Summary:")
     print("=" * 70)
     print("1. Use @register_callback('name') to add new transformations")
-    print("2. Specify 'transform: callback_name' in concept YAML files")
+    print("2. Specify 'transform: transform_name' in concept YAML files")
     print("3. Callbacks receive DataFrame and metadata dict")
     print("4. Callbacks must return transformed DataFrame")
     print("5. Access itemid, valuenum, and other columns in your callback")
     print("\nFor more details, see:")
-    print("  - src/slices/data/callbacks.py (implementation)")
-    print("  - tests/test_callbacks.py (comprehensive tests)")
-    print("  - configs/concepts/core_features.yaml (usage in configs)")
+    print("  - src/slices/data/value_transforms.py (transform implementation)")
+    print("  - src/slices/data/callbacks.py (callback implementation)")
+    print("  - configs/concepts/vitals.yaml (transform usage in configs)")
 
 
 if __name__ == "__main__":
