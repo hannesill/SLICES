@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyze concept files to understand data coverage and distributions.
 
-This script analyzes a concept YAML file and provides comprehensive statistics
+This script analyzes concept YAML files and provides comprehensive statistics
 about:
 - Concept definitions vs actual data availability
 - Measurement coverage per modality
@@ -11,20 +11,25 @@ about:
 
 Usage:
     uv run python scripts/analyze_concepts.py \
-        --concept-file configs/concepts/core_features.yaml \
+        --concepts-dir configs/concepts \
         --parquet-root /path/to/mimic-iv-parquet \
         [--output-dir reports/concept_analysis]
+
+    # Legacy single-file support (deprecated):
+    uv run python scripts/analyze_concepts.py \
+        --concept-file configs/concepts/vitals.yaml \
+        --parquet-root /path/to/mimic-iv-parquet
 """
 
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import duckdb
 import numpy as np
 import polars as pl
-from omegaconf import OmegaConf
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -47,54 +52,123 @@ except ImportError:
     )
 
 
+# Concept category files to load
+CONCEPT_FILES = ["vitals.yaml", "labs.yaml", "outputs.yaml"]
+
+# Table to schema mapping (used to find parquet files)
+TABLE_SCHEMA_MAP = {
+    "chartevents": "icu",
+    "labevents": "hosp",
+    "outputevents": "icu",
+    "inputevents": "icu",
+    "icustays": "icu",
+    "patients": "hosp",
+    "admissions": "hosp",
+}
+
+
 class ConceptAnalyzer:
     """Analyzes concept files against actual MIMIC-IV data."""
 
-    def __init__(self, concept_file: Path, parquet_root: Path):
+    def __init__(
+        self,
+        parquet_root: Path,
+        concepts_dir: Optional[Path] = None,
+        concept_file: Optional[Path] = None,
+    ):
         """Initialize analyzer.
 
         Args:
-            concept_file: Path to concept YAML file
             parquet_root: Path to MIMIC-IV Parquet files
+            concepts_dir: Path to concepts directory (new format)
+            concept_file: Path to single concept YAML file (legacy format)
         """
-        self.concept_file = Path(concept_file)
         self.parquet_root = Path(parquet_root)
+        self.concepts_dir = Path(concepts_dir) if concepts_dir else None
+        self.concept_file = Path(concept_file) if concept_file else None
         self.conn = duckdb.connect()
 
-        if not self.concept_file.exists():
-            raise FileNotFoundError(f"Concept file not found: {concept_file}")
         if not self.parquet_root.exists():
             raise FileNotFoundError(f"Parquet root not found: {parquet_root}")
 
-        # Load concept file
-        self.concepts = OmegaConf.load(self.concept_file)
+        if self.concepts_dir and not self.concepts_dir.exists():
+            raise FileNotFoundError(f"Concepts directory not found: {concepts_dir}")
 
-        # Source table mappings
-        self.source_to_table = {
-            "chartevents": ("icu", "chartevents", "valuenum"),
-            "labevents": ("hosp", "labevents", "valuenum"),
-            "outputevents": ("icu", "outputevents", "value"),
-        }
+        if self.concept_file and not self.concept_file.exists():
+            raise FileNotFoundError(f"Concept file not found: {concept_file}")
+
+        # Load concepts
+        self.concepts = self._load_concepts()
+
+    def _load_concepts(self) -> Dict[str, Dict[str, Any]]:
+        """Load concepts from directory or single file.
+
+        Returns:
+            Dictionary mapping modality -> {concept_name -> config}
+        """
+        concepts = {}
+
+        if self.concepts_dir:
+            # New format: load from concepts directory
+            for filename in CONCEPT_FILES:
+                filepath = self.concepts_dir / filename
+                if not filepath.exists():
+                    continue
+
+                modality = filepath.stem  # e.g., "vitals" from "vitals.yaml"
+
+                with open(filepath) as f:
+                    file_concepts = yaml.safe_load(f) or {}
+
+                if file_concepts:
+                    concepts[modality] = file_concepts
+        elif self.concept_file:
+            # Legacy format: single file with modality sections
+            with open(self.concept_file) as f:
+                file_data = yaml.safe_load(f) or {}
+
+            # Check if it's a modality-grouped file or a single-modality file
+            if any(k in file_data for k in ["vitals", "labs", "outputs"]):
+                # Old format with modality sections
+                for modality in ["vitals", "labs", "outputs"]:
+                    if modality in file_data:
+                        concepts[modality] = file_data[modality]
+            else:
+                # Single modality file - infer from filename
+                modality = self.concept_file.stem
+                concepts[modality] = file_data
+        else:
+            raise ValueError("Must provide either concepts_dir or concept_file")
+
+        return concepts
 
     def _query(self, sql: str) -> pl.DataFrame:
         """Execute SQL query and return Polars DataFrame."""
         return self.conn.execute(sql).pl()
 
-    def _parquet_path(self, schema: str, table: str) -> Path:
-        """Get path to Parquet file."""
+    def _parquet_path(self, table: str) -> Path:
+        """Get path to Parquet file for a table.
+
+        Args:
+            table: Table name (e.g., "chartevents", "labevents")
+
+        Returns:
+            Full path to parquet file
+        """
+        schema = TABLE_SCHEMA_MAP.get(table, "icu")
         return self.parquet_root / schema / f"{table}.parquet"
 
-    def _get_total_measurements(self, source: str) -> int:
+    def _get_total_measurements(self, table: str, value_col: str = "valuenum") -> int:
         """Get total number of measurements in a source table.
 
         Args:
-            source: Source name (chartevents, labevents, outputevents)
+            table: Table name (chartevents, labevents, outputevents)
+            value_col: Column name for values
 
         Returns:
             Total count of measurements with non-null values
         """
-        schema, table, value_col = self.source_to_table[source]
-        table_path = self._parquet_path(schema, table)
+        table_path = self._parquet_path(table)
 
         if not table_path.exists():
             console.print(f"[yellow]Warning: Table not found: {table_path}[/yellow]")
@@ -111,7 +185,6 @@ class ConceptAnalyzer:
             val = row_dict.get("total")
             if val is None:
                 return 0
-            # Handle Polars Series/Array by taking first element
             if isinstance(val, pl.Series):
                 return int(val[0] if len(val) > 0 else 0)
             if isinstance(val, np.ndarray):
@@ -119,21 +192,84 @@ class ConceptAnalyzer:
             return int(val)
         return 0
 
+    def _extract_sources_from_concept(self, concept_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract source configurations from a concept.
+
+        Handles both new format (mimic_iv as list) and legacy format.
+
+        Args:
+            concept_config: Concept configuration dictionary
+
+        Returns:
+            List of source configurations with keys: table, itemid, value_col
+        """
+        sources = []
+
+        # New format: mimic_iv is a list of sources
+        mimic_iv = concept_config.get("mimic_iv")
+        if mimic_iv is None:
+            return sources
+
+        if isinstance(mimic_iv, list):
+            for source in mimic_iv:
+                table = source.get("table")
+                itemid = source.get("itemid", [])
+                value_col = source.get("value_col", "valuenum")
+                transform = source.get("transform")
+
+                # Normalize itemid to list
+                if isinstance(itemid, int):
+                    itemid = [itemid]
+                elif not isinstance(itemid, list):
+                    itemid = list(itemid) if itemid else []
+
+                if table and itemid:
+                    sources.append(
+                        {
+                            "table": table,
+                            "itemid": itemid,
+                            "value_col": value_col,
+                            "transform": transform,
+                        }
+                    )
+        elif isinstance(mimic_iv, dict):
+            # Legacy format: mimic_iv is a single dict with source key
+            table = mimic_iv.get("source") or mimic_iv.get("table")
+            itemid = mimic_iv.get("itemid") or mimic_iv.get("itemids", [])
+            value_col = mimic_iv.get("value_col", "valuenum")
+
+            # Normalize itemid to list
+            if isinstance(itemid, int):
+                itemid = [itemid]
+            elif not isinstance(itemid, list):
+                itemid = list(itemid) if itemid else []
+
+            if table and itemid:
+                sources.append(
+                    {
+                        "table": table,
+                        "itemid": itemid,
+                        "value_col": value_col,
+                        "transform": None,
+                    }
+                )
+
+        return sources
+
     def _get_concept_measurements(
-        self, source: str, itemids: List[int], value_col: str
+        self, table: str, itemids: List[int], value_col: str
     ) -> Dict[str, Any]:
         """Get measurement statistics for a concept.
 
         Args:
-            source: Source name (chartevents, labevents, outputevents)
+            table: Table name (chartevents, labevents, outputevents)
             itemids: List of item IDs for this concept
             value_col: Column name for values
 
         Returns:
             Dictionary with measurement statistics
         """
-        schema, table, _ = self.source_to_table[source]
-        table_path = self._parquet_path(schema, table)
+        table_path = self._parquet_path(table)
 
         if not table_path.exists():
             return {
@@ -148,8 +284,8 @@ class ConceptAnalyzer:
         # Handle different table structures
         # chartevents and outputevents have stay_id directly
         # labevents has hadm_id, need to join with icustays
-        if source == "labevents":
-            icustays_path = self._parquet_path("icu", "icustays")
+        if table == "labevents":
+            icustays_path = self._parquet_path("icustays")
             # Get basic counts with join to icustays for stay_id
             sql = f"""
             SELECT
@@ -217,17 +353,14 @@ class ConceptAnalyzer:
         values = values_df["value"].to_numpy() if len(values_df) > 0 else np.array([])
 
         if len(stats) > 0:
-            # Convert first row to dict to ensure scalar values
             row_dict = stats.row(0, named=True)
 
             def get_scalar(col_name):
                 val = row_dict.get(col_name)
                 if val is None:
                     return None
-                # Handle Polars Series/Array by taking first element
                 if isinstance(val, pl.Series):
                     return val[0] if len(val) > 0 else None
-                # Handle numpy arrays
                 if isinstance(val, np.ndarray):
                     return val.item() if val.size > 0 else None
                 return val
@@ -266,22 +399,26 @@ class ConceptAnalyzer:
         results = {}
 
         # Process each modality
-        for modality in ["vitals", "labs", "outputs"]:
-            if modality not in self.concepts:
+        for modality, modality_concepts in self.concepts.items():
+            if not modality_concepts or not isinstance(modality_concepts, dict):
                 continue
 
             console.print(f"\n[bold]Analyzing {modality.upper()}[/bold]")
 
-            modality_concepts = self.concepts[modality]
-            if not hasattr(modality_concepts, "items"):
+            # Determine primary table for this modality
+            first_concept = list(modality_concepts.values())[0]
+            sources = self._extract_sources_from_concept(first_concept)
+            if not sources:
+                console.print("  [yellow]No MIMIC-IV sources found[/yellow]")
                 continue
 
-            # Get source for this modality (assume all concepts in modality use same source)
-            first_concept = list(modality_concepts.items())[0][1]
-            source = first_concept.mimic_iv.source
+            primary_table = sources[0]["table"]
+            primary_value_col = sources[0]["value_col"]
 
             # Get total measurements for this source
-            total_source_measurements = self._get_total_measurements(source)
+            total_source_measurements = self._get_total_measurements(
+                primary_table, primary_value_col
+            )
 
             # Analyze each concept
             concept_stats = []
@@ -290,17 +427,23 @@ class ConceptAnalyzer:
             for concept_name, concept_config in modality_concepts.items():
                 console.print(f"  Analyzing [cyan]{concept_name}[/cyan]...", end="")
 
-                mimic_config = concept_config.mimic_iv
-                itemids = mimic_config.itemid
-                if isinstance(itemids, int):
-                    itemids = [itemids]
-                elif not isinstance(itemids, list):
-                    itemids = list(itemids)
+                # Extract all sources and combine itemids
+                sources = self._extract_sources_from_concept(concept_config)
+                if not sources:
+                    console.print(" [yellow]no sources[/yellow]")
+                    continue
 
-                value_col = mimic_config.value_col
+                # Combine all itemids across sources (they may come from same table)
+                all_itemids = []
+                table = sources[0]["table"]
+                value_col = sources[0]["value_col"]
+                for source in sources:
+                    all_itemids.extend(source["itemid"])
+                    # Use first source's table/value_col for stats
+                    # (assumes same table for all sources of a concept)
 
                 # Get statistics
-                stats = self._get_concept_measurements(source, itemids, value_col)
+                stats = self._get_concept_measurements(table, all_itemids, value_col)
 
                 # Get expected min/max from config
                 expected_min = concept_config.get("min")
@@ -317,8 +460,8 @@ class ConceptAnalyzer:
 
                 concept_stat = {
                     "concept_name": concept_name,
-                    "itemids": itemids,
-                    "n_itemids": len(itemids),
+                    "itemids": all_itemids,
+                    "n_itemids": len(all_itemids),
                     "units": units,
                     "expected_min": expected_min,
                     "expected_max": expected_max,
@@ -346,7 +489,7 @@ class ConceptAnalyzer:
                 concept_stats.append(concept_stat)
                 total_concept_measurements += stats["total_measurements"]
 
-                console.print(" ✓")
+                console.print(" [green]done[/green]")
 
             # Calculate coverage percentage
             coverage_pct = (
@@ -356,7 +499,7 @@ class ConceptAnalyzer:
             )
 
             results[modality] = {
-                "source": source,
+                "table": primary_table,
                 "n_concepts": len(concept_stats),
                 "total_source_measurements": total_source_measurements,
                 "total_concept_measurements": total_concept_measurements,
@@ -373,7 +516,7 @@ class ConceptAnalyzer:
         # Overall summary
         summary_table = Table(title="Modality Coverage Summary")
         summary_table.add_column("Modality", style="cyan")
-        summary_table.add_column("Source", style="magenta")
+        summary_table.add_column("Table", style="magenta")
         summary_table.add_column("Concepts", justify="right")
         summary_table.add_column("Total Measurements", justify="right", style="green")
         summary_table.add_column("Concept Measurements", justify="right", style="yellow")
@@ -382,7 +525,7 @@ class ConceptAnalyzer:
         for modality, data in results.items():
             summary_table.add_row(
                 modality.upper(),
-                data["source"],
+                data["table"],
                 str(data["n_concepts"]),
                 f"{data['total_source_measurements']:,}",
                 f"{data['total_concept_measurements']:,}",
@@ -497,91 +640,66 @@ class ConceptAnalyzer:
 
                     values = concept["values"]
 
-                    # Improved adaptive binning that handles skewed distributions
-                    # For data with many zeros or highly skewed, focus bins on non-zero range
+                    # Adaptive binning for histograms
                     non_zero_values = values[values != 0] if len(values) > 0 else values
                     zero_count = (values == 0).sum() if len(values) > 0 else 0
                     zero_pct = zero_count / len(values) if len(values) > 0 else 0
 
                     if len(non_zero_values) > 0:
-                        # Calculate bin count based on non-zero data
-                        # Use more bins for non-zero range to get better resolution
                         n_bins_nonzero = min(40, max(15, int(np.sqrt(len(non_zero_values)))))
 
-                        # If many zeros, use separate bin for zero and focus bins on non-zero range
-                        if zero_pct > 0.1:  # More than 10% zeros
-                            # Create bins: one for zero, rest for non-zero range
+                        if zero_pct > 0.1:
                             non_zero_min = float(non_zero_values.min())
                             non_zero_max = float(non_zero_values.max())
 
-                            # Create custom bins: [0, small_epsilon] for zeros, then non-zero range
                             if non_zero_max > non_zero_min:
-                                # Use log scale for highly skewed data (if range is large)
-                                if non_zero_max / non_zero_min > 100:
-                                    # Log scale bins for non-zero values
+                                if non_zero_max / max(non_zero_min, 1e-10) > 100:
                                     log_min = np.log10(max(non_zero_min, 1e-10))
                                     log_max = np.log10(non_zero_max)
                                     log_bins = np.logspace(log_min, log_max, n_bins_nonzero)
-                                    # Ensure bins are unique and sorted
                                     log_bins = np.unique(np.sort(log_bins))
-                                    # Add zero bin: [0, small_value] then log bins
-                                    # Make sure first log bin is > small_value to avoid overlap
                                     small_epsilon = (
                                         min(non_zero_min * 0.1, 0.01) if non_zero_min > 0 else 0.01
                                     )
-                                    # Remove any log bins that are too close to zero
                                     log_bins = log_bins[log_bins > small_epsilon * 1.1]
                                     if len(log_bins) > 0:
                                         bins = np.concatenate([[0, small_epsilon], log_bins])
                                     else:
-                                        # Fallback if all log bins were removed
                                         bins = np.array([0, small_epsilon, non_zero_max * 1.1])
                                 else:
-                                    # Linear bins for non-zero values
                                     nonzero_bins = np.linspace(
                                         non_zero_min, non_zero_max, n_bins_nonzero
                                     )
-                                    # Ensure bins are unique and sorted
                                     nonzero_bins = np.unique(np.sort(nonzero_bins))
-                                    # Add zero bin with small gap
                                     small_epsilon = non_zero_min * 0.1 if non_zero_min > 0 else 0.01
-                                    # Remove bins too close to zero to avoid overlap
                                     nonzero_bins = nonzero_bins[nonzero_bins > small_epsilon * 1.1]
                                     if len(nonzero_bins) > 0:
                                         bins = np.concatenate([[0, small_epsilon], nonzero_bins])
                                     else:
-                                        # Fallback
                                         bins = np.array([0, small_epsilon, non_zero_max * 1.1])
                             else:
-                                # All non-zero values are the same
                                 if non_zero_max > 0:
                                     bins = np.array([0, non_zero_max * 0.5, non_zero_max * 1.1])
                                 else:
                                     bins = np.array([0, 0.1, 1])
                         else:
-                            # Few zeros, use standard adaptive binning
                             n_bins = min(40, max(15, int(np.sqrt(len(values)))))
                             bins = n_bins
                     else:
-                        # All zeros
                         bins = np.array([0, 0.1, 1])
 
-                    # Final safety check: ensure bins are unique, sorted, monotonic
+                    # Safety check for bins
                     if isinstance(bins, np.ndarray):
                         bins = np.unique(bins)
                         bins = np.sort(bins)
-                        # Remove any duplicate or invalid bins
                         if len(bins) < 2:
-                            # Fallback to simple binning
                             bins = min(40, max(15, int(np.sqrt(len(values)))))
-                        # Verify bins are strictly increasing
                         if len(bins) > 1 and np.any(np.diff(bins) <= 0):
-                            # If not strictly increasing, use simple binning
                             bins = min(40, max(15, int(np.sqrt(len(values)))))
 
                     ax.hist(values, bins=bins, alpha=0.7, edgecolor="gray", linewidth=0.5)
 
-                    # Add vertical lines for min, max, percentiles
+                    # Add vertical lines for statistics
                     if concept["actual_min"] is not None:
                         ax.axvline(
                             concept["actual_min"],
@@ -637,7 +755,7 @@ class ConceptAnalyzer:
                     ax.set_xlabel(concept["units"], fontsize=7)
                     ax.set_ylabel("Frequency", fontsize=7)
                     ax.tick_params(labelsize=6)
-                    if idx == 0:  # Only show legend on first plot to save space
+                    if idx == 0:
                         ax.legend(fontsize=6, loc="upper right", framealpha=0.8)
                     ax.grid(True, alpha=0.2)
 
@@ -705,10 +823,16 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Analyze concept files against MIMIC-IV data")
     parser.add_argument(
+        "--concepts-dir",
+        type=str,
+        default=None,
+        help="Path to concepts directory (e.g., configs/concepts)",
+    )
+    parser.add_argument(
         "--concept-file",
         type=str,
-        required=True,
-        help="Path to concept YAML file (e.g., configs/concepts/core_features.yaml)",
+        default=None,
+        help="[DEPRECATED] Path to single concept YAML file",
     )
     parser.add_argument(
         "--parquet-root",
@@ -725,10 +849,26 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate arguments
+    if args.concepts_dir is None and args.concept_file is None:
+        # Default to configs/concepts if exists
+        default_dir = Path("configs/concepts")
+        if default_dir.exists():
+            args.concepts_dir = str(default_dir)
+        else:
+            parser.error("Must provide either --concepts-dir or --concept-file")
+
+    if args.concept_file:
+        console.print(
+            "[yellow]Warning: --concept-file is deprecated. "
+            "Use --concepts-dir instead.[/yellow]\n"
+        )
+
     try:
         analyzer = ConceptAnalyzer(
-            concept_file=Path(args.concept_file),
             parquet_root=Path(args.parquet_root),
+            concepts_dir=Path(args.concepts_dir) if args.concepts_dir else None,
+            concept_file=Path(args.concept_file) if args.concept_file else None,
         )
 
         # Run analysis
@@ -744,7 +884,7 @@ def main():
         # Save report
         analyzer.save_report(results, output_dir)
 
-        console.print("\n[bold green]✓ Analysis complete![/bold green]")
+        console.print("\n[bold green]Analysis complete![/bold green]")
         console.print(f"Results saved to: {output_dir}")
 
     except Exception as e:

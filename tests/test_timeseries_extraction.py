@@ -6,8 +6,39 @@ from unittest.mock import patch
 
 import polars as pl
 import pytest
+from slices.data.config_schemas import AggregationType, ItemIDSource, TimeSeriesConceptConfig
 from slices.data.extractors.base import ExtractorConfig
 from slices.data.extractors.mimic_iv import MIMICIVExtractor
+
+
+def make_feature_mapping(features: dict) -> dict:
+    """Helper to create TimeSeriesConceptConfig mapping from simple dicts.
+
+    Args:
+        features: Dict mapping feature_name -> {
+            "source": str, "itemid": List[int], "aggregation": str (optional)
+        }
+
+    Returns:
+        Dict mapping feature_name -> TimeSeriesConceptConfig
+    """
+    result = {}
+    for name, config in features.items():
+        aggregation = AggregationType(config.get("aggregation", "mean"))
+        result[name] = TimeSeriesConceptConfig(
+            description=f"Test {name}",
+            units="",
+            aggregation=aggregation,
+            mimic_iv=[
+                ItemIDSource(
+                    table=config["source"],
+                    itemid=config["itemid"],
+                    value_col=config.get("value_col", "valuenum"),
+                    time_col="charttime",
+                )
+            ],
+        )
+    return result
 
 
 class TestTimeSeriesExtraction:
@@ -89,7 +120,7 @@ class TestTimeSeriesExtraction:
         """Test that feature mapping is loaded correctly from YAML with auto-detection."""
         feature_mapping = mock_extractor._load_feature_mapping("core")
 
-        # Should contain vitals from chartevents (now returns full dataset config)
+        # Should contain vitals from chartevents (now returns TimeSeriesConceptConfig)
         assert "heart_rate" in feature_mapping
         assert "sbp" in feature_mapping
         assert "dbp" in feature_mapping
@@ -102,24 +133,31 @@ class TestTimeSeriesExtraction:
         assert "glucose" in feature_mapping
         assert "creatinine" in feature_mapping
 
-        # Check structure - returns full dataset config (not just itemids)
-        assert feature_mapping["heart_rate"]["source"] == "chartevents"
-        assert feature_mapping["heart_rate"]["itemid"] == [220045]
-        assert "labevents" in feature_mapping["glucose"]["source"]
+        # Check structure - returns TimeSeriesConceptConfig with mimic_iv sources
+        hr_config = feature_mapping["heart_rate"]
+        assert isinstance(hr_config, TimeSeriesConceptConfig)
+        assert hr_config.mimic_iv is not None
+        assert len(hr_config.mimic_iv) > 0
+        assert hr_config.mimic_iv[0].table == "chartevents"
+        assert hr_config.mimic_iv[0].itemid == [220045]
+
+        glucose_config = feature_mapping["glucose"]
+        assert glucose_config.mimic_iv[0].table == "labevents"
 
     def test_load_feature_mapping_explicit_concepts_dir(self, tmp_path):
         """Test that explicit concepts_dir config works correctly."""
+        import shutil
 
         # Create explicit concepts directory
         concepts_dir = tmp_path / "my_concepts"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy the core_features.yaml to the test location
-        import shutil
-
+        # Copy the concept files to the test location
         project_root = Path(__file__).parent.parent
-        source_config = project_root / "configs" / "concepts" / "core_features.yaml"
-        shutil.copy(source_config, concepts_dir / "core_features.yaml")
+        for concept_file in ["vitals.yaml", "labs.yaml", "outputs.yaml"]:
+            source_config = project_root / "configs" / "concepts" / concept_file
+            if source_config.exists():
+                shutil.copy(source_config, concepts_dir / concept_file)
 
         # Create extractor with explicit concepts_dir
         config = ExtractorConfig(
@@ -138,57 +176,87 @@ class TestTimeSeriesExtraction:
         feature_mapping = extractor._load_feature_mapping("core")
         assert "heart_rate" in feature_mapping
         assert "sbp" in feature_mapping
-        # Check it returns full dataset config
-        assert "source" in feature_mapping["heart_rate"]
-        assert "itemid" in feature_mapping["heart_rate"]
+        # Check it returns TimeSeriesConceptConfig
+        hr_config = feature_mapping["heart_rate"]
+        assert isinstance(hr_config, TimeSeriesConceptConfig)
+        assert hr_config.mimic_iv is not None
 
     def test_extract_raw_events(self, mock_extractor, mock_chartevents_df):
         """Raw events extraction concatenates multiple sources and maps feature names."""
-        feature_mapping = {
-            "heart_rate": {"source": "chartevents", "itemid": [220045], "value_col": "valuenum"},
-            "sbp": {"source": "chartevents", "itemid": [220050, 220179], "value_col": "valuenum"},
-            "glucose": {"source": "labevents", "itemid": [50931], "value_col": "valuenum"},
-        }
-
-        chart_events = mock_chartevents_df
-        lab_events = pl.DataFrame(
+        feature_mapping = make_feature_mapping(
             {
-                "stay_id": [1],
-                "charttime": [chart_events["charttime"][0]],
-                "itemid": [50931],
-                "feature_name": ["glucose"],
-                "valuenum": [140.0],
+                "heart_rate": {"source": "chartevents", "itemid": [220045]},
+                "sbp": {"source": "chartevents", "itemid": [220050, 220179]},
+                "glucose": {"source": "labevents", "itemid": [50931]},
             }
         )
 
-        def fake_extract_source(source: str, stay_ids, features):
-            if source == "chartevents":
-                return chart_events.with_columns(
-                    pl.when(pl.col("itemid") == 220045)
-                    .then(pl.lit("heart_rate"))
-                    .otherwise(pl.lit("sbp"))
-                    .alias("feature_name")
-                ).select(["stay_id", "charttime", "feature_name", "valuenum"])
-            if source == "labevents":
-                return lab_events.select(["stay_id", "charttime", "feature_name", "valuenum"])
-            raise AssertionError("Unexpected source")
+        # Mock _extract_by_itemid to return events for each concept
+        def fake_extract_by_itemid(source, stay_ids, concept_name):
+            if concept_name == "heart_rate":
+                return pl.DataFrame(
+                    {
+                        "stay_id": [1, 1, 2],
+                        "charttime": [
+                            datetime(2020, 1, 1, 10, 5),
+                            datetime(2020, 1, 1, 10, 30),
+                            datetime(2020, 1, 2, 14, 45),
+                        ],
+                        "feature_name": ["heart_rate", "heart_rate", "heart_rate"],
+                        "valuenum": [80.0, 85.0, 75.0],
+                    }
+                )
+            elif concept_name == "sbp":
+                return pl.DataFrame(
+                    {
+                        "stay_id": [1, 1, 2, 2],
+                        "charttime": [
+                            datetime(2020, 1, 1, 11, 10),  # hour 1
+                            datetime(2020, 1, 1, 12, 45),  # hour 2
+                            datetime(2020, 1, 2, 15, 30),
+                            datetime(2020, 1, 2, 16, 15),
+                        ],
+                        "feature_name": ["sbp", "sbp", "sbp", "sbp"],
+                        "valuenum": [120.0, 115.0, 125.0, 130.0],
+                    }
+                )
+            elif concept_name == "glucose":
+                return pl.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "charttime": [datetime(2020, 1, 1, 10, 5)],
+                        "feature_name": ["glucose"],
+                        "valuenum": [140.0],
+                    }
+                )
+            return pl.DataFrame(
+                schema={
+                    "stay_id": pl.Int64,
+                    "charttime": pl.Datetime,
+                    "feature_name": pl.Utf8,
+                    "valuenum": pl.Float64,
+                }
+            )
 
-        with patch.object(
-            mock_extractor, "_extract_events_for_source", side_effect=fake_extract_source
-        ):
+        with patch.object(mock_extractor, "_extract_by_itemid", side_effect=fake_extract_by_itemid):
             result = mock_extractor._extract_raw_events([1, 2], feature_mapping)
 
         assert {"stay_id", "charttime", "feature_name", "valuenum"} <= set(result.columns)
-        assert "itemid" not in result.columns
         assert set(result["feature_name"].to_list()) == {"heart_rate", "sbp", "glucose"}
 
     def test_bin_to_hourly_grid_aggregation(self, mock_extractor, mock_stays_df):
         """Hourly binning aggregates means and sums per source defaults."""
-        feature_mapping = {
-            "heart_rate": {"source": "chartevents", "itemid": [220045]},
-            "sbp": {"source": "chartevents", "itemid": [220050]},
-            "urine_output": {"source": "outputevents", "itemid": [226559]},
-        }
+        feature_mapping = make_feature_mapping(
+            {
+                "heart_rate": {"source": "chartevents", "itemid": [220045]},
+                "sbp": {"source": "chartevents", "itemid": [220050]},
+                "urine_output": {
+                    "source": "outputevents",
+                    "itemid": [226559],
+                    "aggregation": "sum",
+                },
+            }
+        )
 
         base_time = datetime(2020, 1, 1, 10, 0)
         standardized_events = pl.DataFrame(
@@ -232,10 +300,12 @@ class TestTimeSeriesExtraction:
 
     def test_bin_to_hourly_grid_missing_values(self, mock_extractor, mock_stays_df):
         """Test that missing values are handled correctly with masks."""
-        feature_mapping = {
-            "heart_rate": {"source": "chartevents", "itemid": [220045]},
-            "sbp": {"source": "chartevents", "itemid": [220050]},
-        }
+        feature_mapping = make_feature_mapping(
+            {
+                "heart_rate": {"source": "chartevents", "itemid": [220045]},
+                "sbp": {"source": "chartevents", "itemid": [220050]},
+            }
+        )
 
         # Create data with missing hours (standardized schema)
         sparse_events = pl.DataFrame(
@@ -266,12 +336,14 @@ class TestTimeSeriesExtraction:
     def test_bin_to_hourly_grid_ensures_all_feature_columns(self, mock_extractor, mock_stays_df):
         """Test that all expected feature columns exist even if no data."""
         # Feature mapping with features that don't appear in data
-        feature_mapping = {
-            "heart_rate": {"source": "chartevents", "itemid": [220045]},
-            "sbp": {"source": "chartevents", "itemid": [220050]},
-            "resp_rate": {"source": "chartevents", "itemid": [220210]},  # Not in our test data
-            "spo2": {"source": "chartevents", "itemid": [220277]},  # Not in our test data
-        }
+        feature_mapping = make_feature_mapping(
+            {
+                "heart_rate": {"source": "chartevents", "itemid": [220045]},
+                "sbp": {"source": "chartevents", "itemid": [220050]},
+                "resp_rate": {"source": "chartevents", "itemid": [220210]},  # Not in our test data
+                "spo2": {"source": "chartevents", "itemid": [220277]},  # Not in our test data
+            }
+        )
 
         # Data with only heart_rate (standardized schema)
         minimal_events = pl.DataFrame(
@@ -345,7 +417,9 @@ class TestTimeSeriesExtraction:
 
     def test_extract_timeseries_filters_negative_hours(self, mock_extractor, mock_stays_df):
         """Test that events before ICU admission (negative hours) are filtered."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         # Create events before admission (standardized schema)
         events_with_negatives = pl.DataFrame(
@@ -374,7 +448,9 @@ class TestTimeSeriesExtraction:
 
     def test_extract_timeseries_multiple_itemids_same_feature(self, mock_extractor, mock_stays_df):
         """Test that multiple itemids map to same feature (e.g., invasive and non-invasive BP)."""
-        feature_mapping = {"sbp": {"source": "chartevents", "itemid": [220050, 220179]}}
+        feature_mapping = make_feature_mapping(
+            {"sbp": {"source": "chartevents", "itemid": [220050, 220179]}}
+        )
 
         # Events with both itemids already mapped to same feature_name (standardized schema)
         events = pl.DataFrame(
@@ -445,7 +521,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_empty_stay_list(self, mock_extractor, mock_stays_df):
         """Test extraction with empty stay list."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         # Empty events
         empty_events = pl.DataFrame(
@@ -480,7 +558,9 @@ class TestTimeSeriesEdgeCases:
             }
         )
 
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         # Events within the short stay
         events = pl.DataFrame(
@@ -505,7 +585,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_events_spanning_many_hours(self, mock_extractor, mock_stays_df):
         """Test extraction with events spanning many hours."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         # Events spanning 100 hours
         events = []
@@ -531,7 +613,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_extreme_values(self, mock_extractor, mock_stays_df):
         """Test extraction with extreme values."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         events = pl.DataFrame(
             {
@@ -556,7 +640,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_single_event(self, mock_extractor, mock_stays_df):
         """Test extraction with single event."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         events = pl.DataFrame(
             {
@@ -576,9 +662,9 @@ class TestTimeSeriesEdgeCases:
     def test_many_features(self, mock_extractor, mock_stays_df):
         """Test extraction with many features."""
         # Create feature mapping with 50 features
-        feature_mapping = {
-            f"feature_{i}": {"source": "chartevents", "itemid": [220000 + i]} for i in range(50)
-        }
+        feature_mapping = make_feature_mapping(
+            {f"feature_{i}": {"source": "chartevents", "itemid": [220000 + i]} for i in range(50)}
+        )
 
         # Create events for each feature
         events = []
@@ -604,7 +690,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_multiple_stays_different_data_density(self, mock_extractor, mock_stays_df):
         """Test extraction with stays having different data density."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         # Stay 1: Dense data (every hour)
         # Stay 2: Sparse data (every 4 hours)
@@ -647,7 +735,9 @@ class TestTimeSeriesEdgeCases:
 
     def test_events_exactly_on_hour_boundaries(self, mock_extractor, mock_stays_df):
         """Test events that occur exactly on hour boundaries."""
-        feature_mapping = {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        feature_mapping = make_feature_mapping(
+            {"heart_rate": {"source": "chartevents", "itemid": [220045]}}
+        )
 
         events = pl.DataFrame(
             {
