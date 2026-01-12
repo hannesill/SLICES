@@ -18,7 +18,7 @@ import portalocker
 import yaml
 from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
 from slices.data.config_loader import load_timeseries_concepts
 from slices.data.config_schemas import AggregationType, TimeSeriesConceptConfig
@@ -97,6 +97,10 @@ class BaseExtractor(ABC):
         self.output_dir = Path(config.output_dir)
         self.conn = duckdb.connect()  # In-memory DuckDB for queries
 
+        # Caches to avoid repeated expensive queries during batch processing
+        self._stays_cache: Optional[pl.DataFrame] = None
+        self._feature_mapping_cache: Optional[Dict[str, TimeSeriesConceptConfig]] = None
+
         # Validate parquet directory exists
         if not self.parquet_root.exists():
             raise ValueError(f"Parquet directory not found: {self.parquet_root}")
@@ -108,6 +112,32 @@ class BaseExtractor(ABC):
                 self.conn.close()
             except Exception:
                 pass  # Ignore errors during cleanup
+
+    def _get_stays_cached(self) -> pl.DataFrame:
+        """Get stays DataFrame with caching to avoid repeated queries.
+
+        This is used internally during batch processing to avoid re-querying
+        the database for each batch.
+
+        Returns:
+            Cached stays DataFrame.
+        """
+        if self._stays_cache is None:
+            self._stays_cache = self.extract_stays()
+        return self._stays_cache
+
+    def _get_feature_mapping_cached(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
+        """Get feature mapping with caching to avoid repeated YAML loading.
+
+        Args:
+            feature_set: Name of feature set to load (e.g., 'core').
+
+        Returns:
+            Cached feature mapping dictionary.
+        """
+        if self._feature_mapping_cache is None:
+            self._feature_mapping_cache = self._load_feature_mapping(feature_set)
+        return self._feature_mapping_cache
 
     def _query(self, sql: str) -> pl.DataFrame:
         """Execute SQL query on local Parquet files and return Polars DataFrame.
@@ -332,8 +362,8 @@ class BaseExtractor(ABC):
         Returns:
             Wide-format DataFrame with hourly bins and observation masks.
         """
-        # Get stay info for intime calculation
-        stays = self.extract_stays().filter(pl.col("stay_id").is_in(stay_ids))
+        # Get stay info for intime calculation (use cache to avoid repeated queries)
+        stays = self._get_stays_cached().filter(pl.col("stay_id").is_in(stay_ids))
 
         # Join with stays to get intime and calculate hour offset
         events_with_hours = (
@@ -385,12 +415,20 @@ class BaseExtractor(ABC):
                     [pl.col("valuenum").min().alias("value"), pl.lit(True).alias("observed")]
                 )
             elif agg_type == AggregationType.LAST:
+                # Sort by charttime to ensure chronological ordering before taking last
                 agg_df = grouped.agg(
-                    [pl.col("valuenum").last().alias("value"), pl.lit(True).alias("observed")]
+                    [
+                        pl.col("valuenum").sort_by("charttime").last().alias("value"),
+                        pl.lit(True).alias("observed"),
+                    ]
                 )
             elif agg_type == AggregationType.FIRST:
+                # Sort by charttime to ensure chronological ordering before taking first
                 agg_df = grouped.agg(
-                    [pl.col("valuenum").first().alias("value"), pl.lit(True).alias("observed")]
+                    [
+                        pl.col("valuenum").sort_by("charttime").first().alias("value"),
+                        pl.lit(True).alias("observed"),
+                    ]
                 )
             elif agg_type == AggregationType.ANY:
                 agg_df = grouped.agg([pl.lit(True).alias("value"), pl.lit(True).alias("observed")])
@@ -521,8 +559,8 @@ class BaseExtractor(ABC):
         # Use feature_set from config (or default to 'core')
         feature_set = self.config.feature_set
 
-        # Load feature mapping for this dataset
-        feature_mapping = self._load_feature_mapping(feature_set)
+        # Load feature mapping for this dataset (use cache for batch processing)
+        feature_mapping = self._get_feature_mapping_cached(feature_set)
 
         # Validate feature mapping is non-empty
         if not feature_mapping:
@@ -737,15 +775,26 @@ class BaseExtractor(ABC):
         seq_length = self.config.seq_length_hours
         n_features = len(feature_names)
 
-        # Get unique stay_ids from sparse data
-        stay_ids = sparse_timeseries["stay_id"].unique().to_list()
+        # Use stay_ids from stays DataFrame (not sparse_timeseries) to ensure
+        # ALL requested stays are included, even those with no observations.
+        # This prevents dimension mismatch between timeseries.parquet and labels.parquet.
+        stay_ids = stays["stay_id"].unique().to_list()
+
+        # Track which stays have data for logging
+        stays_with_data = set(sparse_timeseries["stay_id"].unique().to_list())
+        stays_without_data = set(stay_ids) - stays_with_data
+        if stays_without_data:
+            console.print(
+                f"[yellow]Warning: {len(stays_without_data)} stays have no timeseries "
+                f"observations. They will have all-NaN/all-False arrays.[/yellow]"
+            )
 
         results = []
         global_overflow_count = 0
         global_overflow_max_hour = 0
 
         for stay_id in stay_ids:
-            # Get data for this stay
+            # Get data for this stay (may be empty)
             stay_data = sparse_timeseries.filter(pl.col("stay_id") == stay_id)
 
             # Initialize dense arrays with NaN/False
@@ -1005,30 +1054,34 @@ class BaseExtractor(ABC):
         # -------------------------------------------------------------------------
         # Step 2: Extract time-series features
         # -------------------------------------------------------------------------
-        # Use progress bar for large extractions
-        if len(stay_ids) > 1000:
-            with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("({task.completed}/{task.total} stays)"),
-                TimeRemainingColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Extracting timeseries...", total=len(stay_ids))
-                sparse_timeseries = self.extract_timeseries(stay_ids)
-                progress.update(task, completed=len(stay_ids))
-        else:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task(
-                    f"Extracting timeseries for {len(stay_ids)} stays...", total=None
-                )
-                sparse_timeseries = self.extract_timeseries(stay_ids)
-                progress.update(task, completed=True)
+        console.print(f"\n[bold]Extracting timeseries for {len(stay_ids)} stays...[/bold]")
+
+        # Load feature mapping once (cached for reuse)
+        feature_set = self.config.feature_set
+        feature_mapping = self._get_feature_mapping_cached(feature_set)
+
+        if not feature_mapping:
+            raise ValueError(
+                f"No features loaded from concept set '{feature_set}' for dataset "
+                f"'{self._get_dataset_name()}'. Check that your YAML config has "
+                f"entries for this dataset under each feature."
+            )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            # Step 2a: Extract raw events from source tables
+            task = progress.add_task("Querying raw events from Parquet files...", total=None)
+            raw_events = self._extract_raw_events(stay_ids, feature_mapping)
+            progress.update(task, description="[green]✓[/green] Raw events extracted")
+
+            # Step 2b: Bin to hourly grid
+            task2 = progress.add_task("Binning to hourly grid...", total=None)
+            sparse_timeseries = self._bin_to_hourly_grid(raw_events, stay_ids, feature_mapping)
+            progress.update(task2, description="[green]✓[/green] Hourly binning complete")
 
         # Get feature names (columns without _mask suffix, excluding stay_id and hour)
         feature_names = [
