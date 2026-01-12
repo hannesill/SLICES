@@ -191,36 +191,37 @@ class TestTimeSeriesExtraction:
             }
         )
 
-        # Mock _extract_by_itemid to return events for each concept
-        def fake_extract_by_itemid(source, stay_ids, concept_name):
-            if concept_name == "heart_rate":
+        # Mock _extract_by_itemid_batch to return events for each table batch
+        def fake_extract_by_itemid_batch(
+            table, value_col, time_col, transform, itemids, itemid_to_feature, stay_ids
+        ):
+            if table == "chartevents":
+                # Return events for heart_rate and sbp (both from chartevents)
                 return pl.DataFrame(
                     {
-                        "stay_id": [1, 1, 2],
+                        "stay_id": [1, 1, 2, 1, 1, 2, 2],
                         "charttime": [
                             datetime(2020, 1, 1, 10, 5),
                             datetime(2020, 1, 1, 10, 30),
                             datetime(2020, 1, 2, 14, 45),
-                        ],
-                        "feature_name": ["heart_rate", "heart_rate", "heart_rate"],
-                        "valuenum": [80.0, 85.0, 75.0],
-                    }
-                )
-            elif concept_name == "sbp":
-                return pl.DataFrame(
-                    {
-                        "stay_id": [1, 1, 2, 2],
-                        "charttime": [
-                            datetime(2020, 1, 1, 11, 10),  # hour 1
-                            datetime(2020, 1, 1, 12, 45),  # hour 2
+                            datetime(2020, 1, 1, 11, 10),
+                            datetime(2020, 1, 1, 12, 45),
                             datetime(2020, 1, 2, 15, 30),
                             datetime(2020, 1, 2, 16, 15),
                         ],
-                        "feature_name": ["sbp", "sbp", "sbp", "sbp"],
-                        "valuenum": [120.0, 115.0, 125.0, 130.0],
+                        "feature_name": [
+                            "heart_rate",
+                            "heart_rate",
+                            "heart_rate",
+                            "sbp",
+                            "sbp",
+                            "sbp",
+                            "sbp",
+                        ],
+                        "valuenum": [80.0, 85.0, 75.0, 120.0, 115.0, 125.0, 130.0],
                     }
                 )
-            elif concept_name == "glucose":
+            elif table == "labevents":
                 return pl.DataFrame(
                     {
                         "stay_id": [1],
@@ -238,7 +239,9 @@ class TestTimeSeriesExtraction:
                 }
             )
 
-        with patch.object(mock_extractor, "_extract_by_itemid", side_effect=fake_extract_by_itemid):
+        with patch.object(
+            mock_extractor, "_extract_by_itemid_batch", side_effect=fake_extract_by_itemid_batch
+        ):
             result = mock_extractor._extract_raw_events([1, 2], feature_mapping)
 
         assert {"stay_id", "charttime", "feature_name", "valuenum"} <= set(result.columns)

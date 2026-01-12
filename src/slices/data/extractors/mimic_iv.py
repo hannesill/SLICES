@@ -1,6 +1,6 @@
 """MIMIC-IV data extractor using DuckDB on local Parquet files."""
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import polars as pl
 from rich.console import Console
@@ -134,6 +134,9 @@ class MIMICIVExtractor(BaseExtractor):
     ) -> pl.DataFrame:
         """Extract raw events for all configured sources (MIMIC-IV specific).
 
+        Optimized to batch all itemids for the same table into a single query,
+        avoiding repeated scans of large Parquet files like chartevents.
+
         Args:
             stay_ids: List of ICU stay IDs to extract.
             feature_mapping: Dict mapping feature_name -> TimeSeriesConceptConfig.
@@ -145,29 +148,51 @@ class MIMICIVExtractor(BaseExtractor):
                 - feature_name: Canonical feature name
                 - valuenum: Numeric value
         """
-        raw_event_batches: List[pl.DataFrame] = []
+        # Group sources by table for batched queries (avoid repeated Parquet scans)
+        # Key: (table, value_col, time_col, transform) -> List of (itemids, feature_name)
+        table_batches: Dict[tuple, List[tuple]] = {}
 
-        # Process each concept's extraction sources
         for feature_name, config in feature_mapping.items():
             sources = config.mimic_iv
             if sources is None:
                 continue
 
             for source in sources:
-                # Currently only itemid extraction is implemented for MIMIC-IV
                 if isinstance(source, ItemIDSource):
-                    batch = self._extract_by_itemid(
-                        source=source,
-                        stay_ids=stay_ids,
-                        concept_name=feature_name,
-                    )
-                    if not batch.is_empty():
-                        raw_event_batches.append(batch)
+                    # Group by table and columns to batch itemids
+                    key = (source.table, source.value_col, source.time_col, source.transform)
+                    if key not in table_batches:
+                        table_batches[key] = []
+                    table_batches[key].append((source.itemid, feature_name))
                 else:
                     console.print(
                         f"[yellow]Warning: Extraction type '{source.type}' not yet "
                         f"implemented for MIMIC-IV. Skipping source for {feature_name}[/yellow]"
                     )
+
+        raw_event_batches: List[pl.DataFrame] = []
+
+        # Execute one query per table (batched itemids)
+        for (table, value_col, time_col, transform), items in table_batches.items():
+            # Collect all itemids and build itemid->feature_name mapping
+            all_itemids: List[int] = []
+            itemid_to_feature: Dict[int, str] = {}
+            for itemids, feature_name in items:
+                for itemid in itemids:
+                    all_itemids.append(itemid)
+                    itemid_to_feature[itemid] = feature_name
+
+            batch = self._extract_by_itemid_batch(
+                table=table,
+                value_col=value_col,
+                time_col=time_col,
+                transform=transform,
+                itemids=all_itemids,
+                itemid_to_feature=itemid_to_feature,
+                stay_ids=stay_ids,
+            )
+            if not batch.is_empty():
+                raw_event_batches.append(batch)
 
         if not raw_event_batches:
             result = pl.DataFrame(
@@ -221,6 +246,8 @@ class MIMICIVExtractor(BaseExtractor):
         itemids_str = ",".join(map(str, source.itemid))
 
         # labevents doesn't have stay_id directly - needs join with icustays
+        # CRITICAL: Filter labs to only those within the ICU stay time window
+        # to prevent data leakage from labs drawn before admission or after discharge
         if source.table == "labevents":
             icustays_path = self._parquet_path("icu", "icustays")
             sql = f"""
@@ -238,6 +265,8 @@ class MIMICIVExtractor(BaseExtractor):
                 i.stay_id IN ({stay_ids_str})
                 AND l.itemid IN ({itemids_str})
                 AND l.{source.value_col} IS NOT NULL
+                AND l.{source.time_col} >= i.intime
+                AND l.{source.time_col} <= i.outtime
             ORDER BY
                 i.stay_id, l.{source.time_col}
             """
@@ -278,6 +307,123 @@ class MIMICIVExtractor(BaseExtractor):
             raw_events = raw_events.with_columns(pl.lit(concept_name).alias("feature_name")).select(
                 ["stay_id", "charttime", "feature_name", "valuenum"]
             )
+
+        return raw_events
+
+    def _extract_by_itemid_batch(
+        self,
+        table: str,
+        value_col: str,
+        time_col: str,
+        transform: Optional[str],
+        itemids: List[int],
+        itemid_to_feature: Dict[int, str],
+        stay_ids: List[int],
+    ) -> pl.DataFrame:
+        """Extract events for multiple itemids in a single query (optimized).
+
+        This batches all itemids for a table into one query to avoid repeated
+        Parquet file scans.
+
+        Args:
+            table: Source table name (chartevents, labevents, etc.).
+            value_col: Column containing the value.
+            time_col: Column containing the timestamp.
+            transform: Optional transform to apply to values.
+            itemids: List of all itemids to extract.
+            itemid_to_feature: Mapping from itemid to feature name.
+            stay_ids: List of ICU stay IDs to extract.
+
+        Returns:
+            DataFrame with columns: stay_id, charttime, feature_name, valuenum.
+        """
+        # Map table names to schema paths
+        table_to_path = {
+            "chartevents": ("icu", "chartevents"),
+            "labevents": ("hosp", "labevents"),
+            "outputevents": ("icu", "outputevents"),
+            "inputevents": ("icu", "inputevents"),
+        }
+
+        if table not in table_to_path:
+            raise ValueError(
+                f"Unsupported table '{table}' for MIMIC-IV extractor. "
+                f"Supported: {list(table_to_path.keys())}"
+            )
+
+        schema, table_name = table_to_path[table]
+        parquet_path = self._parquet_path(schema, table_name)
+        stay_ids_str = ",".join(map(str, stay_ids))
+        itemids_str = ",".join(map(str, itemids))
+
+        # labevents needs join with icustays (doesn't have stay_id directly)
+        if table == "labevents":
+            icustays_path = self._parquet_path("icu", "icustays")
+            sql = f"""
+            SELECT
+                i.stay_id,
+                l.{time_col} AS charttime,
+                l.itemid,
+                CAST(l.{value_col} AS DOUBLE) AS valuenum
+            FROM
+                read_parquet('{parquet_path}') AS l
+            INNER JOIN
+                read_parquet('{icustays_path}') AS i
+                ON l.hadm_id = i.hadm_id
+            WHERE
+                i.stay_id IN ({stay_ids_str})
+                AND l.itemid IN ({itemids_str})
+                AND l.{value_col} IS NOT NULL
+                AND l.{time_col} >= i.intime
+                AND l.{time_col} <= i.outtime
+            ORDER BY
+                i.stay_id, l.{time_col}
+            """
+        else:
+            # chartevents and outputevents have stay_id directly
+            sql = f"""
+            SELECT
+                stay_id,
+                {time_col} AS charttime,
+                itemid,
+                CAST({value_col} AS DOUBLE) AS valuenum
+            FROM
+                read_parquet('{parquet_path}')
+            WHERE
+                stay_id IN ({stay_ids_str})
+                AND itemid IN ({itemids_str})
+                AND {value_col} IS NOT NULL
+            ORDER BY
+                stay_id, {time_col}
+            """
+
+        raw_events = self._query(sql)
+
+        if raw_events.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "stay_id": pl.Int64,
+                    "charttime": pl.Datetime,
+                    "feature_name": pl.Utf8,
+                    "valuenum": pl.Float64,
+                }
+            )
+
+        # Apply transform if specified
+        if transform:
+            transform_func = get_transform(transform)
+            try:
+                raw_events = raw_events.with_columns(
+                    transform_func(pl.col("valuenum")).alias("valuenum")
+                )
+            except TypeError:
+                # Fall back to DataFrame transform
+                raw_events = transform_func(raw_events, {"itemid": itemids})
+
+        # Map itemid to feature_name using Polars replace
+        raw_events = raw_events.with_columns(
+            pl.col("itemid").replace_strict(itemid_to_feature, default=None).alias("feature_name")
+        ).select(["stay_id", "charttime", "feature_name", "valuenum"])
 
         return raw_events
 

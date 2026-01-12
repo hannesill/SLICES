@@ -350,8 +350,9 @@ class TestCreateDenseTimeseries:
         assert "timeseries" in result.columns
         assert "mask" in result.columns
 
-        # Check shapes (should have 2 stays)
-        assert len(result) == 2
+        # Check shapes (should have 3 stays - all stays in stays DataFrame are included,
+        # even those without data, to prevent dimension mismatch with labels)
+        assert len(result) == 3
 
         # Check timeseries shape for stay 1
         stay1 = result.filter(pl.col("stay_id") == 1)
@@ -409,7 +410,11 @@ class TestCreateDenseTimeseries:
         assert np.isnan(ts1[1][0])  # Hour 1 missing
 
     def test_dense_conversion_empty_stays(self, temp_parquet_structure):
-        """Test dense conversion with no data for some stays."""
+        """Test dense conversion with no data for some stays.
+
+        All stays should be included in output, even those with no observations,
+        to prevent dimension mismatch between timeseries.parquet and labels.parquet.
+        """
         config = ExtractorConfig(
             parquet_root=str(temp_parquet_structure),
             seq_length_hours=4,
@@ -428,14 +433,26 @@ class TestCreateDenseTimeseries:
             }
         )
 
-        stays = extractor.extract_stays()
+        stays = extractor.extract_stays()  # Returns 3 stays
         feature_names = ["heart_rate", "sbp"]
 
         result = extractor._create_dense_timeseries(sparse, stays, feature_names)
 
-        # Only stay 1 should be in result (stays with no data are not included)
-        assert len(result) == 1
-        assert result["stay_id"][0] == 1
+        # ALL stays should be included (even those without observations)
+        assert len(result) == 3
+        assert set(result["stay_id"].to_list()) == {1, 2, 3}
+
+        # Stay 1 should have data
+        stay1 = result.filter(pl.col("stay_id") == 1)
+        assert stay1["mask"][0][0][0] is True  # First hour, first feature observed
+
+        # Stays 2 and 3 should have all-NaN values and all-False masks
+        stay2 = result.filter(pl.col("stay_id") == 2)
+        stay3 = result.filter(pl.col("stay_id") == 3)
+        for stay in [stay2, stay3]:
+            mask = stay["mask"][0]
+            # All mask values should be False for stays with no data
+            assert all(not m for hour in mask for m in hour)
 
     def test_dense_conversion_preserves_mask(self, temp_parquet_structure):
         """Test that observation masks are correctly preserved."""
