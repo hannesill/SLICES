@@ -24,6 +24,7 @@ dependencies = [
     "seaborn>=0.13.2",
     "pre-commit>=4.5.0",
     "portalocker>=2.8.0",
+    "m4-infra>=0.0.0.dev0",
 ]
 
 [project.optional-dependencies]

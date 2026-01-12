@@ -497,7 +497,7 @@ class TestSchemaValidation:
         """Test that _extract_raw_events validates schema before returning."""
         from slices.data.config_schemas import ItemIDSource, TimeSeriesConceptConfig
 
-        # Mock _extract_by_itemid to return valid data
+        # Mock _extract_by_itemid_batch to return valid data
         valid_df = pl.DataFrame(
             {
                 "stay_id": [1, 2],
@@ -522,7 +522,7 @@ class TestSchemaValidation:
             )
         }
 
-        with patch.object(mock_extractor, "_extract_by_itemid", return_value=valid_df):
+        with patch.object(mock_extractor, "_extract_by_itemid_batch", return_value=valid_df):
             # Should not raise any exception
             result = mock_extractor._extract_raw_events(
                 stay_ids=[1, 2], feature_mapping=feature_mapping
@@ -533,7 +533,7 @@ class TestSchemaValidation:
         """Test that schema validation catches Polars version changes."""
         from slices.data.config_schemas import ItemIDSource, TimeSeriesConceptConfig
 
-        # Mock _extract_by_itemid to return data with wrong types
+        # Mock _extract_by_itemid_batch to return data with wrong types
         invalid_df = pl.DataFrame(
             {
                 "stay_id": ["1", "2"],  # Wrong type: should be Int64
@@ -558,7 +558,7 @@ class TestSchemaValidation:
             )
         }
 
-        with patch.object(mock_extractor, "_extract_by_itemid", return_value=invalid_df):
+        with patch.object(mock_extractor, "_extract_by_itemid_batch", return_value=invalid_df):
             with pytest.raises(ValueError, match="has type.*expected"):
                 mock_extractor._extract_raw_events(
                     stay_ids=[1, 2],
