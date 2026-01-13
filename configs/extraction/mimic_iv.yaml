@@ -44,6 +44,7 @@ min_stay_hours: 6  # Minimum ICU stay length to include
 
 # Processing settings
 hourly_aggregation: mean  # mean | median | last
+batch_size: 5000  # Number of stays per batch (reduce if OOM occurs)
 
 # Tasks to extract labels for
 tasks:
