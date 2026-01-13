@@ -197,15 +197,13 @@ cython_debug/
 # AI
 .cursorignore
 .cursorindexingignore
+.cursorrules
 .claude/
 
 # Marimo
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
-# Cursor rules
-.cursorrules
 
 # Notes
 notes/
@@ -218,3 +216,6 @@ wandb/
 
 # PyTorch Lightning
 lightning_logs/
+
+# Thesis stuff
+notebooks/
