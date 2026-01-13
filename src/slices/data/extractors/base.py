@@ -18,7 +18,13 @@ import portalocker
 import yaml
 from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 from slices.data.config_loader import load_timeseries_concepts
 from slices.data.config_schemas import AggregationType, TimeSeriesConceptConfig
@@ -42,6 +48,7 @@ class ExtractorConfig(BaseModel):
         tasks_dir: Path to task config directory (auto-detected if None).
         tasks: List of task names to extract labels for.
         min_stay_hours: Minimum ICU stay length to include (must be >= 0).
+        batch_size: Number of stays to process in each batch (for memory efficiency).
     """
 
     parquet_root: str
@@ -55,6 +62,7 @@ class ExtractorConfig(BaseModel):
         default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"]
     )
     min_stay_hours: int = Field(default=6, ge=0)
+    batch_size: int = Field(default=5000, gt=0)
 
     model_config = {"extra": "forbid"}
 
@@ -1052,9 +1060,14 @@ class BaseExtractor(ABC):
         self._validate_stays(stays_filtered)
 
         # -------------------------------------------------------------------------
-        # Step 2: Extract time-series features
+        # Step 2: Extract time-series features (batched for memory efficiency)
         # -------------------------------------------------------------------------
-        console.print(f"\n[bold]Extracting timeseries for {len(stay_ids)} stays...[/bold]")
+        batch_size = self.config.batch_size
+        n_batches = (len(stay_ids) + batch_size - 1) // batch_size
+        console.print(
+            f"\n[bold]Extracting timeseries for {len(stay_ids)} stays "
+            f"in {n_batches} batches (batch_size={batch_size})...[/bold]"
+        )
 
         # Load feature mapping once (cached for reuse)
         feature_set = self.config.feature_set
@@ -1067,34 +1080,65 @@ class BaseExtractor(ABC):
                 f"entries for this dataset under each feature."
             )
 
+        # Process stays in batches to avoid OOM
+        sparse_batches: List[pl.DataFrame] = []
+        feature_names: List[str] = []
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            # Step 2a: Extract raw events from source tables
-            task = progress.add_task("Querying raw events from Parquet files...", total=None)
-            raw_events = self._extract_raw_events(stay_ids, feature_mapping)
-            progress.update(task, description="[green]✓[/green] Raw events extracted")
+            task = progress.add_task("Processing batches...", total=n_batches)
 
-            # Step 2b: Bin to hourly grid
-            task2 = progress.add_task("Binning to hourly grid...", total=None)
-            sparse_timeseries = self._bin_to_hourly_grid(raw_events, stay_ids, feature_mapping)
-            progress.update(task2, description="[green]✓[/green] Hourly binning complete")
+            for batch_idx in range(n_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min((batch_idx + 1) * batch_size, len(stay_ids))
+                batch_stay_ids = stay_ids[start_idx:end_idx]
 
-        # Get feature names (columns without _mask suffix, excluding stay_id and hour)
-        feature_names = [
-            col
-            for col in sparse_timeseries.columns
-            if col not in ["stay_id", "hour"] and not col.endswith("_mask")
-        ]
+                # Step 2a: Extract raw events for this batch
+                raw_events = self._extract_raw_events(batch_stay_ids, feature_mapping)
+
+                # Step 2b: Bin to hourly grid for this batch
+                sparse_batch = self._bin_to_hourly_grid(raw_events, batch_stay_ids, feature_mapping)
+                sparse_batches.append(sparse_batch)
+
+                # Extract feature names from first non-empty batch
+                if not feature_names and not sparse_batch.is_empty():
+                    feature_names = [
+                        col
+                        for col in sparse_batch.columns
+                        if col not in ["stay_id", "hour"] and not col.endswith("_mask")
+                    ]
+
+                progress.update(task, advance=1)
+
+        # Concatenate all batches (use how="diagonal" to handle schema differences)
+        # Different batches may have different columns present depending on data
+        if sparse_batches:
+            sparse_timeseries = pl.concat(sparse_batches, how="diagonal")
+        else:
+            # Empty result with expected schema
+            sparse_timeseries = pl.DataFrame(
+                schema={
+                    "stay_id": pl.Int64,
+                    "hour": pl.Int32,
+                }
+            )
+
+        # If no feature names were found, get them from feature mapping
+        if not feature_names:
+            feature_names = list(feature_mapping.keys())
+
         console.print(f"Extracted {len(feature_names)} features: {feature_names}")
 
         # Validate timeseries data
         self._validate_timeseries(sparse_timeseries, stay_ids, feature_names)
 
-        # Convert to dense representation
+        # Convert to dense representation (also in batches)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
