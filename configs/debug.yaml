@@ -1,0 +1,49 @@
+# Debug configuration for pipeline inspection and embedding analysis
+#
+# Example usage:
+#   # Inspect already-processed data (post-hoc):
+#   uv run python scripts/debug/inspect_pipeline.py processed_dir=data/processed/mimic-iv
+#
+#   # Inspect pipeline stages (re-runs extraction with capture):
+#   uv run python scripts/debug/inspect_pipeline_stages.py \
+#       parquet_root=/path/to/mimic-iv-parquet \
+#       processed_dir=data/processed/mimic-iv
+#
+#   # Analyze embeddings:
+#   uv run python scripts/debug/inspect_embeddings.py checkpoint=outputs/encoder.pt
+
+# Data paths
+parquet_root: null  # Path to source MIMIC-IV parquet files (for staged inspection)
+processed_dir: null  # Path to processed data directory (for sentinel selection or post-hoc inspection)
+output_dir: null  # Default: processed_dir/debug_snapshots or staged_snapshots
+
+# Sentinel patient selection
+sentinel:
+  n_per_stratum: 3
+  seed: 42
+  # Criteria: los_days, age by default
+  # Override with sentinel.criteria for custom
+
+# Specific stay IDs (overrides sentinel selection)
+stay_ids: null  # e.g., [30118103, 30145082]
+
+# Embedding analysis
+checkpoint: null  # Path to encoder checkpoint (.pt file)
+embeddings_file: null  # Path to pre-computed embeddings (.npz or .pt)
+max_samples: 5000  # Max samples for embedding extraction
+
+# Extraction options (for staged inspection)
+feature_set: core  # Feature set to extract (core or extended)
+seq_length_hours: 48  # Sequence length for dense timeseries
+tasks:  # Tasks for label extraction
+  - mortality_24h
+  - mortality_48h
+  - mortality_hospital
+
+# Output options
+plots: false  # Generate visualization plots
+max_hours: 48  # Max hours for timeseries export
+flatten_timeseries: true  # Convert nested arrays to long format
+
+# General
+seed: 42
