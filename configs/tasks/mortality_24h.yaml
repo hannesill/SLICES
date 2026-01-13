@@ -1,5 +1,5 @@
 # 24-hour mortality prediction task
-# Predict if patient will die within 24 hours of ICU admission
+# Predict if patient will die in the next 24 hours
 
 task_name: mortality_24h
 task_type: binary_classification
