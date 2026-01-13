@@ -101,7 +101,7 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     return logger
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="pretrain")
+@hydra.main(version_base=None, config_path="../../configs", config_name="pretrain")
 def main(cfg: DictConfig) -> None:
     """Run SSL pretraining.
 
