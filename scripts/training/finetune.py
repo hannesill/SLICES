@@ -112,7 +112,7 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     return logger
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="finetune")
+@hydra.main(version_base=None, config_path="../../configs", config_name="finetune")
 def main(cfg: DictConfig) -> None:
     """Run downstream task finetuning.
 
