@@ -4,14 +4,49 @@ Loads preprocessed Parquet files created by the extraction pipeline and
 returns (timeseries, mask, labels, static_features) tuples for training.
 """
 
-import math
+import hashlib
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import numpy as np
 import polars as pl
 import torch
 import yaml
 from torch.utils.data import Dataset
+from tqdm import tqdm
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+# Constants
+MIN_STD_THRESHOLD = 1e-6  # Minimum standard deviation to avoid division by zero
+LARGE_DATASET_WARNING_THRESHOLD = 100_000  # Warn for datasets larger than this
+TQDM_MIN_ITEMS = 1000  # Only show progress bar for collections larger than this
+
+
+def _maybe_tqdm(iterable, desc: str = "", unit: str = "it", disable: bool = False):
+    """Conditionally wrap iterable with tqdm progress bar.
+
+    Only shows progress bar for large collections to reduce noise.
+
+    Args:
+        iterable: The iterable to wrap.
+        desc: Description for the progress bar.
+        unit: Unit name for the progress bar.
+        disable: Force disable the progress bar.
+
+    Returns:
+        The iterable, possibly wrapped with tqdm.
+    """
+    try:
+        length = len(iterable)
+    except TypeError:
+        length = TQDM_MIN_ITEMS + 1  # Assume large if length unknown
+
+    if disable or length < TQDM_MIN_ITEMS:
+        return iterable
+    return tqdm(iterable, desc=desc, unit=unit)
 
 
 def _log_label_filtering(
@@ -21,7 +56,7 @@ def _log_label_filtering(
     kept_count: int,
     removal_pct: float,
 ) -> None:
-    """Log label filtering results to console.
+    """Log label filtering results.
 
     Args:
         task_name: Name of the task with missing labels.
@@ -30,24 +65,11 @@ def _log_label_filtering(
         kept_count: Number of samples kept.
         removal_pct: Percentage of samples removed.
     """
-    try:
-        from rich.console import Console
-
-        console = Console()
-        console.print(
-            f"[yellow]⚠️  Label Filtering for task '{task_name}'[/yellow]\n"
-            f"  Original samples: {original_count:,}\n"
-            f"  Removed (missing labels): {removed_count:,} ({removal_pct:.1f}%)\n"
-            f"  Kept: {kept_count:,}\n"
-        )
-    except ImportError:
-        # Fallback if rich is not available
-        print(
-            f"Warning: Label Filtering for task '{task_name}'\n"
-            f"  Original samples: {original_count}\n"
-            f"  Removed (missing labels): {removed_count} ({removal_pct:.1f}%)\n"
-            f"  Kept: {kept_count}"
-        )
+    logger.warning(
+        f"Label Filtering for task '{task_name}': "
+        f"Original={original_count:,}, Removed={removed_count:,} ({removal_pct:.1f}%), "
+        f"Kept={kept_count:,}"
+    )
 
 
 class ICUDataset(Dataset):
@@ -80,6 +102,7 @@ class ICUDataset(Dataset):
         impute_strategy: str = "forward_fill",
         train_indices: Optional[List[int]] = None,
         handle_missing_labels: str = "filter",
+        _excluded_stay_ids: Optional[Set[int]] = None,
     ) -> None:
         """Initialize dataset from extracted Parquet files.
 
@@ -98,6 +121,9 @@ class ICUDataset(Dataset):
                                   is specified. Options:
                                   - 'filter': Remove samples with missing labels (default)
                                   - 'raise': Raise ValueError if any labels are missing
+            _excluded_stay_ids: Internal parameter. Set of stay_ids already filtered
+                               by DataModule. If provided, these stays will be excluded
+                               from the dataset to maintain index consistency.
         """
         self.data_dir = Path(data_dir)
         self.task_name = task_name
@@ -105,6 +131,7 @@ class ICUDataset(Dataset):
         self.impute_strategy = impute_strategy
         self.train_indices = train_indices
         self.handle_missing_labels = handle_missing_labels
+        self._excluded_stay_ids = _excluded_stay_ids or set()
 
         if handle_missing_labels not in ("filter", "raise"):
             raise ValueError(
@@ -150,43 +177,73 @@ class ICUDataset(Dataset):
 
     def _load_data(self) -> None:
         """Load data from Parquet files into memory."""
+        logger.info("Loading data from Parquet files...")
+
         # Load timeseries (dense format with nested lists)
         timeseries_path = self.data_dir / "timeseries.parquet"
+        logger.debug(f"Loading timeseries from {timeseries_path.name}")
         self.timeseries_df = pl.read_parquet(timeseries_path)
 
         # Warn for large datasets that may cause memory issues
         n_stays = len(self.timeseries_df)
-        if n_stays > 100000:
-            import warnings
-
-            warnings.warn(
+        if n_stays > LARGE_DATASET_WARNING_THRESHOLD:
+            logger.warning(
                 f"Large dataset detected ({n_stays:,} stays). "
-                "Loading entire dataset into memory. "
-                "Consider using chunked loading for datasets > 200K stays.",
-                UserWarning,
+                "Loading entire dataset into memory."
             )
 
         # Load static features
         static_path = self.data_dir / "static.parquet"
+        logger.debug(f"Loading static features from {static_path.name}")
         self.static_df = pl.read_parquet(static_path)
 
         # Load labels
         labels_path = self.data_dir / "labels.parquet"
+        logger.debug(f"Loading labels from {labels_path.name}")
         self.labels_df = pl.read_parquet(labels_path)
 
+        # Pre-filter excluded stays if provided (from DataModule)
+        if self._excluded_stay_ids:
+            logger.debug(f"Pre-filtering {len(self._excluded_stay_ids):,} excluded stays")
+            self.timeseries_df = self.timeseries_df.filter(
+                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
+            )
+            self.static_df = self.static_df.filter(
+                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
+            )
+            self.labels_df = self.labels_df.filter(
+                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
+            )
+            logger.debug(f"Filtered down to {len(self.timeseries_df):,} stays")
+
         # Create stay_id -> index mapping
+        logger.debug("Building stay_id index mapping")
         self.stay_ids = self.timeseries_df["stay_id"].to_list()
         self.stay_id_to_idx = {sid: idx for idx, sid in enumerate(self.stay_ids)}
+        logger.info(f"Loaded {len(self.stay_ids):,} stays")
 
-        # Pre-extract raw arrays
-        raw_timeseries = self.timeseries_df["timeseries"].to_list()
-        raw_masks = self.timeseries_df["mask"].to_list()
+        # Try to load cached preprocessed tensors first (big speedup on subsequent runs)
+        cached_tensors = self._load_cached_tensors(self.train_indices)
+        if cached_tensors is not None:
+            # Use cached tensors (stacked format)
+            self._timeseries_tensor = cached_tensors["timeseries_tensor"]
+            self._mask_tensor = cached_tensors["mask_tensor"]
+            self.feature_means = cached_tensors["feature_means"]
+            self.feature_stds = cached_tensors["feature_stds"]
+            logger.info("Using cached preprocessed tensors")
+        else:
+            # Pre-extract raw arrays
+            raw_timeseries = self.timeseries_df["timeseries"].to_list()
+            raw_masks = self.timeseries_df["mask"].to_list()
 
-        # Try to load existing normalization stats (for reproducibility)
-        cached_stats = self._load_normalization_stats(self.train_indices)
+            # Try to load existing normalization stats (for reproducibility)
+            cached_stats = self._load_normalization_stats(self.train_indices)
 
-        # Pre-compute tensors for all samples (much faster __getitem__)
-        self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
+            # Pre-compute tensors for all samples (much faster __getitem__)
+            self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
+
+            # Save preprocessed tensors to cache for next run
+            self._save_cached_tensors(self.train_indices)
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
@@ -201,7 +258,7 @@ class ICUDataset(Dataset):
         """Pre-compute all tensors at initialization for fast __getitem__.
 
         This converts raw nested lists to tensors and applies imputation/normalization
-        once, rather than on every access.
+        once, rather than on every access. Uses vectorized operations for speed.
 
         IMPORTANT: If train_indices is provided, normalization statistics are computed
         ONLY on training samples to prevent data leakage from validation/test sets.
@@ -218,53 +275,67 @@ class ICUDataset(Dataset):
                          these instead of recomputing (for reproducibility).
         """
         n_samples = len(raw_timeseries)
+        logger.info(f"Preprocessing {n_samples:,} samples...")
 
-        # First pass: convert to tensors and compute normalization stats
-        timeseries_list = []
-        mask_list = []
+        # =====================================================================
+        # Step 1: Vectorized conversion from nested lists to tensors
+        # =====================================================================
+        logger.debug("[1/3] Converting to tensors...")
 
-        # For computing mean/std on observed values only
-        observed_sums = torch.zeros(self.n_features)
-        observed_sq_sums = torch.zeros(self.n_features)
-        observed_counts = torch.zeros(self.n_features)
+        # Convert all samples to numpy arrays in batches for memory efficiency
+        batch_size = 10000
+        all_timeseries = []
+        all_masks = []
 
-        # Determine which indices to use for statistics computation
-        # If train_indices is provided, ONLY use those for normalization stats
-        # Otherwise, use ALL samples (backwards compatible with existing code)
-        indices_for_stats = (
-            set(train_indices) if train_indices is not None else set(range(n_samples))
-        )
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        batch_iter = range(0, n_samples, batch_size)
+        if n_batches >= 10:  # Only show progress for many batches
+            batch_iter = tqdm(batch_iter, desc="  Converting batches", unit="batch")
 
-        # If cached stats exist, skip computation
-        should_compute_stats = cached_stats is None and self.normalize
+        for batch_start in batch_iter:
+            batch_end = min(batch_start + batch_size, n_samples)
+            batch_ts = []
+            batch_mask = []
 
-        for i in range(n_samples):
-            ts_data = raw_timeseries[i]
-            mask_data = raw_masks[i]
-            actual_len = min(len(ts_data), self.seq_length)
+            for i in range(batch_start, batch_end):
+                ts_data = raw_timeseries[i]
+                mask_data = raw_masks[i]
+                actual_len = len(ts_data)
 
-            # Initialize tensors
-            ts_tensor = torch.full((self.seq_length, self.n_features), float("nan"))
-            mask_tensor = torch.zeros((self.seq_length, self.n_features), dtype=torch.bool)
+                # Pad or truncate to seq_length
+                if actual_len >= self.seq_length:
+                    # Truncate
+                    ts_arr = np.array(ts_data[: self.seq_length], dtype=np.float32)
+                    mask_arr = np.array(mask_data[: self.seq_length], dtype=bool)
+                else:
+                    # Pad with NaN / False
+                    ts_arr = np.full((self.seq_length, self.n_features), np.nan, dtype=np.float32)
+                    mask_arr = np.zeros((self.seq_length, self.n_features), dtype=bool)
+                    ts_arr[:actual_len] = np.array(ts_data, dtype=np.float32)
+                    mask_arr[:actual_len] = np.array(mask_data, dtype=bool)
 
-            # Fill from raw data
-            for t in range(actual_len):
-                for f in range(self.n_features):
-                    val = ts_data[t][f]
-                    mask_val = mask_data[t][f]
-                    mask_tensor[t, f] = mask_val
-                    if val is not None and not math.isnan(val):
-                        ts_tensor[t, f] = val
-                        # Only accumulate stats for training set samples if computing
-                        if should_compute_stats and mask_val and i in indices_for_stats:
-                            observed_sums[f] += val
-                            observed_sq_sums[f] += val * val
-                            observed_counts[f] += 1
+                batch_ts.append(ts_arr)
+                batch_mask.append(mask_arr)
 
-            timeseries_list.append(ts_tensor)
-            mask_list.append(mask_tensor)
+            all_timeseries.extend(batch_ts)
+            all_masks.extend(batch_mask)
 
-        # Compute mean and std from observed values or load from cache
+        # Stack into single arrays
+        timeseries_np = np.stack(all_timeseries)  # (n_samples, seq_len, n_features)
+        masks_np = np.stack(all_masks)  # (n_samples, seq_len, n_features)
+
+        # Convert to tensors
+        timeseries_tensor = torch.from_numpy(timeseries_np)  # (n_samples, seq_len, n_features)
+        masks_tensor = torch.from_numpy(masks_np)  # (n_samples, seq_len, n_features)
+
+        # Free numpy arrays
+        del timeseries_np, masks_np, all_timeseries, all_masks
+
+        # =====================================================================
+        # Step 2: Compute normalization statistics (vectorized)
+        # =====================================================================
+        logger.debug("[2/3] Computing normalization statistics...")
+
         self.feature_means = torch.zeros(self.n_features)
         self.feature_stds = torch.ones(self.n_features)
 
@@ -272,34 +343,174 @@ class ICUDataset(Dataset):
             # Use cached statistics for reproducibility
             self.feature_means = torch.tensor(cached_stats["feature_means"], dtype=torch.float32)
             self.feature_stds = torch.tensor(cached_stats["feature_stds"], dtype=torch.float32)
-        elif should_compute_stats:
-            # Compute stats from training data
-            for f in range(self.n_features):
-                if observed_counts[f] > 0:
-                    mean = observed_sums[f] / observed_counts[f]
-                    variance = (observed_sq_sums[f] / observed_counts[f]) - (mean * mean)
-                    std = math.sqrt(max(variance, 0))
-                    self.feature_means[f] = mean
-                    self.feature_stds[f] = std if std > 1e-6 else 1.0
+            logger.debug("Using cached normalization statistics")
+        elif self.normalize:
+            # Determine which samples to use for statistics
+            if train_indices is not None:
+                train_ts = timeseries_tensor[train_indices]  # (n_train, seq_len, n_features)
+                train_masks = masks_tensor[train_indices]
+            else:
+                train_ts = timeseries_tensor
+                train_masks = masks_tensor
+
+            # Vectorized computation of mean and std per feature
+            # Reshape to (n_samples * seq_len, n_features) for easier computation
+            flat_ts = train_ts.reshape(-1, self.n_features)  # (n_train * seq_len, n_features)
+            flat_masks = train_masks.reshape(-1, self.n_features)
+
+            # Create combined mask: observed AND not NaN
+            valid_mask = flat_masks & ~torch.isnan(flat_ts)
+
+            # Vectorized mean computation using masked tensor operations
+            # Replace invalid values with 0 for sum, count valid entries
+            masked_ts = torch.where(valid_mask, flat_ts, torch.zeros_like(flat_ts))
+            valid_counts = valid_mask.sum(dim=0).float()  # (n_features,)
+            feature_sums = masked_ts.sum(dim=0)  # (n_features,)
+
+            # Compute means (avoid div by zero)
+            self.feature_means = torch.where(
+                valid_counts > 0,
+                feature_sums / valid_counts,
+                torch.zeros(self.n_features),
+            )
+
+            # Vectorized std computation
+            # Compute squared deviations from mean
+            deviations = torch.where(
+                valid_mask,
+                (flat_ts - self.feature_means.unsqueeze(0)) ** 2,
+                torch.zeros_like(flat_ts),
+            )
+            variance = torch.where(
+                valid_counts > 1,
+                deviations.sum(dim=0) / (valid_counts - 1),  # Bessel's correction
+                torch.ones(self.n_features),
+            )
+            self.feature_stds = torch.sqrt(variance)
+
+            # Clamp minimum std to avoid division by zero
+            self.feature_stds = torch.clamp(self.feature_stds, min=MIN_STD_THRESHOLD)
+
             # Save computed stats for reproducibility
             self._save_normalization_stats(train_indices)
+            logger.debug(f"Computed normalization stats for {self.n_features} features")
 
-        # Second pass: apply imputation and normalization
-        self._timeseries_tensors = []
-        self._mask_tensors = mask_list  # Masks don't need processing
+        # =====================================================================
+        # Step 3: Apply imputation and normalization (vectorized)
+        # =====================================================================
+        logger.debug("[3/3] Applying imputation and normalization...")
 
-        for i in range(n_samples):
-            ts_tensor = timeseries_list[i]
-            mask_tensor = mask_list[i]
+        # Vectorized imputation
+        timeseries_tensor = self._impute_tensor_batch(timeseries_tensor, masks_tensor)
 
-            # Apply imputation
-            ts_tensor = self._impute_tensor(ts_tensor, mask_tensor)
+        # Vectorized normalization
+        if self.normalize:
+            # Broadcasting: (n_samples, seq_len, n_features) - (n_features,) / (n_features,)
+            timeseries_tensor = (timeseries_tensor - self.feature_means) / self.feature_stds
 
-            # Apply normalization
-            if self.normalize:
-                ts_tensor = (ts_tensor - self.feature_means) / self.feature_stds
+        # Keep tensors stacked for memory efficiency and faster access
+        # __getitem__ will index directly into these tensors
+        self._timeseries_tensor = timeseries_tensor  # (n_samples, seq_len, n_features)
+        self._mask_tensor = masks_tensor  # (n_samples, seq_len, n_features)
 
-            self._timeseries_tensors.append(ts_tensor)
+        logger.info("Preprocessing complete")
+
+    def _impute_tensor_batch(self, timeseries: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        """Vectorized imputation for a batch of timeseries tensors.
+
+        Args:
+            timeseries: FloatTensor of shape (n_samples, seq_length, n_features)
+                with NaN for missing.
+            masks: BoolTensor of shape (n_samples, seq_length, n_features).
+
+        Returns:
+            Imputed timeseries tensor of shape (n_samples, seq_length, n_features).
+        """
+        if self.impute_strategy == "none":
+            return timeseries
+
+        if self.impute_strategy == "zero":
+            return torch.nan_to_num(timeseries, nan=0.0)
+
+        if self.impute_strategy == "mean":
+            # Replace NaN with feature means (vectorized)
+            imputed = timeseries.clone()
+            nan_mask = torch.isnan(imputed)
+            # Expand feature_means to match tensor shape for broadcasting
+            means_expanded = self.feature_means.view(1, 1, -1).expand_as(imputed)
+            imputed[nan_mask] = means_expanded[nan_mask]
+            return imputed
+
+        if self.impute_strategy == "forward_fill":
+            return self._vectorized_forward_fill(timeseries)
+
+        raise ValueError(f"Unknown imputation strategy: {self.impute_strategy}")
+
+    def _vectorized_forward_fill(self, timeseries: torch.Tensor) -> torch.Tensor:
+        """Highly optimized vectorized forward fill.
+
+        Uses a cumulative max index trick to avoid O(T) sequential operations.
+        The algorithm:
+        1. Create an indicator of where values are valid (not NaN)
+        2. Use cummax to find the index of the last valid value at each position
+        3. Gather values from those indices
+
+        For remaining NaN values (at the start of sequences where no prior valid
+        value exists), fill with feature means.
+
+        Args:
+            timeseries: FloatTensor of shape (n_samples, seq_length, n_features) with NaN.
+
+        Returns:
+            Forward-filled tensor with no NaN values.
+        """
+        n_samples, seq_len, n_features = timeseries.shape
+        logger.debug(f"Forward filling {n_samples:,} samples...")
+
+        # Work on each feature independently for memory efficiency
+        # This is still vectorized over samples and time
+        imputed = timeseries.clone()
+
+        for f in range(n_features):
+            # Extract single feature: (n_samples, seq_len)
+            feature_data = imputed[:, :, f]
+
+            # Create valid mask (not NaN)
+            valid = ~torch.isnan(feature_data)
+
+            # Create indices: (n_samples, seq_len) where each row is [0, 1, 2, ..., seq_len-1]
+            indices = (
+                torch.arange(seq_len, device=timeseries.device).unsqueeze(0).expand(n_samples, -1)
+            )
+
+            # Where invalid, set index to -1 so cummax will ignore it
+            # (cummax will propagate the last valid index forward)
+            masked_indices = torch.where(valid, indices, torch.full_like(indices, -1))
+
+            # Cummax along time dimension gives us the index of last valid value
+            last_valid_idx, _ = masked_indices.cummax(dim=1)  # (n_samples, seq_len)
+
+            # Handle case where no valid value exists yet (last_valid_idx == -1)
+            # These will be filled with feature mean later
+            has_valid = last_valid_idx >= 0
+
+            # Clamp indices to valid range for gather (will be overwritten for invalid positions)
+            gather_idx = last_valid_idx.clamp(min=0)
+
+            # Gather values from the last valid indices
+            filled = torch.gather(feature_data, dim=1, index=gather_idx)
+
+            # Where we had a valid reference, use the filled value
+            # Where no valid reference exists, we'll fill with mean below
+            imputed[:, :, f] = torch.where(has_valid, filled, feature_data)
+
+        # Fill any remaining NaN (at start of sequences) with feature means
+        still_nan = torch.isnan(imputed)
+        if still_nan.any():
+            means_expanded = self.feature_means.view(1, 1, -1).expand_as(imputed)
+            imputed = torch.where(still_nan, means_expanded, imputed)
+
+        return imputed
 
     def _impute_tensor(self, timeseries: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Impute missing values in a single timeseries tensor.
@@ -420,6 +631,144 @@ class ICUDataset(Dataset):
                 UserWarning,
             )
 
+    def _get_tensor_cache_key(self, train_indices: Optional[List[int]]) -> str:
+        """Generate a hash key for tensor caching based on preprocessing parameters.
+
+        The cache key includes:
+        - normalize flag
+        - impute_strategy
+        - seq_length
+        - hash of train_indices (for normalization stats consistency)
+        - hash of _excluded_stay_ids (for filtering consistency)
+
+        Args:
+            train_indices: Optional list of training indices.
+
+        Returns:
+            Hash string to use as cache identifier.
+        """
+        # Create a deterministic string representation of parameters
+        params = {
+            "normalize": self.normalize,
+            "impute_strategy": self.impute_strategy,
+            "seq_length": self.seq_length,
+            "n_features": self.n_features,
+        }
+
+        # Hash train_indices if provided (too large to store directly)
+        if train_indices is not None:
+            indices_str = ",".join(map(str, sorted(train_indices)))
+            indices_hash = hashlib.md5(indices_str.encode()).hexdigest()[:8]
+            params["train_indices_hash"] = indices_hash
+        else:
+            params["train_indices_hash"] = "none"
+
+        # Hash _excluded_stay_ids if provided (ensures cache invalidation when filtering changes)
+        if self._excluded_stay_ids:
+            excluded_str = ",".join(map(str, sorted(self._excluded_stay_ids)))
+            excluded_hash = hashlib.md5(excluded_str.encode()).hexdigest()[:8]
+            params["excluded_stays_hash"] = excluded_hash
+        else:
+            params["excluded_stays_hash"] = "none"
+
+        # Create overall hash
+        params_str = str(sorted(params.items()))
+        return hashlib.md5(params_str.encode()).hexdigest()[:12]
+
+    def _get_tensor_cache_path(self, train_indices: Optional[List[int]]) -> Path:
+        """Get the path to the tensor cache file.
+
+        Args:
+            train_indices: Optional list of training indices.
+
+        Returns:
+            Path to the tensor cache file.
+        """
+        cache_key = self._get_tensor_cache_key(train_indices)
+        cache_dir = self.data_dir / ".tensor_cache"
+        return cache_dir / f"tensors_{cache_key}.pt"
+
+    def _load_cached_tensors(self, train_indices: Optional[List[int]]) -> Optional[Dict[str, Any]]:
+        """Load cached preprocessed tensors if they exist and are valid.
+
+        Args:
+            train_indices: Optional list of training indices.
+
+        Returns:
+            Dictionary with cached tensors and metadata if valid, None otherwise.
+        """
+        cache_path = self._get_tensor_cache_path(train_indices)
+        if not cache_path.exists():
+            return None
+
+        try:
+            logger.debug(f"Loading cached tensors from {cache_path.name}")
+            cached = torch.load(cache_path, weights_only=False)
+
+            # Validate cache metadata
+            if cached.get("n_features") != self.n_features:
+                logger.debug("Cached tensors have different feature count, recomputing")
+                return None
+            if cached.get("seq_length") != self.seq_length:
+                logger.debug("Cached tensors have different sequence length, recomputing")
+                return None
+            if cached.get("normalize") != self.normalize:
+                logger.debug("Cached tensors have different normalize flag, recomputing")
+                return None
+            if cached.get("impute_strategy") != self.impute_strategy:
+                logger.debug("Cached tensors have different impute strategy, recomputing")
+                return None
+
+            # Validate tensor shapes (support both old list and new stacked format)
+            timeseries = cached.get("timeseries_tensor") or cached.get("timeseries_tensors")
+            masks = cached.get("mask_tensor") or cached.get("mask_tensors")
+            if timeseries is None or masks is None:
+                logger.debug("Cached tensors missing data, recomputing")
+                return None
+
+            # Convert old list format to stacked if needed
+            if isinstance(timeseries, list):
+                logger.debug("Converting cached tensors from list to stacked format")
+                timeseries = torch.stack(timeseries)
+                masks = torch.stack(masks)
+                cached["timeseries_tensor"] = timeseries
+                cached["mask_tensor"] = masks
+
+            n_samples = timeseries.shape[0] if hasattr(timeseries, "shape") else len(timeseries)
+            logger.info(f"Loaded {n_samples:,} cached samples")
+            return cached
+
+        except Exception as e:
+            logger.debug(f"Failed to load cached tensors: {e}, recomputing")
+            return None
+
+    def _save_cached_tensors(self, train_indices: Optional[List[int]]) -> None:
+        """Save preprocessed tensors to cache file.
+
+        Args:
+            train_indices: Optional list of training indices.
+        """
+        cache_path = self._get_tensor_cache_path(train_indices)
+        cache_dir = cache_path.parent
+        cache_dir.mkdir(exist_ok=True)
+
+        cache_data = {
+            "timeseries_tensor": self._timeseries_tensor,
+            "mask_tensor": self._mask_tensor,
+            "feature_means": self.feature_means,
+            "feature_stds": self.feature_stds,
+            "n_features": self.n_features,
+            "seq_length": self.seq_length,
+            "normalize": self.normalize,
+            "impute_strategy": self.impute_strategy,
+        }
+
+        try:
+            logger.debug(f"Saving tensors to cache: {cache_path.name}")
+            torch.save(cache_data, cache_path)
+        except Exception as e:
+            logger.warning(f"Failed to save tensor cache to {cache_path}: {e}")
+
     def _save_dataset_metadata(self) -> None:
         """Save dataset metadata including removed samples for reproducibility.
 
@@ -460,25 +809,35 @@ class ICUDataset(Dataset):
         Missing labels are either filtered out or raise an error based on
         handle_missing_labels setting.
         """
-        # Create lookup dicts for fast access
-        labels_by_stay = {row["stay_id"]: row for row in self.labels_df.iter_rows(named=True)}
-        static_by_stay = {row["stay_id"]: row for row in self.static_df.iter_rows(named=True)}
+        logger.info("Pre-computing labels and static features...")
+
+        # Create lookup dicts using Polars operations (much faster than iter_rows)
+        logger.debug("Building lookup dictionaries")
+        labels_dict = self.labels_df.to_dicts()
+        labels_by_stay = {row["stay_id"]: row for row in labels_dict}
+
+        static_dict = self.static_df.to_dicts()
+        static_by_stay = {row["stay_id"]: row for row in static_dict}
 
         # Pre-compute labels
-        self._labels_tensors: List[Optional[torch.Tensor]] = []
-        indices_to_keep = []  # Track which samples to keep
+        self._labels_tensor: Optional[torch.Tensor] = None
+        indices_to_keep = []
         original_count = len(self.stay_ids)
 
         if self.task_name is not None:
+            logger.debug(f"Extracting labels for task '{self.task_name}'")
             # Validate labels exist for all samples
             missing_label_stays = []
+            label_values = []
 
-            for idx, stay_id in enumerate(self.stay_ids):
+            for idx, stay_id in enumerate(
+                _maybe_tqdm(self.stay_ids, desc="  Validating labels", unit="stay")
+            ):
                 label_row = labels_by_stay.get(stay_id, {})
                 label_val = label_row.get(self.task_name)
 
                 if label_val is not None:
-                    self._labels_tensors.append(torch.tensor(label_val, dtype=torch.float32))
+                    label_values.append(label_val)
                     indices_to_keep.append(idx)
                 else:
                     missing_label_stays.append(stay_id)
@@ -499,15 +858,15 @@ class ICUDataset(Dataset):
                         self.removed_samples.append((stay_id, f"missing_{self.task_name}_label"))
 
                     # Filter out stays with missing labels
-                    self.stay_ids = [sid for sid in self.stay_ids if sid not in missing_label_stays]
+                    missing_set = set(missing_label_stays)
+                    self.stay_ids = [sid for sid in self.stay_ids if sid not in missing_set]
 
-                    # Filter tensors (must be done after they're precomputed)
-                    self._timeseries_tensors = [
-                        self._timeseries_tensors[idx] for idx in indices_to_keep
-                    ]
-                    self._mask_tensors = [self._mask_tensors[idx] for idx in indices_to_keep]
+                    # Filter tensors using index selection (efficient for stacked tensors)
+                    indices_tensor = torch.tensor(indices_to_keep, dtype=torch.long)
+                    self._timeseries_tensor = self._timeseries_tensor[indices_tensor]
+                    self._mask_tensor = self._mask_tensor[indices_tensor]
 
-                    # Log filtering to console
+                    # Log filtering
                     removal_pct = (len(missing_label_stays) / original_count) * 100
                     _log_label_filtering(
                         task_name=self.task_name,
@@ -516,12 +875,17 @@ class ICUDataset(Dataset):
                         kept_count=len(self.stay_ids),
                         removal_pct=removal_pct,
                     )
+
+            # Convert to stacked tensor for efficient access
+            self._labels_tensor = torch.tensor(label_values, dtype=torch.float32)
+            logger.info(f"Extracted {len(label_values):,} labels")
         else:
             # No labels required for unsupervised training
-            self._labels_tensors = [None] * len(self.stay_ids)
+            self._labels_tensor = None
             indices_to_keep = list(range(len(self.stay_ids)))
 
-        # Pre-compute static features (only for kept samples)
+        # Pre-compute static features using vectorized Polars operations
+        logger.debug("Extracting static features")
         self._static_data = []
         for stay_id in self.stay_ids:
             static_row = static_by_stay.get(stay_id, {})
@@ -532,6 +896,7 @@ class ICUDataset(Dataset):
                     "los_days": static_row.get("los_days"),
                 }
             )
+        logger.info(f"Pre-computed {len(self._static_data):,} static feature records")
 
     def __len__(self) -> int:
         """Return number of ICU stays in dataset."""
@@ -554,9 +919,9 @@ class ICUDataset(Dataset):
         """
         stay_id = self.stay_ids[idx]
 
-        # Get pre-computed tensors (fast lookup)
-        timeseries = self._timeseries_tensors[idx]
-        mask = self._mask_tensors[idx]
+        # Get pre-computed tensors via direct indexing (efficient for stacked tensors)
+        timeseries = self._timeseries_tensor[idx]
+        mask = self._mask_tensor[idx]
 
         # Build result dictionary
         result = {
@@ -565,9 +930,9 @@ class ICUDataset(Dataset):
             "stay_id": stay_id,
         }
 
-        # Add label if task specified (use pre-computed lookup)
-        if self.task_name is not None:
-            result["label"] = self._labels_tensors[idx]
+        # Add label if task specified (use pre-computed stacked tensor)
+        if self.task_name is not None and self._labels_tensor is not None:
+            result["label"] = self._labels_tensor[idx]
 
         # Add static features (use pre-computed lookup)
         result["static"] = self._static_data[idx]

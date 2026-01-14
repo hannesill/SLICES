@@ -213,6 +213,7 @@ docs/
 /data/
 outputs/
 wandb/
+.tensor_cache/
 
 # PyTorch Lightning
 lightning_logs/

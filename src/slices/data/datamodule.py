@@ -4,8 +4,9 @@ Handles patient-level splits, data loading, and batching for training.
 Ensures no patient appears in multiple splits (prevents data leakage).
 """
 
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import lightning.pytorch as L
 import numpy as np
@@ -15,6 +16,12 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from slices.data.dataset import ICUDataset
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+# Constants
+TQDM_MIN_ITEMS = 1000  # Only show progress bar for collections larger than this
 
 
 def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -117,12 +124,157 @@ class ICUDataModule(L.LightningDataModule):
         self.val_indices: List[int] = []
         self.test_indices: List[int] = []
 
+    def _load_cached_splits(
+        self, static_df: pl.DataFrame, stay_ids: List[int]
+    ) -> Optional[Tuple[List[int], List[int], List[int]]]:
+        """Load cached splits from splits.yaml if valid.
+
+        Validates that cached splits match current parameters (seed, ratios) and
+        that the patient lists are consistent with current data.
+
+        Args:
+            static_df: Static dataframe with stay_id -> patient_id mapping.
+            stay_ids: List of stay_ids in order from timeseries parquet.
+
+        Returns:
+            Tuple of (train_indices, val_indices, test_indices) if cache is valid,
+            None otherwise.
+        """
+        split_path = self.processed_dir / "splits.yaml"
+        if not split_path.exists():
+            return None
+
+        try:
+            with open(split_path) as f:
+                cached = yaml.safe_load(f)
+
+            # Validate parameters match
+            if (
+                cached.get("seed") != self.seed
+                or not np.isclose(cached.get("train_ratio", 0), self.train_ratio)
+                or not np.isclose(cached.get("val_ratio", 0), self.val_ratio)
+                or not np.isclose(cached.get("test_ratio", 0), self.test_ratio)
+            ):
+                logger.debug("Cached splits have different parameters, recomputing")
+                return None
+
+            # Get patient lists from cache
+            train_patients = set(cached.get("train_patients", []))
+            val_patients = set(cached.get("val_patients", []))
+            test_patients = set(cached.get("test_patients", []))
+
+            if not train_patients or not val_patients or not test_patients:
+                logger.debug("Cached splits missing patient lists, recomputing")
+                return None
+
+            # Validate patient sets are disjoint
+            if not (
+                train_patients.isdisjoint(val_patients)
+                and train_patients.isdisjoint(test_patients)
+                and val_patients.isdisjoint(test_patients)
+            ):
+                logger.debug("Cached splits have overlapping patients, recomputing")
+                return None
+
+            # Get stay_id -> patient_id mapping
+            stay_to_patient = dict(
+                zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
+            )
+
+            # Validate all patients in data are accounted for
+            current_patients = set(stay_to_patient.values())
+            cached_patients = train_patients | val_patients | test_patients
+
+            if current_patients != cached_patients:
+                logger.debug(
+                    f"Cached splits have different patients "
+                    f"(cached: {len(cached_patients)}, current: {len(current_patients)}), "
+                    f"recomputing"
+                )
+                return None
+
+            # Reconstruct indices from patient lists
+            train_indices = []
+            val_indices = []
+            test_indices = []
+
+            for idx, stay_id in enumerate(stay_ids):
+                patient_id = stay_to_patient.get(stay_id)
+                if patient_id in train_patients:
+                    train_indices.append(idx)
+                elif patient_id in val_patients:
+                    val_indices.append(idx)
+                elif patient_id in test_patients:
+                    test_indices.append(idx)
+                else:
+                    logger.debug(f"Stay {stay_id} has unknown patient {patient_id}, recomputing")
+                    return None
+
+            logger.info(
+                f"Loaded cached splits: "
+                f"{len(train_indices)} train, {len(val_indices)} val, {len(test_indices)} test"
+            )
+            return train_indices, val_indices, test_indices
+
+        except Exception as e:
+            logger.debug(f"Failed to load cached splits: {e}, recomputing")
+            return None
+
+    def _filter_stays_with_missing_labels(
+        self, stay_ids: List[int], labels_df: pl.DataFrame
+    ) -> Tuple[List[int], Set[int]]:
+        """Filter out stays with missing labels for the configured task.
+
+        This MUST be called BEFORE computing splits to ensure indices remain consistent
+        between DataModule and Dataset.
+
+        Args:
+            stay_ids: List of all stay_ids from timeseries.
+            labels_df: Labels dataframe with task columns.
+
+        Returns:
+            Tuple of (filtered_stay_ids, excluded_stay_ids_set).
+        """
+        if self.task_name is None:
+            return stay_ids, set()
+
+        logger.debug(f"Checking labels for task '{self.task_name}'")
+
+        # Get stays with valid labels for this task
+        if self.task_name not in labels_df.columns:
+            raise ValueError(
+                f"Task '{self.task_name}' not found in labels. " f"Available: {labels_df.columns}"
+            )
+
+        # Find stays with non-null labels
+        valid_labels_df = labels_df.filter(pl.col(self.task_name).is_not_null())
+        valid_stay_ids = set(valid_labels_df["stay_id"].to_list())
+
+        # Filter stay_ids maintaining order
+        filtered_stay_ids = [sid for sid in stay_ids if sid in valid_stay_ids]
+        excluded_stay_ids = set(stay_ids) - valid_stay_ids
+
+        if excluded_stay_ids:
+            pct_excluded = len(excluded_stay_ids) / len(stay_ids) * 100
+            logger.warning(
+                f"Excluding {len(excluded_stay_ids):,} stays ({pct_excluded:.1f}%) "
+                f"with missing '{self.task_name}' labels. Remaining: {len(filtered_stay_ids):,}"
+            )
+
+        return filtered_stay_ids, excluded_stay_ids
+
     def _get_patient_level_splits(self) -> Tuple[List[int], List[int], List[int]]:
         """Create patient-level train/val/test splits from parquet files.
+
+        First checks for cached splits in splits.yaml. If found and parameters match,
+        loads splits from cache. Otherwise, computes splits from scratch.
 
         Loads static and timeseries data directly without requiring the full dataset
         to be initialized. This is called BEFORE dataset creation to ensure
         normalization statistics use only training data (prevents data leakage).
+
+        IMPORTANT: Filters out stays with missing labels BEFORE computing splits
+        to ensure indices remain consistent with the Dataset after it loads.
 
         Uses deterministic shuffling of patient_id to assign patients to splits.
         All stays from a patient go to the same split.
@@ -130,25 +282,57 @@ class ICUDataModule(L.LightningDataModule):
         Returns:
             Tuple of (train_indices, val_indices, test_indices).
         """
-        # Load static data directly (no need for full dataset)
+        logger.info("Loading data for split computation...")
+
+        # Load only needed columns for efficiency
         static_path = self.processed_dir / "static.parquet"
-        static_df = pl.read_parquet(static_path)
+        logger.debug(f"Loading static data from {static_path.name}")
+        self._static_df = pl.read_parquet(static_path, columns=["stay_id", "patient_id"])
 
-        # Also need timeseries to get stay_ids in correct order
+        # Load only stay_id column from timeseries (much faster than full load)
         timeseries_path = self.processed_dir / "timeseries.parquet"
-        timeseries_df = pl.read_parquet(timeseries_path)
-        stay_ids = timeseries_df["stay_id"].to_list()
+        logger.debug(f"Loading stay_ids from {timeseries_path.name}")
+        timeseries_df = pl.read_parquet(timeseries_path, columns=["stay_id"])
+        all_stay_ids = timeseries_df["stay_id"].to_list()
 
-        # Get stay_id -> patient_id mapping
-        stay_to_patient = dict(
-            zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
+        # Load labels to filter out stays with missing labels
+        labels_path = self.processed_dir / "labels.parquet"
+        logger.debug(f"Loading labels from {labels_path.name}")
+        self._labels_df = pl.read_parquet(labels_path)
+
+        # CRITICAL: Filter stays with missing labels BEFORE computing splits
+        # This ensures indices computed here match the filtered Dataset
+        stay_ids, self._excluded_stay_ids = self._filter_stays_with_missing_labels(
+            all_stay_ids, self._labels_df
         )
 
-        # Get unique patients
-        unique_patients = list(set(stay_to_patient.values()))
+        # Store for later use
+        self._all_stay_ids = all_stay_ids
+        self._filtered_stay_ids = stay_ids
+
+        # Try to load cached splits first
+        logger.debug("Checking for cached splits")
+        cached_splits = self._load_cached_splits(self._static_df, stay_ids)
+        if cached_splits is not None:
+            return cached_splits
+
+        logger.info("Computing patient-level splits...")
+
+        # Get stay_id -> patient_id mapping (only for filtered stays)
+        logger.debug("Building stay-to-patient mapping")
+        stay_to_patient = dict(
+            zip(self._static_df["stay_id"].to_list(), self._static_df["patient_id"].to_list())
+        )
+
+        # Get unique patients (only from filtered stays)
+        filtered_patient_ids = {stay_to_patient.get(sid) for sid in stay_ids}
+        filtered_patient_ids.discard(None)  # Remove None if any stay has no patient
+        unique_patients = list(filtered_patient_ids)
         n_patients = len(unique_patients)
+        logger.debug(f"Found {n_patients:,} unique patients")
 
         # Shuffle patients deterministically using seed
+        logger.debug(f"Shuffling patients (seed={self.seed})")
         rng = np.random.RandomState(self.seed)
         patient_indices = np.arange(n_patients)
         rng.shuffle(patient_indices)
@@ -161,6 +345,10 @@ class ICUDataModule(L.LightningDataModule):
         train_patients = set(shuffled_patients[:n_train])
         val_patients = set(shuffled_patients[n_train : n_train + n_val])
         test_patients = set(shuffled_patients[n_train + n_val :])
+        logger.debug(
+            f"Split: {len(train_patients):,} train, "
+            f"{len(val_patients):,} val, {len(test_patients):,} test patients"
+        )
 
         # Verify no patient overlap between splits (data leakage check)
         assert train_patients.isdisjoint(
@@ -189,6 +377,7 @@ class ICUDataModule(L.LightningDataModule):
         )
 
         # Map back to stay indices
+        logger.debug("Mapping patients to stay indices")
         train_indices = []
         val_indices = []
         test_indices = []
@@ -217,6 +406,11 @@ class ICUDataModule(L.LightningDataModule):
         assert total_assigned == len(stay_ids), (
             f"Split validation failed: {total_assigned} stays assigned but "
             f"{len(stay_ids)} total stays in dataset"
+        )
+
+        logger.info(
+            f"Splits computed: {len(train_indices):,} train, "
+            f"{len(val_indices):,} val, {len(test_indices):,} test stays"
         )
 
         return train_indices, val_indices, test_indices
@@ -265,23 +459,56 @@ class ICUDataModule(L.LightningDataModule):
         Args:
             stage: Stage name ('fit', 'validate', 'test', or None).
         """
+        # Skip if already set up (Lightning calls setup() again in trainer.fit())
+        if self.dataset is not None:
+            logger.debug("DataModule already set up, skipping")
+            return
+
+        logger.info("Setting up ICUDataModule")
+
         # CRITICAL: Get splits FIRST before creating dataset
-        # This ensures normalization stats are computed only on training set
+        # This also filters stays with missing labels to ensure index consistency
+        logger.debug("[Step 1/3] Computing patient-level splits")
         self.train_indices, self.val_indices, self.test_indices = self._get_patient_level_splits()
 
         # Create dataset with training indices for normalization
-        # This ensures statistics are computed only on train set, preventing data leakage
+        # IMPORTANT: Use handle_missing_labels='raise' because we already filtered
+        # missing labels in _get_patient_level_splits. If any are still missing,
+        # it indicates a bug.
+        logger.debug("[Step 2/3] Creating ICUDataset")
         self.dataset = ICUDataset(
             data_dir=self.processed_dir,
             task_name=self.task_name,
             seq_length=self.seq_length,
             normalize=self.normalize,
             impute_strategy=self.impute_strategy,
-            train_indices=self.train_indices,  # Pass train indices for proper normalization
+            train_indices=self.train_indices,
+            # Use 'raise' since we pre-filtered - any missing labels now is a bug
+            handle_missing_labels="raise" if self.task_name else "filter",
+            # Pass excluded stays so Dataset can validate consistency
+            _excluded_stay_ids=getattr(self, "_excluded_stay_ids", None),
         )
 
+        # Validate dataset size matches expected filtered size
+        expected_size = (
+            len(self._filtered_stay_ids) if hasattr(self, "_filtered_stay_ids") else None
+        )
+        if expected_size is not None and len(self.dataset) != expected_size:
+            raise RuntimeError(
+                f"Dataset size mismatch! Expected {expected_size} stays "
+                f"(after filtering), got {len(self.dataset)}. "
+                "This indicates an index consistency bug."
+            )
+
         # Save split information for reproducibility
+        logger.debug("[Step 3/3] Saving split information")
         self._save_split_info()
+
+        logger.info(
+            f"DataModule setup complete: "
+            f"Train={len(self.train_indices):,}, Val={len(self.val_indices):,}, "
+            f"Test={len(self.test_indices):,} stays"
+        )
 
     def train_dataloader(self) -> DataLoader:
         """Return training DataLoader."""
