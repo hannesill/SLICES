@@ -527,15 +527,14 @@ class TestICUDataset:
         """Test that all loaded samples have labels when task_name is specified."""
         dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
 
-        # Should have same number of label tensors as samples
-        assert len(dataset._labels_tensors) == len(dataset.stay_ids)
+        # Should have same number of labels as samples (stacked tensor)
+        assert dataset._labels_tensor is not None
+        assert len(dataset._labels_tensor) == len(dataset.stay_ids)
 
-        # All labels should be non-None tensors
-        for label in dataset._labels_tensors:
-            assert label is not None
-            assert isinstance(label, torch.Tensor)
-            assert label.dtype == torch.float32
-            assert not torch.isnan(label).any()
+        # All labels should be valid tensors with correct dtype and no NaN
+        assert isinstance(dataset._labels_tensor, torch.Tensor)
+        assert dataset._labels_tensor.dtype == torch.float32
+        assert not torch.isnan(dataset._labels_tensor).any()
 
 
 class TestICUDataModule:
