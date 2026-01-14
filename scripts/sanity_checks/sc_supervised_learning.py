@@ -7,7 +7,7 @@ Prerequisites:
     Run prepare_dataset.py first to generate splits.yaml and normalization_stats.yaml
 
 Usage:
-    uv run python scripts/sanity_check.py data/processed/mimic-iv-demo
+    uv run python scripts/sanity_checks/sc_supervised_learning.py data/processed/mimic-iv-demo
 """
 
 import sys
