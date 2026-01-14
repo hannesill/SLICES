@@ -22,10 +22,10 @@ checkpoint_dir: ${output_dir}/checkpoints
 data:
   # Path to processed data directory
   # This should contain: timeseries.parquet, static.parquet, metadata.yaml
-  processed_dir: data/processed/mimic-iv-demo
+  processed_dir: data/processed/mimic-iv
 
   # DataModule settings
-  num_workers: 4
+  num_workers: 8
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
@@ -39,7 +39,7 @@ data:
 encoder:
   name: transformer
   # d_input will be automatically set from data
-  d_model: 128
+  d_model: 256
   n_layers: 4
   n_heads: 8
   d_ff: 512
@@ -54,12 +54,12 @@ encoder:
 # SSL objective configuration
 ssl:
   name: mae
-  mask_ratio: 0.15
+  mask_ratio: 0.3
   mask_strategy: block  # random | block | timestep | feature
   min_block_size: 3
   max_block_size: 10
   mask_value: 0.0
-  decoder_d_model: 64
+  decoder_d_model: 128
   decoder_n_layers: 2
   decoder_n_heads: 4
   decoder_d_ff: 256
@@ -69,8 +69,8 @@ ssl:
 
 # Training configuration
 training:
-  max_epochs: 100
-  batch_size: 64
+  max_epochs: 500
+  batch_size: 256
 
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
@@ -96,7 +96,7 @@ optimizer:
 # Optional learning rate scheduler
 scheduler:
   name: warmup_cosine  # cosine | step | plateau | warmup_cosine
-  warmup_epochs: 10
+  warmup_epochs: 50
   max_epochs: ${training.max_epochs}
   eta_min: 1.0e-6
 
