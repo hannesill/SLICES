@@ -43,11 +43,12 @@ Example usage:
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import hydra
 import polars as pl
 import torch
+import yaml
 from omegaconf import DictConfig
 from rich.console import Console
 
@@ -55,6 +56,23 @@ if TYPE_CHECKING:
     from slices.debug.staged_snapshots import MultiStageCapture
 
 console = Console()
+
+
+def load_processed_metadata(processed_dir: Path) -> Optional[Dict[str, Any]]:
+    """Load metadata from processed data directory.
+
+    Args:
+        processed_dir: Path to processed data directory.
+
+    Returns:
+        Metadata dict if found, None otherwise.
+    """
+    metadata_path = processed_dir / "metadata.yaml"
+    if not metadata_path.exists():
+        return None
+
+    with open(metadata_path) as f:
+        return yaml.safe_load(f)
 
 
 def tensor_to_grid_df(
@@ -318,6 +336,19 @@ def main(cfg: DictConfig) -> None:
     if processed_dir:
         console.print(f"Processed directory: {processed_dir}")
 
+    # Load metadata from processed data to ensure feature consistency
+    processed_metadata: Optional[Dict[str, Any]] = None
+    if processed_dir and processed_dir.exists():
+        processed_metadata = load_processed_metadata(processed_dir)
+        if processed_metadata:
+            console.print(
+                f"  [green]Loaded metadata from processed data[/green]: "
+                f"{processed_metadata.get('n_features', '?')} features, "
+                f"{processed_metadata.get('seq_length_hours', '?')}h sequence"
+            )
+        else:
+            console.print("  [yellow]Warning: No metadata.yaml found in processed_dir[/yellow]")
+
     # Get stay IDs
     console.print("\n[bold]Selecting patients...[/bold]")
     stay_ids = get_stay_ids(cfg, processed_dir)
@@ -327,9 +358,24 @@ def main(cfg: DictConfig) -> None:
     from slices.data.extractors.base import ExtractorConfig
     from slices.debug.debug_extractor import DebugMIMICIVExtractor
 
-    # Configure extraction
-    feature_set = cfg.get("feature_set", "core")
-    seq_length_hours = cfg.get("seq_length_hours", 48)
+    # Configure extraction - use processed data settings if available for consistency
+    categories: Optional[List[str]] = None
+    if processed_metadata:
+        # Use settings from processed data to ensure stages 0-3 match stages 4-5
+        feature_set = processed_metadata.get("feature_set", cfg.get("feature_set", "core"))
+        seq_length_hours = processed_metadata.get(
+            "seq_length_hours", cfg.get("seq_length_hours", 48)
+        )
+        categories = processed_metadata.get("categories")
+        console.print(
+            "\n[bold]Using extraction settings from processed data for consistency:[/bold]"
+        )
+    else:
+        # Fall back to config settings (extraction-only mode)
+        feature_set = cfg.get("feature_set", "core")
+        seq_length_hours = cfg.get("seq_length_hours", 48)
+        categories = cfg.get("categories")
+        console.print("\n[bold]Using extraction settings from config:[/bold]")
 
     # Note: output_dir in config is not used since we don't save processed files
     # during debug extraction, but ExtractorConfig requires it
@@ -338,6 +384,7 @@ def main(cfg: DictConfig) -> None:
         output_dir=str(output_dir),
         feature_set=feature_set,
         seq_length_hours=seq_length_hours,
+        categories=categories,
         tasks=[],  # No label extraction needed for debug
     )
 
@@ -345,6 +392,8 @@ def main(cfg: DictConfig) -> None:
     console.print("\n[bold]Creating debug extractor...[/bold]")
     console.print(f"Feature set: {feature_set}")
     console.print(f"Sequence length: {seq_length_hours} hours")
+    if categories:
+        console.print(f"Categories: {categories}")
     console.print(f"Extracting ONLY {len(stay_ids)} sentinel patients (fast mode)")
 
     extractor = DebugMIMICIVExtractor(

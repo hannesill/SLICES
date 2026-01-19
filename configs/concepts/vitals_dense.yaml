@@ -1,0 +1,83 @@
+# Dense Vitals: Low-missingness vital signs (<15% missing)
+# 6 features from chartevents - suitable for MAE pretraining sanity checks
+# These are regularly monitored vitals with high observation rates
+
+# =============================================================================
+# Cardiovascular (4)
+# =============================================================================
+
+heart_rate:
+  description: Heart rate
+  units: bpm
+  min: 0
+  max: 300
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220045]
+      value_col: valuenum
+      time_col: charttime
+
+sbp:
+  description: Systolic blood pressure (arterial and non-invasive)
+  units: mmHg
+  min: 0
+  max: 300
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220050, 220179]  # Arterial BP Systolic, Non-Invasive BP Systolic
+      value_col: valuenum
+      time_col: charttime
+
+dbp:
+  description: Diastolic blood pressure (arterial and non-invasive)
+  units: mmHg
+  min: 0
+  max: 200
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220051, 220180]  # Arterial BP Diastolic, Non-Invasive BP Diastolic
+      value_col: valuenum
+      time_col: charttime
+
+map:
+  description: Mean arterial pressure
+  units: mmHg
+  min: 0
+  max: 250
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220052, 220181, 225312]  # Arterial BP Mean, Non-Invasive BP Mean, ART BP Mean
+      value_col: valuenum
+      time_col: charttime
+
+# =============================================================================
+# Respiratory (2)
+# =============================================================================
+
+resp_rate:
+  description: Respiratory rate
+  units: breaths/min
+  min: 0
+  max: 120
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220210, 224690]  # Respiratory Rate, Respiratory Rate (Total)
+      value_col: valuenum
+      time_col: charttime
+
+spo2:
+  description: Oxygen saturation (pulse oximetry)
+  units: "%"
+  min: 50
+  max: 100
+  mimic_iv:
+    - table: chartevents
+      type: itemid
+      itemid: [220277]
+      value_col: valuenum
+      time_col: charttime
