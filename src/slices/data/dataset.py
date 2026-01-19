@@ -966,3 +966,94 @@ class ICUDataset(Dataset):
                     "prevalence": positive / total if total > 0 else 0.0,
                 }
         return stats
+
+    def get_preprocessing_stages(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:
+        """Get intermediate preprocessing stages for a single sample.
+
+        This method re-runs the preprocessing pipeline for a specific sample,
+        capturing the tensor at each stage. Useful for debugging to see exactly
+        what transformations are applied to the data.
+
+        The stages are:
+            - grid: Raw 2D tensor (seq_length, n_features) with NaN for missing
+            - imputed: After imputation (no NaN, original scale)
+            - normalized: After z-score normalization (what model sees)
+
+        Args:
+            idx: Sample index in the dataset.
+
+        Returns:
+            Dict with keys 'grid', 'imputed', 'normalized', each containing:
+                - 'timeseries': The tensor at that stage
+                - 'mask': The observation mask (same for all stages)
+
+        Example:
+            >>> dataset = ICUDataset("data/processed/mimic-iv-demo")
+            >>> stages = dataset.get_preprocessing_stages(0)
+            >>> stages['grid']['timeseries'].shape
+            torch.Size([48, 9])
+            >>> torch.isnan(stages['grid']['timeseries']).any()
+            True  # Grid has NaN
+            >>> torch.isnan(stages['imputed']['timeseries']).any()
+            False  # Imputed has no NaN
+        """
+        stay_id = self.stay_ids[idx]
+
+        # Get raw nested list data from original DataFrame
+        row = self.timeseries_df.filter(pl.col("stay_id") == stay_id).row(0, named=True)
+        raw_ts = row["timeseries"]
+        raw_mask = row["mask"]
+
+        # =====================================================================
+        # Stage 1: GRID - Convert to tensor with padding/truncation
+        # (Same logic as _precompute_tensors Step 1)
+        # =====================================================================
+        actual_len = len(raw_ts)
+        if actual_len >= self.seq_length:
+            # Truncate
+            grid_ts = np.array(raw_ts[: self.seq_length], dtype=np.float32)
+            mask_arr = np.array(raw_mask[: self.seq_length], dtype=bool)
+        else:
+            # Pad with NaN / False
+            grid_ts = np.full((self.seq_length, self.n_features), np.nan, dtype=np.float32)
+            mask_arr = np.zeros((self.seq_length, self.n_features), dtype=bool)
+            grid_ts[:actual_len] = np.array(raw_ts, dtype=np.float32)
+            mask_arr[:actual_len] = np.array(raw_mask, dtype=bool)
+
+        grid_tensor = torch.from_numpy(grid_ts)
+        mask_tensor = torch.from_numpy(mask_arr)
+
+        # =====================================================================
+        # Stage 2: IMPUTED - Apply imputation
+        # (Same logic as _precompute_tensors Step 3a, using _impute_tensor_batch)
+        # =====================================================================
+        # Add batch dimension for _impute_tensor_batch
+        grid_batched = grid_tensor.unsqueeze(0)
+        mask_batched = mask_tensor.unsqueeze(0)
+
+        imputed_batched = self._impute_tensor_batch(grid_batched, mask_batched)
+        imputed_tensor = imputed_batched.squeeze(0)
+
+        # =====================================================================
+        # Stage 3: NORMALIZED - Apply z-score normalization
+        # (Same logic as _precompute_tensors Step 3b)
+        # =====================================================================
+        if self.normalize:
+            normalized_tensor = (imputed_tensor - self.feature_means) / self.feature_stds
+        else:
+            normalized_tensor = imputed_tensor.clone()
+
+        return {
+            "grid": {
+                "timeseries": grid_tensor,
+                "mask": mask_tensor,
+            },
+            "imputed": {
+                "timeseries": imputed_tensor,
+                "mask": mask_tensor,
+            },
+            "normalized": {
+                "timeseries": normalized_tensor,
+                "mask": mask_tensor,
+            },
+        }

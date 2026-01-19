@@ -1,12 +1,17 @@
 """Multi-stage pipeline snapshots for debugging data transformations.
 
 This module provides tools to capture and compare data at each stage of the
-extraction pipeline, enabling visual inspection of how data is transformed:
+full data pipeline, enabling visual inspection of how data is transformed:
 
-    Stage 0: RAW       - DuckDB query results from source parquet files
-    Stage 1: TRANSFORMED - After value transforms (e.g., Fahrenheit → Celsius)
-    Stage 2: BINNED    - After hourly aggregation (sparse format)
-    Stage 3: DENSE     - Final tensor format (fixed-length arrays)
+    Extraction stages (Extractor):
+        Stage 0: RAW         - DuckDB query results from source parquet files
+        Stage 1: TRANSFORMED - After value transforms (e.g., Fahrenheit → Celsius)
+        Stage 2: BINNED      - After hourly aggregation (sparse grid format)
+        Stage 3: DENSE       - Dense grid format (seq_length × n_features) with NaN
+
+    Dataset stages (ICUDataset):
+        Stage 4: IMPUTED     - After imputation (no NaN, original scale)
+        Stage 5: NORMALIZED  - After z-score normalization (model input)
 
 Example:
     >>> from slices.debug.staged_snapshots import StagedExtractor, generate_html_report
@@ -29,28 +34,67 @@ from typing import Any, Dict, List, Optional
 import polars as pl
 
 
-class ExtractionStage(str, Enum):
-    """Stages in the extraction pipeline for multi-stage capture."""
+class PipelineStage(str, Enum):
+    """Canonical stages in the data pipeline.
 
+    This is the single source of truth for pipeline stage definitions.
+    All debug tools should use this enum.
+
+    The pipeline has 6 stages organized into two groups:
+
+    Extraction stages (0-3) - Data transformation in the extractor:
+        RAW (0):         Direct from DuckDB query, raw source values
+        TRANSFORMED (1): After value transforms (e.g., Fahrenheit → Celsius)
+        BINNED (2):      After hourly aggregation (sparse grid format)
+        DENSE (3):       Dense grid format (seq_length × n_features) with NaN
+
+    Dataset stages (4-5) - Preprocessing in ICUDataset:
+        IMPUTED (4):     After imputation (no NaN, original scale)
+        NORMALIZED (5):  After z-score normalization (model input)
+
+    Example:
+        >>> from slices.debug import PipelineStage
+        >>> stage = PipelineStage.RAW
+        >>> print(f"Stage {stage.order}: {stage.value}")
+        Stage 0: raw
+    """
+
+    # Extraction stages (0-3): Data transformation in the extractor
     RAW = "raw"  # Stage 0: Direct from DuckDB query
-    TRANSFORMED = "transformed"  # Stage 1: After value transforms
+    TRANSFORMED = "transformed"  # Stage 1: After value transforms (e.g., F→C)
     BINNED = "binned"  # Stage 2: After hourly aggregation
-    DENSE = "dense"  # Stage 3: Final tensor format
+    DENSE = "dense"  # Stage 3: Dense grid format (seq_length × n_features) with NaN
+
+    # Dataset stages (4-5): Preprocessing in ICUDataset
+    IMPUTED = "imputed"  # Stage 4: After imputation (no NaN, original scale)
+    NORMALIZED = "normalized"  # Stage 5: After z-score normalization (model input)
 
     @property
     def order(self) -> int:
         """Get the numeric order of this stage in the pipeline."""
         return {
-            ExtractionStage.RAW: 0,
-            ExtractionStage.TRANSFORMED: 1,
-            ExtractionStage.BINNED: 2,
-            ExtractionStage.DENSE: 3,
+            PipelineStage.RAW: 0,
+            PipelineStage.TRANSFORMED: 1,
+            PipelineStage.BINNED: 2,
+            PipelineStage.DENSE: 3,
+            PipelineStage.IMPUTED: 4,
+            PipelineStage.NORMALIZED: 5,
         }[self]
 
     @property
     def prefixed_name(self) -> str:
         """Get the stage name with numeric prefix (e.g., '0_raw')."""
         return f"{self.order}_{self.value}"
+
+    @classmethod
+    def extraction_stages(cls) -> List["PipelineStage"]:
+        """Return only extraction stages (0-3)."""
+        return [cls.RAW, cls.TRANSFORMED, cls.BINNED, cls.DENSE]
+
+    @classmethod
+    def dataset_stages(cls) -> List["PipelineStage"]:
+        """Return only dataset preprocessing stages (4-5)."""
+        return [cls.IMPUTED, cls.NORMALIZED]
 
 
 @dataclass
@@ -64,7 +108,7 @@ class StageData:
         timestamp: When this was captured.
     """
 
-    stage: ExtractionStage
+    stage: PipelineStage
     data: pl.DataFrame
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -76,23 +120,33 @@ class PatientStageCapture:
 
     Attributes:
         stay_id: The ICU stay identifier.
-        raw: Stage 0 data (from DuckDB query).
-        transformed: Stage 1 data (after value transforms).
-        binned: Stage 2 data (hourly aggregated).
-        dense: Stage 3 data (fixed-length tensor).
+
+        Extraction stages:
+            raw: Stage 0 data (from DuckDB query).
+            transformed: Stage 1 data (after value transforms).
+            binned: Stage 2 data (hourly aggregated).
+            dense: Stage 3 data (dense grid format with NaN for missing).
+
+        Dataset stages:
+            imputed: Stage 4 data (after imputation).
+            normalized: Stage 5 data (after z-score normalization, model input).
     """
 
     stay_id: int
+    # Extraction stages (0-3)
     raw: Optional[StageData] = None
     transformed: Optional[StageData] = None
     binned: Optional[StageData] = None
     dense: Optional[StageData] = None
+    # Dataset stages (4-5)
+    imputed: Optional[StageData] = None
+    normalized: Optional[StageData] = None
 
-    def get_stage(self, stage: ExtractionStage) -> Optional[StageData]:
+    def get_stage(self, stage: PipelineStage) -> Optional[StageData]:
         """Get data for a specific stage."""
         return getattr(self, stage.value, None)
 
-    def set_stage(self, stage: ExtractionStage, data: StageData) -> None:
+    def set_stage(self, stage: PipelineStage, data: StageData) -> None:
         """Set data for a specific stage."""
         setattr(self, stage.value, data)
 
@@ -100,7 +154,7 @@ class PatientStageCapture:
         """Export all stages to CSV files in a patient-specific directory.
 
         Files are prefixed with stage numbers to show pipeline order:
-        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv
+        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_imputed.csv, 5_normalized.csv
 
         Args:
             output_dir: Base output directory.
@@ -112,7 +166,7 @@ class PatientStageCapture:
         patient_dir.mkdir(parents=True, exist_ok=True)
 
         exported = {}
-        for stage in ExtractionStage:
+        for stage in PipelineStage:
             stage_data = self.get_stage(stage)
             if stage_data is not None and not stage_data.data.is_empty():
                 path = patient_dir / f"{stage.prefixed_name}.csv"
@@ -128,7 +182,7 @@ class PatientStageCapture:
             Dict mapping stage names to summary stats.
         """
         summary = {}
-        for stage in ExtractionStage:
+        for stage in PipelineStage:
             stage_data = self.get_stage(stage)
             if stage_data is not None:
                 df = stage_data.data
@@ -138,13 +192,13 @@ class PatientStageCapture:
                 }
 
                 # Stage-specific stats
-                if stage == ExtractionStage.RAW:
+                if stage == PipelineStage.RAW:
                     if "feature_name" in df.columns:
                         stats["n_features"] = df["feature_name"].n_unique()
                     if "charttime" in df.columns:
                         stats["time_range_hours"] = _compute_time_range(df)
 
-                elif stage == ExtractionStage.TRANSFORMED:
+                elif stage == PipelineStage.TRANSFORMED:
                     if "feature_name" in df.columns:
                         stats["n_features"] = df["feature_name"].n_unique()
                     if "valuenum" in df.columns:
@@ -153,7 +207,7 @@ class PatientStageCapture:
                             float(df["valuenum"].max() or 0),
                         )
 
-                elif stage == ExtractionStage.BINNED:
+                elif stage == PipelineStage.BINNED:
                     if "hour" in df.columns:
                         stats["hour_range"] = (
                             int(df["hour"].min() or 0),
@@ -165,13 +219,40 @@ class PatientStageCapture:
                         total_obs = sum(df[c].sum() or 0 for c in mask_cols)
                         stats["total_observations"] = int(total_obs)
 
-                elif stage == ExtractionStage.DENSE:
+                # DENSE and dataset stages use grid format (hours × features)
+                elif stage == PipelineStage.DENSE or stage in PipelineStage.dataset_stages():
                     if "hour" in df.columns:
                         stats["n_hours"] = df["hour"].n_unique()
-                    if "observed" in df.columns:
-                        obs_count = df.filter(pl.col("observed") == True).height  # noqa: E712
-                        stats["observed_count"] = obs_count
-                        stats["missing_count"] = len(df) - obs_count
+                    # Count feature columns (exclude stay_id, hour, and _mask columns)
+                    feature_cols = [
+                        c
+                        for c in df.columns
+                        if c not in ("stay_id", "hour") and not c.endswith("_mask")
+                    ]
+                    stats["n_features"] = len(feature_cols)
+                    # Compute value range across all feature columns
+                    if feature_cols:
+                        all_values = []
+                        nan_count = 0
+                        for col in feature_cols:
+                            col_values = df[col].to_list()
+                            for v in col_values:
+                                if v is not None:
+                                    if v != v:  # NaN check
+                                        nan_count += 1
+                                    else:
+                                        all_values.append(v)
+                        if all_values:
+                            stats["value_range"] = (min(all_values), max(all_values))
+                        if nan_count > 0:
+                            stats["nan_count"] = nan_count
+                    # Count observed values from mask columns
+                    mask_cols = [c for c in df.columns if c.endswith("_mask")]
+                    if mask_cols:
+                        total_obs = sum(df[c].sum() or 0 for c in mask_cols)
+                        total_cells = len(df) * len(mask_cols)
+                        stats["observed_count"] = int(total_obs)
+                        stats["missing_count"] = total_cells - int(total_obs)
 
                 summary[stage.value] = stats
 
@@ -208,7 +289,7 @@ class MultiStageCapture:
     def add_stage_data(
         self,
         stay_id: int,
-        stage: ExtractionStage,
+        stage: PipelineStage,
         data: pl.DataFrame,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -234,7 +315,7 @@ class MultiStageCapture:
         """Export all patient stage data to CSVs.
 
         Files are prefixed with stage numbers to show pipeline order:
-        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv
+        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_imputed.csv, 5_normalized.csv
 
         Args:
             output_dir: Base output directory.
@@ -254,7 +335,7 @@ class MultiStageCapture:
         stages_dir = output_dir / "stages"
         stages_dir.mkdir(parents=True, exist_ok=True)
 
-        for stage in ExtractionStage:
+        for stage in PipelineStage:
             combined = self._combine_stage(stage)
             if combined is not None and not combined.is_empty():
                 path = stages_dir / f"{stage.prefixed_name}.csv"
@@ -262,7 +343,7 @@ class MultiStageCapture:
 
         return exported
 
-    def _combine_stage(self, stage: ExtractionStage) -> Optional[pl.DataFrame]:
+    def _combine_stage(self, stage: PipelineStage) -> Optional[pl.DataFrame]:
         """Combine data from all patients for a single stage."""
         dfs = []
         for capture in self.captures.values():
@@ -273,6 +354,9 @@ class MultiStageCapture:
         if not dfs:
             return None
 
+        # Normalize schemas before concatenation to handle Null vs Float64 mismatches
+        # (occurs when a feature has all nulls for one patient but values for another)
+        dfs = _normalize_schemas_for_concat(dfs)
         return pl.concat(dfs)
 
     def get_summary(self) -> Dict[str, Any]:
@@ -285,6 +369,47 @@ class MultiStageCapture:
             },
             "metadata": self.metadata,
         }
+
+
+def _normalize_schemas_for_concat(dfs: List[pl.DataFrame]) -> List[pl.DataFrame]:
+    """Normalize DataFrame schemas to enable concatenation.
+
+    Handles the case where a column is Null type in one DataFrame but has
+    an actual type (e.g., Float64) in another. Casts Null columns to match
+    the non-Null type found in other DataFrames.
+
+    Args:
+        dfs: List of DataFrames to normalize.
+
+    Returns:
+        List of DataFrames with consistent schemas.
+    """
+    if not dfs:
+        return dfs
+
+    # Collect all column types across all DataFrames
+    col_types: Dict[str, pl.DataType] = {}
+    for df in dfs:
+        for col in df.columns:
+            dtype = df.schema[col]
+            if col not in col_types:
+                col_types[col] = dtype
+            elif col_types[col] == pl.Null and dtype != pl.Null:
+                # Prefer non-Null type
+                col_types[col] = dtype
+
+    # Cast columns to consistent types
+    normalized = []
+    for df in dfs:
+        casts = {}
+        for col in df.columns:
+            if df.schema[col] == pl.Null and col_types[col] != pl.Null:
+                casts[col] = col_types[col]
+        if casts:
+            df = df.cast(casts)
+        normalized.append(df)
+
+    return normalized
 
 
 def filter_to_stay_ids(df: pl.DataFrame, stay_ids: List[int]) -> pl.DataFrame:
@@ -434,7 +559,7 @@ def generate_html_report(
         html_parts.append("<h3>Stage Data (Sampled)</h3>")
         html_parts.append("<div class='stage-tables'>")
 
-        for stage in ExtractionStage:
+        for stage in PipelineStage:
             stage_data = patient_capture.get_stage(stage)
             if stage_data is not None and not stage_data.data.is_empty():
                 html_parts.append("<div class='stage-table'>")
@@ -536,7 +661,7 @@ def _get_css_styles() -> str:
 
 def _render_summary_table(summary: Dict[str, Dict[str, Any]]) -> str:
     """Render a summary table comparing stages."""
-    stages = list(ExtractionStage)
+    stages = list(PipelineStage)
 
     html = ["<table class='summary-table'>"]
     html.append("<tr><th>Metric</th>")
@@ -624,3 +749,8 @@ def _render_dataframe_table(
         html.append(f"<p class='truncated-note'>Showing first {max_rows} rows</p>")
 
     return "\n".join(html)
+
+
+# Backwards compatibility alias (deprecated)
+# TODO: Remove in future version
+ExtractionStage = PipelineStage

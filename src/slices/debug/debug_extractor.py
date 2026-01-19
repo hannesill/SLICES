@@ -32,10 +32,9 @@ from slices.data.extractors.mimic_iv import MIMICIVExtractor
 from slices.data.value_transforms import get_transform
 
 from .staged_snapshots import (
-    ExtractionStage,
     MultiStageCapture,
+    PipelineStage,
     filter_to_stay_ids,
-    flatten_binned_to_long,
     generate_html_report,
 )
 
@@ -52,8 +51,11 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
     The captured stages are:
         - RAW: After DuckDB query, before transforms
         - TRANSFORMED: After value transforms (e.g., F→C)
-        - BINNED: After hourly aggregation (sparse format)
-        - DENSE: Final tensor format
+        - BINNED: After hourly aggregation (sparse grid format)
+        - DENSE: Dense grid format (seq_length × n_features) with NaN
+
+    All stages from BINNED onwards use grid format (rows = hours, columns = features)
+    to match the actual data pipeline structure.
 
     Attributes:
         capture_stay_ids: Set of stay IDs to capture data for.
@@ -207,14 +209,14 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
                     combined = pl.concat([existing.raw.data, stay_data])
                     self.stage_captures.add_stage_data(
                         stay_id,
-                        ExtractionStage.RAW,
+                        PipelineStage.RAW,
                         combined,
                         {"tables": [table]},
                     )
                 else:
                     self.stage_captures.add_stage_data(
                         stay_id,
-                        ExtractionStage.RAW,
+                        PipelineStage.RAW,
                         stay_data,
                         {"tables": [table]},
                     )
@@ -233,14 +235,14 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
                     combined = pl.concat([existing.transformed.data, stay_data])
                     self.stage_captures.add_stage_data(
                         stay_id,
-                        ExtractionStage.TRANSFORMED,
+                        PipelineStage.TRANSFORMED,
                         combined,
                         {"tables": [table], "transform": transform},
                     )
                 else:
                     self.stage_captures.add_stage_data(
                         stay_id,
-                        ExtractionStage.TRANSFORMED,
+                        PipelineStage.TRANSFORMED,
                         stay_data,
                         {"tables": [table], "transform": transform},
                     )
@@ -266,7 +268,11 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
         return result
 
     def _capture_binned_stage(self, df: pl.DataFrame, feature_names: List[str]) -> None:
-        """Capture binned stage data for sentinel patients."""
+        """Capture binned stage data for sentinel patients.
+
+        Binned data is already in grid format (stay_id, hour, feat1, feat1_mask, ...),
+        so we keep it as-is to match the actual pipeline output.
+        """
         filtered = filter_to_stay_ids(df, list(self.capture_stay_ids))
         if filtered.is_empty():
             return
@@ -274,13 +280,12 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
         for stay_id in self.capture_stay_ids:
             stay_data = filtered.filter(pl.col("stay_id") == stay_id)
             if not stay_data.is_empty():
-                # Convert to long format for easier inspection
-                long_format = flatten_binned_to_long(stay_data, feature_names)
+                # Keep in grid format to match pipeline output
                 self.stage_captures.add_stage_data(
                     stay_id,
-                    ExtractionStage.BINNED,
-                    long_format,
-                    {"feature_names": feature_names, "format": "long"},
+                    PipelineStage.BINNED,
+                    stay_data,
+                    {"feature_names": feature_names, "format": "grid"},
                 )
 
     def _create_dense_timeseries(
@@ -303,24 +308,27 @@ class DebugMIMICIVExtractor(MIMICIVExtractor):
         return result
 
     def _capture_dense_stage(self, df: pl.DataFrame, feature_names: List[str]) -> None:
-        """Capture dense stage data for sentinel patients."""
+        """Capture dense stage data for sentinel patients.
+
+        Dense data is converted to grid format (stay_id, hour, feat1, feat1_mask, ...)
+        to match the structure of timeseries.parquet and subsequent dataset stages.
+        """
         filtered = filter_to_stay_ids(df, list(self.capture_stay_ids))
         if filtered.is_empty():
             return
 
-        # Import here to avoid circular dependency
-        from .snapshots import flatten_dense_timeseries
+        from .snapshots import dense_to_grid_df
 
         for stay_id in self.capture_stay_ids:
             stay_data = filtered.filter(pl.col("stay_id") == stay_id)
             if not stay_data.is_empty():
-                # Flatten for CSV export
-                flat = flatten_dense_timeseries(stay_data, feature_names)
+                # Convert to grid format to match timeseries.parquet structure
+                grid_df = dense_to_grid_df(stay_data, feature_names)
                 self.stage_captures.add_stage_data(
                     stay_id,
-                    ExtractionStage.DENSE,
-                    flat,
-                    {"feature_names": feature_names, "format": "long"},
+                    PipelineStage.DENSE,
+                    grid_df,
+                    {"feature_names": feature_names, "format": "grid"},
                 )
 
     def run_with_stage_capture(self) -> MultiStageCapture:

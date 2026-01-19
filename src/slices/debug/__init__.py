@@ -57,8 +57,8 @@ from .sampling import (
     select_sentinel_patients,
 )
 from .snapshots import (
+    LegacyPipelineStage,
     PipelineSnapshot,
-    PipelineStage,
     SnapshotConfig,
     SnapshotMixin,
     capture_dense_snapshot,
@@ -71,9 +71,10 @@ from .snapshots import (
     unflatten_timeseries,
 )
 from .staged_snapshots import (
-    ExtractionStage,
+    ExtractionStage,  # Backwards compatibility alias
     MultiStageCapture,
     PatientStageCapture,
+    PipelineStage,  # Canonical stage enum
     StageData,
     compute_stage_diff,
     filter_to_stay_ids,
@@ -116,8 +117,8 @@ __all__ = [
     "select_extreme_stays",
     "select_sentinel_patients",
     # Snapshots
+    "LegacyPipelineStage",
     "PipelineSnapshot",
-    "PipelineStage",
     "SnapshotConfig",
     "SnapshotMixin",
     "capture_dense_snapshot",
@@ -129,9 +130,10 @@ __all__ = [
     "flatten_dense_timeseries",
     "unflatten_timeseries",
     # Staged Snapshots (multi-stage pipeline inspection)
-    "ExtractionStage",
+    "ExtractionStage",  # Backwards compatibility alias for PipelineStage
     "MultiStageCapture",
     "PatientStageCapture",
+    "PipelineStage",  # Canonical stage enum - use this one
     "StageData",
     "compute_stage_diff",
     "filter_to_stay_ids",

@@ -51,9 +51,20 @@ class SentinelSlot:
     Attributes:
         name: Descriptive name for this slot (e.g., "short_stay_clean").
         filters: Dict of column -> (operator, value) filters.
-            Operators: "==", "!=", "<", ">", "<=", ">=", "in"
+            Operators: "==", "!=", "<", ">", "<=", ">=", "in", "between"
+            For "between", value should be a tuple (min, max) - inclusive on both ends.
         sort_by: Optional column to sort by before picking.
         sort_descending: Whether to sort descending.
+
+    Example:
+        >>> SentinelSlot(
+        ...     name="medium_stay",
+        ...     filters={
+        ...         "los_days": ("between", (1, 3)),  # 1 <= los_days <= 3
+        ...         "mortality_24h": ("==", 0),
+        ...     },
+        ...     sort_by="los_days",
+        ... )
     """
 
     name: str
@@ -138,12 +149,17 @@ def get_default_sentinel_slots() -> List[SentinelSlot]:
     Returns 8 slots targeting:
     1. Short stay (<1 day) - boundary condition, survived
     2. Short stay + died - label alignment edge case
-    3. Medium stay + low missingness - "clean" baseline
-    4. Medium stay + high missingness - test imputation
+    3. Medium stay + low missingness - "clean" baseline (1-3 days)
+    4. Medium stay + high missingness - test imputation (1-3 days)
     5. Long stay (>5 days) - test truncation to 48h window
     6. Young patient (<40) - demographic edge
     7. Old patient (>80) - demographic edge
     8. Random sample - catch unexpected issues
+
+    Note:
+        Slots 1-2 require labels_df (for mortality_24h).
+        Slots 3-4 require timeseries_df (for missingness_pct).
+        If these are not provided, those slots will be skipped with a warning.
     """
     return [
         SentinelSlot(
@@ -160,13 +176,13 @@ def get_default_sentinel_slots() -> List[SentinelSlot]:
         ),
         SentinelSlot(
             name="medium_stay_clean",
-            filters={"los_days": (">=", 1), "los_days_max": ("<", 3)},
+            filters={"los_days": ("between", (1, 3))},  # 1 <= los_days < 3
             sort_by="missingness_pct",
             sort_descending=False,  # lowest missingness first
         ),
         SentinelSlot(
             name="medium_stay_sparse",
-            filters={"los_days": (">=", 1), "los_days_max": ("<", 3)},
+            filters={"los_days": ("between", (1, 3))},  # 1 <= los_days < 3
             sort_by="missingness_pct",
             sort_descending=True,  # highest missingness first
         ),
@@ -290,21 +306,26 @@ def _apply_slot_filter(
     df: pl.DataFrame,
     column: str,
     operator: str,
-    value: Union[int, float, str, list],
+    value: Union[int, float, str, list, tuple],
 ) -> pl.DataFrame:
     """Apply a single filter condition to a DataFrame.
 
     Args:
         df: DataFrame to filter.
         column: Column name.
-        operator: Comparison operator.
-        value: Value to compare against.
+        operator: Comparison operator ("==", "!=", "<", ">", "<=", ">=", "in", "between").
+        value: Value to compare against. For "between", should be a tuple (min, max).
 
     Returns:
         Filtered DataFrame.
+
+    Raises:
+        ValueError: If the operator is unknown or column is missing.
     """
     if column not in df.columns:
-        return df.filter(pl.lit(False))  # Return empty if column missing
+        raise ValueError(
+            f"Column '{column}' not found in DataFrame. " f"Available columns: {df.columns}"
+        )
 
     col = pl.col(column)
     if operator == "==":
@@ -321,8 +342,15 @@ def _apply_slot_filter(
         return df.filter(col >= value)
     elif operator == "in":
         return df.filter(col.is_in(value))
+    elif operator == "between":
+        if not isinstance(value, tuple) or len(value) != 2:
+            raise ValueError(f"'between' operator requires a tuple (min, max), got: {value}")
+        min_val, max_val = value
+        return df.filter((col >= min_val) & (col < max_val))
     else:
-        raise ValueError(f"Unknown operator: {operator}")
+        raise ValueError(
+            f"Unknown operator: '{operator}'. Valid operators: ==, !=, <, >, <=, >=, in, between"
+        )
 
 
 def _select_from_slot(
@@ -341,17 +369,19 @@ def _select_from_slot(
 
     Returns:
         Selected stay_id or None if no match found.
+
+    Raises:
+        ValueError: If a filter references a missing column.
     """
     filtered = df.filter(~pl.col("stay_id").is_in(list(already_selected)))
 
     # Apply all filters
     for col, (op, val) in slot.filters.items():
-        # Handle special case for "column_max" suffix (upper bound on same column)
-        if col.endswith("_max"):
-            actual_col = col[:-4]  # Remove "_max" suffix
-            filtered = _apply_slot_filter(filtered, actual_col, op, val)
-        else:
+        try:
             filtered = _apply_slot_filter(filtered, col, op, val)
+        except ValueError as e:
+            # Re-raise with slot context
+            raise ValueError(f"Error in slot '{slot.name}': {e}") from e
 
     if len(filtered) == 0:
         return None
@@ -411,12 +441,19 @@ def select_sentinel_patients(
         already_selected: set = set()
 
         for slot in config.slots:
-            stay_id = _select_from_slot(df, slot, already_selected, rng)
-            if stay_id is not None:
-                selected_rows.append({"stay_id": stay_id, "slot_name": slot.name})
-                already_selected.add(stay_id)
-            else:
-                print(f"Warning: No patient found for slot '{slot.name}'")
+            try:
+                stay_id = _select_from_slot(df, slot, already_selected, rng)
+                if stay_id is not None:
+                    selected_rows.append({"stay_id": stay_id, "slot_name": slot.name})
+                    already_selected.add(stay_id)
+                else:
+                    print(
+                        f"Warning: No patient found for slot '{slot.name}' "
+                        f"(0 matches after filtering)"
+                    )
+            except ValueError as e:
+                # Missing column - provide helpful message about what's needed
+                print(f"Warning: Skipping slot '{slot.name}': {e}")
 
         if not selected_rows:
             # Fallback to random if no slots matched
