@@ -60,6 +60,7 @@ def main(cfg: DictConfig) -> None:
         "tasks_dir",
         "tasks",
         "min_stay_hours",
+        "categories",
     }
 
     extraction_config = OmegaConf.to_container(cfg.extraction, resolve=True)

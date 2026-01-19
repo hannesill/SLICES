@@ -63,6 +63,7 @@ class ExtractorConfig(BaseModel):
     )
     min_stay_hours: int = Field(default=6, ge=0)
     batch_size: int = Field(default=5000, gt=0)
+    categories: Optional[List[str]] = None  # e.g., ["vitals_dense"] for subset extraction
 
     model_config = {"extra": "forbid"}
 
@@ -347,6 +348,7 @@ class BaseExtractor(ABC):
             concepts_dir=concepts_dir,
             dataset_name=dataset_name,
             feature_set=feature_set,
+            categories=self.config.categories,
         )
 
         return feature_mapping
@@ -875,6 +877,7 @@ class BaseExtractor(ABC):
             if (
                 existing_metadata.get("feature_set") != self.config.feature_set
                 or existing_metadata.get("seq_length_hours") != self.config.seq_length_hours
+                or existing_metadata.get("categories") != self.config.categories
             ):
                 console.print(
                     "[yellow]Warning: Existing extraction has different config. "
@@ -1229,6 +1232,7 @@ class BaseExtractor(ABC):
             metadata = {
                 "dataset": self._get_dataset_name(),
                 "feature_set": self.config.feature_set,
+                "categories": self.config.categories,
                 "feature_names": feature_names,
                 "n_features": len(feature_names),
                 "seq_length_hours": self.config.seq_length_hours,
@@ -1240,6 +1244,7 @@ class BaseExtractor(ABC):
                     "parquet_root": str(self.parquet_root),
                     "output_dir": str(self.output_dir),
                     "feature_set": self.config.feature_set,
+                    "categories": self.config.categories,
                     "seq_length_hours": self.config.seq_length_hours,
                     "min_stay_hours": self.config.min_stay_hours,
                     "tasks": self.config.tasks,
