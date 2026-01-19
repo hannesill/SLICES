@@ -1,13 +1,16 @@
 # Debug configuration for pipeline inspection and embedding analysis
 #
 # Example usage:
-#   # Inspect already-processed data (post-hoc):
-#   uv run python scripts/debug/inspect_pipeline.py processed_dir=data/processed/mimic-iv
+#   # Export snapshots from already-processed data (quick, no re-extraction):
+#   uv run python scripts/debug/export_snapshots.py processed_dir=data/processed/mimic-iv
 #
-#   # Inspect pipeline stages (re-runs extraction with capture):
-#   uv run python scripts/debug/inspect_pipeline_stages.py \
+#   # Capture data at each pipeline stage (re-runs extraction for sentinel patients):
+#   uv run python scripts/debug/capture_pipeline_stages.py \
 #       parquet_root=/path/to/mimic-iv-parquet \
 #       processed_dir=data/processed/mimic-iv
+#
+#   # Explore missingness patterns:
+#   uv run python scripts/debug/explore_missingness.py --processed-dir data/processed/mimic-iv
 #
 #   # Analyze embeddings:
 #   uv run python scripts/debug/inspect_embeddings.py checkpoint=outputs/encoder.pt

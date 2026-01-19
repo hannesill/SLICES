@@ -14,9 +14,26 @@ import numpy as np
 import polars as pl
 import yaml
 
+# Import the canonical PipelineStage from staged_snapshots
+# This module previously had its own PipelineStage with different stage names.
+# For backwards compatibility, we keep the old stage names as aliases.
+from .staged_snapshots import PipelineStage
 
-class PipelineStage(str, Enum):
-    """Data pipeline stages for snapshot capture."""
+
+class LegacyPipelineStage(str, Enum):
+    """Legacy pipeline stages (deprecated).
+
+    These stage names were used in earlier versions of the debug module.
+    Use PipelineStage from staged_snapshots instead.
+
+    Mapping to new stages:
+        STAYS -> (use static.parquet directly)
+        RAW_EVENTS -> PipelineStage.RAW
+        HOURLY_BINNED -> PipelineStage.BINNED
+        DENSE_TIMESERIES -> PipelineStage.DENSE
+        LABELS -> (use labels.parquet directly)
+        FINAL -> PipelineStage.NORMALIZED
+    """
 
     STAYS = "stays"
     RAW_EVENTS = "raw_events"
@@ -184,6 +201,55 @@ def capture_dense_snapshot(
 # ---------------------------------------------------------------------------
 
 
+def dense_to_grid_df(
+    dense_df: pl.DataFrame,
+    feature_names: List[str],
+    timeseries_col: str = "timeseries",
+    mask_col: str = "mask",
+) -> pl.DataFrame:
+    """Convert nested timeseries arrays to grid format for CSV export.
+
+    Converts from:
+        stay_id | timeseries (list[list]) | mask (list[list])
+    To:
+        stay_id | hour | feat1 | feat1_mask | feat2 | feat2_mask | ...
+
+    This format matches the structure of timeseries.parquet (one row per hour,
+    features as columns) and is consistent with the dataset preprocessing stages.
+
+    Args:
+        dense_df: Dense timeseries DataFrame with nested arrays.
+        feature_names: Feature names for column headers.
+        timeseries_col: Column name for timeseries data.
+        mask_col: Column name for observation mask.
+
+    Returns:
+        Grid-format DataFrame with one row per (stay_id, hour).
+    """
+    rows = []
+
+    for row in dense_df.iter_rows(named=True):
+        stay_id = row["stay_id"]
+        timeseries = np.array(row[timeseries_col])
+        mask = np.array(row[mask_col]) if mask_col in row and row[mask_col] is not None else None
+
+        n_hours, n_features = timeseries.shape
+
+        for hour in range(n_hours):
+            grid_row: Dict[str, Any] = {
+                "stay_id": stay_id,
+                "hour": hour,
+            }
+            for feat_idx, feat_name in enumerate(feature_names):
+                value = timeseries[hour, feat_idx]
+                grid_row[feat_name] = float(value) if not np.isnan(value) else None
+                if mask is not None:
+                    grid_row[f"{feat_name}_mask"] = bool(mask[hour, feat_idx])
+            rows.append(grid_row)
+
+    return pl.DataFrame(rows)
+
+
 def flatten_dense_timeseries(
     dense_df: pl.DataFrame,
     feature_names: List[str],
@@ -191,6 +257,9 @@ def flatten_dense_timeseries(
     mask_col: str = "mask",
 ) -> pl.DataFrame:
     """Flatten nested timeseries arrays to long format for CSV export.
+
+    NOTE: Prefer dense_to_grid_df() for debug snapshots as it better matches
+    the actual timeseries.parquet structure.
 
     Converts from:
         stay_id | timeseries (list[list]) | mask (list[list])
