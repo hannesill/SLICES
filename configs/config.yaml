@@ -1,5 +1,14 @@
+# Base Configuration
+#
+# This is the base config that other configs inherit from via Hydra defaults.
+# It provides common settings and includes shared sub-configs.
+#
+# Included sub-configs:
+#   - data: Data paths, extraction settings, and loading settings (configs/data/mimic_iv.yaml)
+#   - model: Model architecture (configs/model/transformer.yaml)
+
 defaults:
-  - extraction: mimic_iv
+  - data: mimic_iv
   - model: transformer
   - _self_
 
@@ -8,9 +17,8 @@ project_name: slices
 
 # General settings
 seed: 42
-output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
-# Training settings
+# Training settings (defaults, can be overridden by specific configs)
 training:
   max_epochs: 100
   batch_size: 64

@@ -2,10 +2,14 @@
 #
 # This config orchestrates SSL pretraining with configurable encoder
 # architecture and SSL objective. Override any setting via command line:
-#   uv run python scripts/pretrain.py encoder.d_model=256 ssl.mask_ratio=0.20
+#   uv run python scripts/training/pretrain.py encoder.d_model=256 ssl.mask_ratio=0.20
 #
 # Note: This uses similar settings to configs/model/transformer.yaml but with
 # encoder.pooling=none (required for MAE) instead of pooling=mean (for tasks).
+
+defaults:
+  - data: mimic_iv
+  - _self_
 
 # Project info
 project_name: slices
@@ -18,22 +22,13 @@ seed: 42
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Data configuration
+# Data configuration overrides
+# Base settings inherited from configs/data/mimic_iv.yaml
+# Override processed_dir here if needed:
+#   data.processed_dir: data/processed/mimic-iv-custom
 data:
-  # Path to processed data directory
-  # This should contain: timeseries.parquet, static.parquet, metadata.yaml
-  processed_dir: data/processed/mimic-iv
-
-  # DataModule settings
+  # Increase workers for pretraining (larger batches)
   num_workers: 8
-  train_ratio: 0.7
-  val_ratio: 0.15
-  test_ratio: 0.15
-
-  # Preprocessing
-  normalize: true
-  impute_strategy: forward_fill  # forward_fill | zero | mean | none
-  pin_memory: true
 
 # Encoder configuration
 encoder:

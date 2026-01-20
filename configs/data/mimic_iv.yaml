@@ -1,0 +1,97 @@
+# MIMIC-IV Data Configuration
+#
+# Complete configuration for the MIMIC-IV data pipeline, from raw files through
+# extraction to training. This is the single source of truth for all data settings.
+#
+# Pipeline flow:
+#   1. Raw CSV files (csv_root) -> convert_csv_to_parquet.py -> Parquet files (parquet_root)
+#   2. Parquet files (parquet_root) -> extract_mimic_iv.py -> Processed data (processed_dir)
+#   3. Processed data (processed_dir) -> pretrain.py / finetune.py / supervised.py
+#
+# Override via command line:
+#   uv run python scripts/preprocessing/extract_mimic_iv.py data.parquet_root=/path/to/data
+#   uv run python scripts/training/pretrain.py data.processed_dir=/path/to/processed
+
+name: mimic_iv
+
+# =============================================================================
+# DATA PATHS
+# =============================================================================
+
+# Path to raw CSV.gz files (only needed if starting from PhysioNet CSVs)
+# Expected structure:
+#   ${csv_root}/hosp/patients.csv.gz
+#   ${csv_root}/hosp/admissions.csv.gz
+#   ${csv_root}/icu/icustays.csv.gz
+#   etc.
+csv_root: data/raw/mimic-iv
+
+# Path to Parquet files (input for extraction pipeline)
+# - If starting with CSVs: created by convert_csv_to_parquet.py
+# - If starting with Parquet: point to your existing Parquet directory
+# Expected structure:
+#   ${parquet_root}/hosp/patients.parquet
+#   ${parquet_root}/icu/chartevents.parquet
+#   etc.
+parquet_root: data/parquet/mimic-iv
+
+# Path to processed/extracted features (output of extraction, input for training)
+# Contains: timeseries.parquet, static.parquet, labels.parquet, metadata.yaml
+processed_dir: data/processed/mimic-iv
+
+# =============================================================================
+# EXTRACTION SETTINGS
+# =============================================================================
+
+# Sequence length for time-series extraction (hours from ICU admission)
+seq_length_hours: 48
+
+# Minimum ICU stay length to include (in hours)
+# Set equal to seq_length_hours for complete observation windows
+min_stay_hours: 48
+
+# Feature set to extract
+# - core: Essential vital signs and labs for most tasks
+# - extended: All available features including rare measurements
+feature_set: core
+
+# Feature categories to extract (null = all categories)
+# Use for subset extraction, e.g., ["vitals_dense"] for only dense vitals
+categories: null
+
+# Number of stays per batch during extraction (reduce if running out of memory)
+extraction_batch_size: 5000
+
+# Tasks to extract labels for
+tasks:
+  - mortality_24h
+
+# =============================================================================
+# CONFIG DIRECTORY PATHS (auto-detected if null)
+# =============================================================================
+
+# Path to concepts directory containing feature definitions
+concepts_dir: null
+
+# Path to dataset configs directory
+datasets_dir: null
+
+# Path to task configs directory
+tasks_dir: null
+
+# =============================================================================
+# TRAINING DATA LOADING
+# =============================================================================
+
+# DataLoader settings
+num_workers: 4
+pin_memory: true
+
+# Patient-level split ratios (ensures no patient appears in multiple splits)
+train_ratio: 0.7
+val_ratio: 0.15
+test_ratio: 0.15
+
+# Preprocessing applied during training
+normalize: true
+impute_strategy: forward_fill  # forward_fill | zero | mean | none

@@ -30,8 +30,25 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
+from slices.data.config_schemas import DataConfig
 from slices.data.datamodule import ICUDataModule
 from slices.training import SSLPretrainModule
+
+
+def validate_data_config(cfg: DictConfig) -> DataConfig:
+    """Validate data configuration using Pydantic schema.
+
+    Args:
+        cfg: Hydra configuration object containing 'data' section.
+
+    Returns:
+        Validated DataConfig instance.
+
+    Raises:
+        pydantic.ValidationError: If data config is invalid.
+    """
+    data_dict = OmegaConf.to_container(cfg.data, resolve=True)
+    return DataConfig(**data_dict)
 
 
 def setup_callbacks(cfg: DictConfig) -> list:
@@ -115,6 +132,11 @@ def main(cfg: DictConfig) -> None:
     # Print configuration
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
+
+    # Validate data configuration early
+    print("\nValidating data configuration...")
+    data_config = validate_data_config(cfg)
+    print(f"  - Data config validated: processed_dir={data_config.processed_dir}")
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)

@@ -4,21 +4,24 @@
 # Run this ONCE after extraction, before training.
 #
 # Usage:
+#   uv run python scripts/preprocessing/prepare_dataset.py
+#
+#   # Override processed directory:
 #   uv run python scripts/preprocessing/prepare_dataset.py \
-#       data.processed_dir=data/processed/mimic-iv
+#       data.processed_dir=data/processed/mimic-iv-custom
+
+defaults:
+  - data: mimic_iv
+  - _self_
 
 # Random seed for reproducible splits
 seed: 42
 
-# Data paths
-data:
-  processed_dir: data/processed/mimic-iv-demo
-
-# Split configuration
+# Split configuration (can override data config defaults)
 split:
-  train_ratio: 0.7
-  val_ratio: 0.15
-  test_ratio: 0.15
+  train_ratio: ${data.train_ratio}
+  val_ratio: ${data.val_ratio}
+  test_ratio: ${data.test_ratio}
 
 # Hydra configuration
 hydra:

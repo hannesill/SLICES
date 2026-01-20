@@ -1,10 +1,11 @@
-"""Pydantic models for concept extraction configuration.
+"""Pydantic models for data configuration.
 
 This module defines the schema for dataset and concept configurations used
-by the extraction pipeline. The new schema supports multiple ICU datasets
-(MIMIC-IV, eICU) with different extraction patterns.
+by the extraction pipeline, as well as data loading configurations used by
+training scripts.
 
 Schemas:
+    DataConfig: Training data loading configuration (paths, preprocessing, splits)
     DatasetConfig: Dataset-level metadata (time handling, IDs, tables)
     TimeSeriesConceptConfig: Per-concept extraction rules for time-series features
     StaticConceptConfig: Per-concept extraction rules for static/demographic features
@@ -252,3 +253,87 @@ class StaticConceptConfig(BaseModel):
         if self.categories and self.dtype != "categorical":
             raise ValueError("Features with categories should have dtype='categorical'")
         return self
+
+
+# =============================================================================
+# Unified Data Configuration
+# =============================================================================
+
+
+class DataConfig(BaseModel):
+    """Unified configuration for the complete data pipeline.
+
+    This schema validates the 'data' section of configs/data/mimic_iv.yaml,
+    which is the single source of truth for all data settings including:
+    - Data paths (csv_root, parquet_root, processed_dir)
+    - Extraction settings (seq_length_hours, feature_set, tasks)
+    - Training data loading (num_workers, split ratios, normalization)
+
+    Used by both extraction scripts and training scripts.
+    """
+
+    # Dataset identifier
+    name: Optional[str] = None
+
+    # ==========================================================================
+    # Data Paths
+    # ==========================================================================
+    csv_root: Optional[str] = None  # Raw CSV path (only for convert_csv_to_parquet)
+    parquet_root: Optional[str] = None  # Parquet files (input for extraction)
+    processed_dir: str  # Extracted features (output of extraction, input for training)
+
+    # ==========================================================================
+    # Extraction Settings
+    # ==========================================================================
+    seq_length_hours: int = 48  # Sequence length for time-series extraction
+    min_stay_hours: int = 48  # Minimum ICU stay length to include
+    feature_set: Literal["core", "extended"] = "core"  # Feature set to extract
+    categories: Optional[List[str]] = None  # Feature categories (null = all)
+    extraction_batch_size: int = 5000  # Stays per batch during extraction
+    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h"])
+
+    # Config directory paths (auto-detected if null)
+    concepts_dir: Optional[str] = None
+    datasets_dir: Optional[str] = None
+    tasks_dir: Optional[str] = None
+
+    # ==========================================================================
+    # Training Data Loading
+    # ==========================================================================
+    num_workers: int = 4
+    pin_memory: bool = True
+
+    # Patient-level split ratios
+    train_ratio: float = 0.7
+    val_ratio: float = 0.15
+    test_ratio: float = 0.15
+
+    # Preprocessing applied during training
+    normalize: bool = True
+    impute_strategy: Literal["forward_fill", "zero", "mean", "none"] = "forward_fill"
+
+    model_config = {"extra": "allow"}  # Allow additional fields from Hydra
+
+    @model_validator(mode="after")
+    def validate_split_ratios(self) -> "DataConfig":
+        """Validate that split ratios sum to 1.0."""
+        total = self.train_ratio + self.val_ratio + self.test_ratio
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"Split ratios must sum to 1.0, got {total}")
+        return self
+
+    @field_validator("processed_dir")
+    @classmethod
+    def validate_processed_dir_not_empty(cls, v: str) -> str:
+        """Validate that processed_dir is not empty."""
+        if not v or not v.strip():
+            raise ValueError("processed_dir cannot be empty")
+        return v
+
+    @field_validator("seq_length_hours", "min_stay_hours", "extraction_batch_size")
+    @classmethod
+    def validate_positive_int(cls, v: int) -> int:
+        """Validate that value is positive."""
+        if v <= 0:
+            raise ValueError("Value must be positive")
+        return v
