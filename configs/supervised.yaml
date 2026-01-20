@@ -1,0 +1,126 @@
+# Full Supervised Training Configuration
+#
+# This config is for training a model from scratch (no SSL pretraining) to establish
+# a baseline for comparing SSL methods. It uses the same architecture and training
+# infrastructure as finetuning but trains all parameters from random initialization.
+#
+# Example usage:
+#   # Train supervised baseline
+#   uv run python scripts/training/supervised.py
+#
+#   # Different task
+#   uv run python scripts/training/supervised.py task.task_name=mortality_48h
+#
+#   # Resume from checkpoint
+#   uv run python scripts/training/supervised.py ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
+
+defaults:
+  - data: mimic_iv
+  - _self_
+
+# Project info
+project_name: slices
+experiment_name: supervised
+
+# Random seed for reproducibility
+seed: 42
+
+# Resume from checkpoint (for interrupted training)
+ckpt_path: null
+
+# Output directory (Hydra will create timestamped subdirs)
+output_dir: ${hydra:runtime.output_dir}
+checkpoint_dir: ${output_dir}/checkpoints
+
+# Data configuration overrides
+# Base settings inherited from configs/data/mimic_iv.yaml
+
+# Encoder configuration
+# d_input will be automatically set from data.
+encoder:
+  name: transformer
+  d_model: 128
+  n_layers: 4
+  n_heads: 8
+  d_ff: 512
+  dropout: 0.1
+  max_seq_length: 168
+  pooling: mean
+  use_positional_encoding: true
+  prenorm: true
+  activation: gelu
+  layer_norm_eps: 1.0e-5
+
+# Task configuration
+task:
+  # Task identifier (matches label column in labels.parquet)
+  task_name: mortality_24h
+
+  # Task type: binary | multiclass | multilabel | regression
+  task_type: binary
+
+  # Number of classes (only for multiclass/multilabel)
+  n_classes: null
+
+  # Task head configuration
+  head_type: mlp  # mlp | linear
+  hidden_dims: [64]
+  dropout: 0.1
+  activation: relu
+
+# Training configuration
+training:
+  max_epochs: 100  # More epochs for training from scratch
+  batch_size: 64
+
+  # IMPORTANT: Always train all parameters from scratch
+  freeze_encoder: false
+
+  # Compute settings
+  accelerator: auto  # auto | cpu | gpu | mps
+  devices: auto
+  precision: 32
+
+  # Regularization
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+
+  # Early stopping
+  early_stopping_patience: 15  # More patience for training from scratch
+  early_stopping_monitor: val/auroc
+  early_stopping_mode: max
+
+  # Debug: overfit on N batches (0 = disabled)
+  overfit_batches: 0
+
+# Optimizer configuration
+# Higher learning rate than finetuning since we're training from scratch
+optimizer:
+  name: adamw
+  lr: 1.0e-3  # Higher LR for training from scratch
+  weight_decay: 0.01
+
+# Learning rate scheduler
+scheduler:
+  name: cosine
+  T_max: ${training.max_epochs}
+  eta_min: 1.0e-6
+
+# Logging configuration
+logging:
+  use_wandb: false
+  wandb_project: ${project_name}
+  wandb_entity: null
+  run_name: ${experiment_name}_${task.task_name}
+  log_every_n_steps: 10
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/supervised/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/supervised/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Deterministic mode (slower but reproducible)
+deterministic: false
