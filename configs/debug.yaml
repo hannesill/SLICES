@@ -2,23 +2,27 @@
 #
 # Example usage:
 #   # Export snapshots from already-processed data (quick, no re-extraction):
-#   uv run python scripts/debug/export_snapshots.py processed_dir=data/processed/mimic-iv
+#   uv run python scripts/debug/export_snapshots.py
+#
+#   # Override data paths:
+#   uv run python scripts/debug/export_snapshots.py data.processed_dir=data/processed/mimic-iv
 #
 #   # Capture data at each pipeline stage (re-runs extraction for sentinel patients):
 #   uv run python scripts/debug/capture_pipeline_stages.py \
-#       parquet_root=/path/to/mimic-iv-parquet \
-#       processed_dir=data/processed/mimic-iv
+#       data.parquet_root=/path/to/mimic-iv-parquet
 #
 #   # Explore missingness patterns:
-#   uv run python scripts/debug/explore_missingness.py --processed-dir data/processed/mimic-iv
+#   uv run python scripts/debug/explore_missingness.py
 #
 #   # Analyze embeddings:
 #   uv run python scripts/debug/inspect_embeddings.py checkpoint=outputs/encoder.pt
 
-# Data paths
-parquet_root: null  # Path to source MIMIC-IV parquet files (for staged inspection)
-processed_dir: null  # Path to processed data directory (for sentinel selection or post-hoc inspection)
-output_dir: null  # Default: processed_dir/debug_snapshots or staged_snapshots
+defaults:
+  - data: mimic_iv
+  - _self_
+
+# Output directory for debug artifacts (defaults to processed_dir/debug_snapshots)
+debug_output_dir: null
 
 # Sentinel patient selection
 sentinel:
@@ -34,14 +38,6 @@ stay_ids: null  # e.g., [30118103, 30145082]
 checkpoint: null  # Path to encoder checkpoint (.pt file)
 embeddings_file: null  # Path to pre-computed embeddings (.npz or .pt)
 max_samples: 5000  # Max samples for embedding extraction
-
-# Extraction options (for staged inspection)
-feature_set: core  # Feature set to extract (core or extended)
-seq_length_hours: 48  # Sequence length for dense timeseries
-tasks:  # Tasks for label extraction
-  - mortality_24h
-  - mortality_48h
-  - mortality_hospital
 
 # Output options
 plots: false  # Generate visualization plots

@@ -5,16 +5,20 @@
 #
 # Example usage:
 #   # Linear probing (frozen encoder, default)
-#   uv run python scripts/finetune.py checkpoint=outputs/encoder.pt
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt
 #
 #   # Full finetuning (train encoder + head)
-#   uv run python scripts/finetune.py checkpoint=outputs/encoder.pt training.freeze_encoder=false
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.freeze_encoder=false
 #
 #   # Gradual unfreezing (freeze for N epochs, then unfreeze)
-#   uv run python scripts/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
 #
 #   # Different task
-#   uv run python scripts/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_48h
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_48h
+
+defaults:
+  - data: mimic_iv
+  - _self_
 
 # Project info
 project_name: slices
@@ -34,22 +38,8 @@ pretrain_checkpoint: null
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Data configuration
-data:
-  # Path to processed data directory
-  # This should contain: timeseries.parquet, static.parquet, labels.parquet, metadata.yaml
-  processed_dir: data/processed/mimic-iv-demo
-
-  # DataModule settings
-  num_workers: 4
-  train_ratio: 0.7
-  val_ratio: 0.15
-  test_ratio: 0.15
-
-  # Preprocessing
-  normalize: true
-  impute_strategy: forward_fill  # forward_fill | zero | mean | none
-  pin_memory: true
+# Data configuration overrides
+# Base settings inherited from configs/data/mimic_iv.yaml
 
 # Encoder configuration
 # NOTE: This should match the pretrained encoder architecture!
