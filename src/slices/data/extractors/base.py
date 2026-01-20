@@ -307,6 +307,9 @@ class BaseExtractor(ABC):
 
         Returns:
             List of LabelConfig instances.
+
+        Raises:
+            ValueError: If task's observation_window_hours doesn't match seq_length_hours.
         """
         tasks_path = self._get_tasks_path()
         task_configs = []
@@ -320,9 +323,44 @@ class BaseExtractor(ABC):
             with open(config_file) as f:
                 config_dict = yaml.safe_load(f)
 
-            task_configs.append(LabelConfig(**config_dict))
+            task_config = LabelConfig(**config_dict)
+
+            # Validate observation_window_hours matches seq_length_hours
+            self._validate_observation_window(task_config)
+
+            task_configs.append(task_config)
 
         return task_configs
+
+    def _validate_observation_window(self, task_config: LabelConfig) -> None:
+        """Validate that task's observation_window_hours matches extraction seq_length_hours.
+
+        This is critical for preventing data leakage. If the model sees more data
+        (seq_length_hours) than the task expects (observation_window_hours), patients
+        who died during the observation window might not be properly excluded.
+
+        Args:
+            task_config: Task configuration to validate.
+
+        Raises:
+            ValueError: If observation_window_hours doesn't match seq_length_hours.
+        """
+        obs_window = task_config.observation_window_hours
+        seq_length = self.config.seq_length_hours
+
+        if obs_window is None:
+            # Legacy mode (no observation window) - no validation needed
+            return
+
+        if obs_window != seq_length:
+            raise ValueError(
+                f"Configuration mismatch for task '{task_config.task_name}': "
+                f"observation_window_hours ({obs_window}) != seq_length_hours ({seq_length}). "
+                f"This can cause data leakage - patients who died during the observation "
+                f"window may not be properly excluded. "
+                f"Either update the task config's observation_window_hours to {seq_length}, "
+                f"or change seq_length_hours in your extraction config to {obs_window}."
+            )
 
     def _load_feature_mapping(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
         """Load feature mapping from YAML config files.
