@@ -238,8 +238,16 @@ class TransformerEncoder(BaseEncoder):
         # Validate configuration before creating modules
         self._validate_config()
 
-        # Input projection: (B, T, d_input) -> (B, T, d_model)
-        self.input_proj = nn.Linear(config.d_input, config.d_model)
+        # Compute actual input dimension based on observation mask mode
+        # When use_observation_mask=True and mask_input_mode="concat":
+        # input is (values, mask) concatenated → d_input * 2
+        if config.use_observation_mask and config.mask_input_mode == "concat":
+            actual_d_input = config.d_input * 2
+        else:
+            actual_d_input = config.d_input
+
+        # Input projection: (B, T, actual_d_input) -> (B, T, d_model)
+        self.input_proj = nn.Linear(actual_d_input, config.d_model)
 
         # Optional CLS token for pooling
         if config.pooling == "cls":
@@ -291,6 +299,44 @@ class TransformerEncoder(BaseEncoder):
                 f"Invalid pooling '{self.config.pooling}'. " f"Choose from: {valid_pooling}"
             )
 
+        valid_mask_modes = {"concat"}
+        if self.config.mask_input_mode not in valid_mask_modes:
+            raise ValueError(
+                f"Invalid mask_input_mode '{self.config.mask_input_mode}'. "
+                f"Choose from: {valid_mask_modes}"
+            )
+
+    def _apply_mask_input(self, x: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
+        """Prepare input with observation mask when use_observation_mask is enabled.
+
+        Args:
+            x: Input tensor (B, T, D) - may contain forward-filled values.
+            mask: Observation mask (B, T, D) - True = observed, False = imputed.
+                  If None when use_observation_mask=True, defaults to all observed.
+
+        Returns:
+            Modified input ready for projection:
+            - If mask_input_mode="concat": (B, T, 2*D) with values and mask concatenated.
+        """
+        if not self.config.use_observation_mask:
+            return x
+
+        B, T, D = x.shape
+
+        # Default to all observed if mask not provided
+        if mask is None:
+            mask = torch.ones(B, T, D, dtype=torch.bool, device=x.device)
+
+        # Optionally zero out imputed values (let mask carry the information)
+        if self.config.zero_imputed_values:
+            x = x * mask.float()
+
+        if self.config.mask_input_mode == "concat":
+            # Concatenate mask as features: (B, T, 2*D)
+            return torch.cat([x, mask.float()], dim=-1)
+
+        return x
+
     def forward(
         self,
         x: torch.Tensor,
@@ -303,8 +349,9 @@ class TransformerEncoder(BaseEncoder):
             x: Input tensor of shape (B, T, D) where B is batch size,
                T is sequence length, and D is feature dimension (d_input).
             mask: Optional observation mask of shape (B, T, D) where True
-                  indicates observed values. Currently used for logging only;
-                  missing values should be imputed before passing to encoder.
+                  indicates observed values. When use_observation_mask=True,
+                  this is incorporated as explicit input to the model.
+                  When use_observation_mask=False, it is ignored.
             padding_mask: Optional padding mask of shape (B, T) where True
                          indicates valid timesteps and False indicates padding.
                          Note: PyTorch convention is inverted in MultiheadAttention
@@ -316,6 +363,10 @@ class TransformerEncoder(BaseEncoder):
             - Otherwise: shape (B, d_model)
         """
         B, T, D = x.shape
+
+        # Apply observation mask as explicit input if enabled
+        # This transforms (B, T, D) -> (B, T, 2*D) for concat mode
+        x = self._apply_mask_input(x, mask)
 
         # Input projection
         x = self.input_proj(x)  # (B, T, d_model)

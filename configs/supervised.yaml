@@ -51,6 +51,11 @@ encoder:
   activation: gelu
   layer_norm_eps: 1.0e-5
 
+  # Observation mask handling
+  use_observation_mask: false
+  mask_input_mode: concat
+  zero_imputed_values: false
+
 # Task configuration
 task:
   # Task identifier (matches label column in labels.parquet)
