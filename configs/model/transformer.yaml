@@ -1,60 +1,57 @@
-# Transformer encoder configuration for ICU time-series pretraining
+# @package encoder
+# Transformer Encoder Configuration (Canonical Source)
 #
-# This config defines a modular transformer architecture for learning
-# universal patient embeddings from unlabeled ICU time-series data.
-
-name: transformer
-
-encoder:
-  # Input/Output dimensions
-  d_input: 35  # Number of input features (core feature set: 9 vitals + 26 labs)
-  d_model: 128  # Model dimension (embedding size)
-  max_seq_length: 168  # Maximum sequence length in hours (7 days)
-
-  # Transformer architecture
-  n_layers: 4  # Number of transformer encoder layers
-  n_heads: 8  # Number of attention heads (must divide d_model evenly)
-  d_ff: 512  # Feedforward dimension (typically 4 * d_model)
-
-  # Regularization
-  dropout: 0.1  # Dropout probability for attention and feedforward
-
-  # Architecture choices
-  activation: gelu  # Activation function: gelu | relu | silu
-  layer_norm_eps: 1.0e-5  # Layer normalization epsilon
-  prenorm: true  # Pre-LN (true) vs Post-LN (false) transformer
-  use_positional_encoding: true  # Add sinusoidal positional encoding
-
-  # Pooling strategy for sequence-level representation
-  # Options: mean | max | cls | last | none
-  # - mean: Average over valid timesteps (recommended for SSL)
-  # - max: Max pooling over valid timesteps
-  # - cls: Use special [CLS] token (BERT-style)
-  # - last: Use last valid timestep
-  # - none: Return per-timestep embeddings (B, T, d_model)
-  pooling: mean
-
-  # Observation mask handling
-  # When enabled, the observation mask is provided as explicit input to the model
-  # instead of relying solely on forward-fill imputation.
-  use_observation_mask: false  # Set to true for mask-aware training
-  mask_input_mode: concat      # How to incorporate mask: concat (values + mask features)
-  zero_imputed_values: false   # Zero out imputed values (let mask carry the info)
-
-ssl:
-  name: mae  # mae | jepa | contrastive
-  # Objective-specific params added in subclasses
-
+# This is the single source of truth for transformer encoder architecture.
+# Training configs (supervised.yaml, pretrain.yaml, finetune.yaml) inherit
+# from this via Hydra defaults and override only what differs.
+#
 # Common configurations:
 #
 # Small (for debugging/testing):
-#   d_model: 64, n_layers: 2, n_heads: 4, d_ff: 256
+#   encoder.d_model=64 encoder.n_layers=2 encoder.n_heads=4 encoder.d_ff=256
 #   ~200K parameters
 #
 # Medium (default):
-#   d_model: 128, n_layers: 4, n_heads: 8, d_ff: 512
+#   encoder.d_model=128 encoder.n_layers=4 encoder.n_heads=8 encoder.d_ff=512
 #   ~1.5M parameters
 #
 # Large (research-scale):
-#   d_model: 512, n_layers: 8, n_heads: 16, d_ff: 2048
+#   encoder.d_model=512 encoder.n_layers=8 encoder.n_heads=16 encoder.d_ff=2048
 #   ~25M parameters
+
+name: transformer
+
+# Input/Output dimensions
+# d_input is typically set automatically from data config
+d_model: 128  # Model dimension (embedding size)
+max_seq_length: 168  # Maximum sequence length in hours (7 days)
+
+# Transformer architecture
+n_layers: 4  # Number of transformer encoder layers
+n_heads: 8  # Number of attention heads (must divide d_model evenly)
+d_ff: 512  # Feedforward dimension (typically 4 * d_model)
+
+# Regularization
+dropout: 0.1  # Dropout probability for attention and feedforward
+
+# Architecture choices
+activation: gelu  # Activation function: gelu | relu | silu
+layer_norm_eps: 1.0e-5  # Layer normalization epsilon
+prenorm: true  # Pre-LN (true) vs Post-LN (false) transformer
+use_positional_encoding: true  # Add sinusoidal positional encoding
+
+# Pooling strategy for sequence-level representation
+# Options: mean | max | cls | last | none
+# - mean: Average over valid timesteps (default for supervised/finetune)
+# - max: Max pooling over valid timesteps
+# - cls: Use special [CLS] token (BERT-style)
+# - last: Use last valid timestep
+# - none: Return per-timestep embeddings (required for MAE pretraining)
+pooling: mean
+
+# Observation mask handling
+# When enabled, the observation mask is provided as explicit input to the model
+# instead of relying solely on forward-fill imputation.
+use_observation_mask: false  # Set to true for mask-aware training
+mask_input_mode: concat      # How to incorporate mask: concat (values + mask features)
+zero_imputed_values: false   # Zero out imputed values (let mask carry the info)
