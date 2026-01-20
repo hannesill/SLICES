@@ -1,13 +1,27 @@
 # 24-hour mortality prediction task
-# Predict if patient will die in the next 24 hours
+# Predict if patient will die within 24 hours AFTER the observation window ends
+#
+# Timeline (with default settings):
+#   |---- observation (48h) ----|-- gap (0h) --|---- prediction (24h) ----|
+#   intime                    +48h           +48h                       +72h
+#
+# - Model sees: hours 0-48 of ICU stay
+# - Model predicts: will patient die in hours 48-72?
+# - Patients who die during observation (hours 0-48) are excluded (label=null)
 
 task_name: mortality_24h
 task_type: binary_classification
 
 # Prediction parameters
-prediction_window_hours: 24
-observation_window_hours: null  # Use all available history
-gap_hours: 0  # No gap - predict from admission
+prediction_window_hours: 24  # Predict mortality in 24h window after observation ends
+observation_window_hours: 48  # Must match seq_length_hours in data config
+gap_hours: 0  # No gap between observation end and prediction start
+# TODO: If gap_hours > 0 is needed, implement handling for deaths during the gap period.
+# Currently, deaths during the gap are labeled as 0 (survived prediction window).
+# Options to consider:
+#   1. Exclude gap deaths (label=null) similar to observation deaths
+#   2. Keep current behavior (label=0) but document clearly
+#   3. Add a separate config option for gap death handling
 
 # Data requirements
 label_sources:

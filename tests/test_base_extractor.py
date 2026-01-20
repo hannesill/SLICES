@@ -798,6 +798,101 @@ class TestLoadTaskConfigs:
         assert "mortality_24h" in task_names
         assert "mortality_48h" in task_names
 
+    def test_observation_window_validation_raises_on_mismatch(self, tmp_path):
+        """Test that loading task with mismatched observation_window_hours raises error."""
+        parquet_root = tmp_path / "parquet"
+        tasks_dir = tmp_path / "tasks"
+        (parquet_root / "icu").mkdir(parents=True)
+        (parquet_root / "hosp").mkdir(parents=True)
+        tasks_dir.mkdir(parents=True)
+
+        # Create task config with observation_window_hours=24
+        task_config = {
+            "task_name": "mortality_24h",
+            "task_type": "binary_classification",
+            "prediction_window_hours": 24,
+            "observation_window_hours": 24,  # Different from seq_length_hours
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+        }
+        with open(tasks_dir / "mortality_24h.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        # Extractor with seq_length_hours=48 (doesn't match observation_window_hours=24)
+        config = ExtractorConfig(
+            parquet_root=str(parquet_root),
+            tasks_dir=str(tasks_dir),
+            seq_length_hours=48,
+        )
+        extractor = MockExtractor(config)
+
+        # Should raise ValueError due to mismatch
+        with pytest.raises(ValueError, match="Configuration mismatch"):
+            extractor._load_task_configs(["mortality_24h"])
+
+    def test_observation_window_validation_passes_when_matching(self, tmp_path):
+        """Test that loading task with matching observation_window_hours succeeds."""
+        parquet_root = tmp_path / "parquet"
+        tasks_dir = tmp_path / "tasks"
+        (parquet_root / "icu").mkdir(parents=True)
+        (parquet_root / "hosp").mkdir(parents=True)
+        tasks_dir.mkdir(parents=True)
+
+        # Create task config with observation_window_hours=48 (matches seq_length_hours)
+        task_config = {
+            "task_name": "mortality_24h",
+            "task_type": "binary_classification",
+            "prediction_window_hours": 24,
+            "observation_window_hours": 48,  # Matches seq_length_hours
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+        }
+        with open(tasks_dir / "mortality_24h.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(parquet_root),
+            tasks_dir=str(tasks_dir),
+            seq_length_hours=48,  # Matches observation_window_hours
+        )
+        extractor = MockExtractor(config)
+
+        # Should succeed without raising
+        loaded = extractor._load_task_configs(["mortality_24h"])
+        assert len(loaded) == 1
+        assert loaded[0].observation_window_hours == 48
+
+    def test_observation_window_validation_skipped_when_none(self, tmp_path):
+        """Test that validation is skipped for legacy tasks without observation_window_hours."""
+        parquet_root = tmp_path / "parquet"
+        tasks_dir = tmp_path / "tasks"
+        (parquet_root / "icu").mkdir(parents=True)
+        (parquet_root / "hosp").mkdir(parents=True)
+        tasks_dir.mkdir(parents=True)
+
+        # Create legacy task config without observation_window_hours
+        task_config = {
+            "task_name": "mortality_hospital",
+            "task_type": "binary_classification",
+            "prediction_window_hours": None,  # Legacy hospital mortality
+            # observation_window_hours not set (defaults to None)
+            "label_sources": ["stays", "mortality_info"],
+        }
+        with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(parquet_root),
+            tasks_dir=str(tasks_dir),
+            seq_length_hours=48,
+        )
+        extractor = MockExtractor(config)
+
+        # Should succeed without raising (validation skipped for legacy mode)
+        loaded = extractor._load_task_configs(["mortality_hospital"])
+        assert len(loaded) == 1
+        assert loaded[0].observation_window_hours is None
+
 
 class TestPathResolution:
     """Tests for path resolution methods."""
