@@ -713,5 +713,247 @@ class TestTransformerIntegration:
         assert loss.item() > 0
 
 
+class TestObservationMaskInput:
+    """Tests for observation mask as explicit input feature."""
+
+    def test_backward_compatibility_mask_ignored_by_default(self):
+        """Test that mask is ignored when use_observation_mask=False (default)."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            dropout=0.0,
+            use_observation_mask=False,
+            pooling="mean",
+        )
+
+        encoder = TransformerEncoder(config)
+        encoder.eval()
+
+        x = torch.randn(4, 24, 35)
+        mask_full = torch.ones(4, 24, 35, dtype=torch.bool)
+        mask_sparse = torch.zeros(4, 24, 35, dtype=torch.bool)
+        mask_sparse[:, :, :10] = True
+
+        with torch.no_grad():
+            out_full = encoder(x, mask=mask_full)
+            out_sparse = encoder(x, mask=mask_sparse)
+            out_none = encoder(x, mask=None)
+
+        # All should be identical when use_observation_mask=False
+        assert torch.allclose(out_full, out_sparse, atol=1e-5)
+        assert torch.allclose(out_full, out_none, atol=1e-5)
+
+    def test_concat_mode_doubles_input_dimension(self):
+        """Test that concat mode correctly doubles the input projection dimension."""
+        config_no_mask = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            use_observation_mask=False,
+        )
+
+        config_with_mask = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+        )
+
+        encoder_no_mask = TransformerEncoder(config_no_mask)
+        encoder_with_mask = TransformerEncoder(config_with_mask)
+
+        # Check input projection dimensions
+        assert encoder_no_mask.input_proj.in_features == 35
+        assert encoder_with_mask.input_proj.in_features == 70  # 35 * 2
+
+    def test_different_masks_produce_different_outputs(self):
+        """Test that different observation masks produce different encoder outputs."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            dropout=0.0,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+        )
+
+        encoder = TransformerEncoder(config)
+        encoder.eval()
+
+        x = torch.randn(4, 24, 35)
+        mask_full = torch.ones(4, 24, 35, dtype=torch.bool)
+        mask_half = torch.zeros(4, 24, 35, dtype=torch.bool)
+        mask_half[:, :, :17] = True
+
+        with torch.no_grad():
+            out_full = encoder(x, mask=mask_full)
+            out_half = encoder(x, mask=mask_half)
+
+        # Different masks should produce different outputs
+        assert not torch.allclose(out_full, out_half, atol=1e-5)
+
+    def test_zero_imputed_values(self):
+        """Test that zero_imputed_values correctly zeros out imputed positions."""
+        config = TransformerConfig(
+            d_input=4,
+            d_model=8,
+            n_layers=1,
+            n_heads=2,
+            dropout=0.0,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+            zero_imputed_values=True,
+        )
+
+        encoder = TransformerEncoder(config)
+        encoder.eval()
+
+        # Create input where imputed values have large magnitudes
+        x = torch.ones(2, 10, 4) * 100.0  # Large values
+
+        # Mask where only first 2 features are observed
+        mask = torch.zeros(2, 10, 4, dtype=torch.bool)
+        mask[:, :, :2] = True
+
+        # After _apply_mask_input, the last 2 features should be zeroed
+        prepared = encoder._apply_mask_input(x, mask)
+
+        # Check that imputed values are zeroed (first 4 dims are values)
+        assert torch.allclose(prepared[:, :, 2:4], torch.zeros(2, 10, 2))
+        # Observed values should remain
+        assert torch.allclose(prepared[:, :, :2], torch.ones(2, 10, 2) * 100.0)
+
+    def test_mask_defaults_to_all_observed_when_none(self):
+        """Test that mask defaults to all observed when not provided."""
+        config = TransformerConfig(
+            d_input=4,
+            d_model=8,
+            n_layers=1,
+            n_heads=2,
+            dropout=0.0,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+        )
+
+        encoder = TransformerEncoder(config)
+        encoder.eval()
+
+        x = torch.randn(2, 10, 4)
+        mask_full = torch.ones(2, 10, 4, dtype=torch.bool)
+
+        with torch.no_grad():
+            out_with_mask = encoder(x, mask=mask_full)
+            out_without_mask = encoder(x, mask=None)
+
+        # Should be identical (None defaults to all observed)
+        assert torch.allclose(out_with_mask, out_without_mask, atol=1e-5)
+
+    def test_concat_output_shape(self):
+        """Test that concat mode produces correct intermediate shape."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+        )
+
+        encoder = TransformerEncoder(config)
+
+        x = torch.randn(4, 24, 35)
+        mask = torch.ones(4, 24, 35, dtype=torch.bool)
+
+        # Check intermediate shape after _apply_mask_input
+        prepared = encoder._apply_mask_input(x, mask)
+        assert prepared.shape == (4, 24, 70)  # 35 values + 35 mask indicators
+
+    def test_gradient_flow_with_mask(self):
+        """Test that gradients flow through the encoder with mask input."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+            pooling="mean",
+        )
+
+        encoder = TransformerEncoder(config)
+
+        x = torch.randn(4, 24, 35, requires_grad=True)
+        mask = torch.rand(4, 24, 35) > 0.3  # Random mask
+
+        out = encoder(x, mask=mask)
+        loss = out.sum()
+        loss.backward()
+
+        # Check gradients are computed
+        assert x.grad is not None
+        assert not torch.allclose(x.grad, torch.zeros_like(x.grad))
+
+    def test_invalid_mask_input_mode(self):
+        """Test that invalid mask_input_mode raises error."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=2,
+            n_heads=8,
+            use_observation_mask=True,
+            mask_input_mode="invalid",
+        )
+
+        with pytest.raises(ValueError, match="Invalid mask_input_mode"):
+            TransformerEncoder(config)
+
+    def test_realistic_icu_scenario_with_mask(self):
+        """Test with realistic ICU data dimensions and missingness patterns."""
+        config = TransformerConfig(
+            d_input=35,
+            d_model=128,
+            n_layers=4,
+            n_heads=8,
+            d_ff=512,
+            max_seq_length=168,
+            use_observation_mask=True,
+            mask_input_mode="concat",
+            zero_imputed_values=True,
+            pooling="mean",
+        )
+
+        encoder = TransformerEncoder(config)
+
+        batch_size = 32
+        seq_length = 48
+        n_features = 35
+
+        x = torch.randn(batch_size, seq_length, n_features)
+
+        # Create realistic missingness pattern (labs more sparse than vitals)
+        obs_mask = torch.ones(batch_size, seq_length, n_features, dtype=torch.bool)
+        # Vitals (first 9 features): 10% missing
+        obs_mask[:, :, :9] = torch.rand(batch_size, seq_length, 9) > 0.1
+        # Labs (remaining 26 features): 40% missing
+        obs_mask[:, :, 9:] = torch.rand(batch_size, seq_length, 26) > 0.4
+
+        # Padding mask (variable lengths)
+        padding_mask = torch.ones(batch_size, seq_length, dtype=torch.bool)
+        for i in range(batch_size):
+            if i % 4 == 0:
+                length = torch.randint(24, seq_length, (1,)).item()
+                padding_mask[i, length:] = False
+
+        out = encoder(x, mask=obs_mask, padding_mask=padding_mask)
+
+        assert out.shape == (batch_size, 128)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

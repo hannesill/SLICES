@@ -34,6 +34,13 @@ encoder:
   # - none: Return per-timestep embeddings (B, T, d_model)
   pooling: mean
 
+  # Observation mask handling
+  # When enabled, the observation mask is provided as explicit input to the model
+  # instead of relying solely on forward-fill imputation.
+  use_observation_mask: false  # Set to true for mask-aware training
+  mask_input_mode: concat      # How to incorporate mask: concat (values + mask features)
+  zero_imputed_values: false   # Zero out imputed values (let mask carry the info)
+
 ssl:
   name: mae  # mae | jepa | contrastive
   # Objective-specific params added in subclasses
