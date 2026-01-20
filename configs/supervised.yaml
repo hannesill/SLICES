@@ -16,6 +16,7 @@
 
 defaults:
   - data: mimic_iv
+  - model: transformer
   - _self_
 
 # Project info
@@ -32,29 +33,10 @@ ckpt_path: null
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Data configuration overrides
-# Base settings inherited from configs/data/mimic_iv.yaml
-
-# Encoder configuration
-# d_input will be automatically set from data.
-encoder:
-  name: transformer
-  d_model: 128
-  n_layers: 4
-  n_heads: 8
-  d_ff: 512
-  dropout: 0.1
-  max_seq_length: 168
-  pooling: mean
-  use_positional_encoding: true
-  prenorm: true
-  activation: gelu
-  layer_norm_eps: 1.0e-5
-
-  # Observation mask handling
-  use_observation_mask: false
-  mask_input_mode: concat
-  zero_imputed_values: false
+# Encoder configuration inherited from configs/model/transformer.yaml
+# Override specific settings here if needed:
+# encoder:
+#   d_model: 256  # Example override
 
 # Task configuration
 task:
@@ -113,7 +95,7 @@ scheduler:
 
 # Logging configuration
 logging:
-  use_wandb: false
+  use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
   run_name: ${experiment_name}_${task.task_name}
