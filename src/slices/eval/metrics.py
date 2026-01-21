@@ -17,26 +17,87 @@ from dataclasses import dataclass
 from typing import List, Literal, Optional
 
 import torch
-from torchmetrics import AUROC, Accuracy, AveragePrecision, F1Score, MetricCollection
+from torchmetrics import (
+    AUROC,
+    Accuracy,
+    AveragePrecision,
+    F1Score,
+    Metric,
+    MetricCollection,
+    Precision,
+    Recall,
+    Specificity,
+)
+from torchmetrics.classification import BinaryCalibrationError
 
 # Supported task types
 TaskType = Literal["binary", "multiclass", "multilabel", "regression"]
 
 # Available metrics per task type
 AVAILABLE_METRICS = {
-    "binary": ["auroc", "auprc", "accuracy", "f1"],
-    "multiclass": ["auroc", "auprc", "accuracy", "f1"],
+    "binary": [
+        "auroc",
+        "auprc",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "specificity",
+        "brier_score",
+        "ece",
+    ],
+    "multiclass": ["auroc", "auprc", "accuracy", "f1", "precision", "recall"],
     "multilabel": ["auroc", "auprc", "accuracy", "f1"],
     "regression": [],  # TODO: Add MSE, MAE, R2 when needed
 }
 
-# Default metrics per task type (minimal set)
+# Default metrics per task type (minimal set for clinical tasks)
 DEFAULT_METRICS = {
-    "binary": ["auroc", "auprc"],
+    "binary": ["auroc", "auprc", "brier_score"],
     "multiclass": ["auroc", "accuracy"],
     "multilabel": ["auroc"],
     "regression": [],
 }
+
+
+class BrierScore(Metric):
+    """Brier Score for probabilistic predictions.
+
+    The Brier Score measures the mean squared error between predicted probabilities
+    and actual binary outcomes. Lower is better (0 is perfect, 1 is worst).
+
+    For binary classification:
+        BS = (1/N) * sum((p_i - y_i)^2)
+
+    where p_i is the predicted probability and y_i is the true label (0 or 1).
+    """
+
+    is_differentiable: bool = False
+    higher_is_better: bool = False
+    full_state_update: bool = False
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predicted probabilities of shape (N,) or (N, 1).
+            target: Ground truth labels of shape (N,) or (N, 1).
+        """
+        preds = preds.view(-1).float()
+        target = target.view(-1).float()
+
+        squared_error = (preds - target) ** 2
+        self.sum_squared_error += squared_error.sum()
+        self.total += target.numel()
+
+    def compute(self) -> torch.Tensor:
+        """Compute the Brier Score."""
+        return self.sum_squared_error / self.total
 
 
 @dataclass
@@ -85,7 +146,8 @@ def _build_metric(
     """Build a single metric instance.
 
     Args:
-        name: Metric name (auroc, auprc, accuracy, f1).
+        name: Metric name (auroc, auprc, accuracy, f1, precision, recall,
+              specificity, brier_score, ece).
         task_type: Task type for metric configuration.
         n_classes: Number of classes.
 
@@ -114,6 +176,22 @@ def _build_metric(
         return Accuracy(task=task, **kwargs)
     elif name == "f1":
         return F1Score(task=task, **kwargs)
+    elif name == "precision":
+        return Precision(task=task, **kwargs)
+    elif name == "recall":
+        return Recall(task=task, **kwargs)
+    elif name == "specificity":
+        if task_type != "binary":
+            raise ValueError(f"Specificity only available for binary tasks, got {task_type}")
+        return Specificity(task="binary")
+    elif name == "brier_score":
+        if task_type != "binary":
+            raise ValueError(f"Brier Score only available for binary tasks, got {task_type}")
+        return BrierScore()
+    elif name == "ece":
+        if task_type != "binary":
+            raise ValueError(f"ECE only available for binary tasks, got {task_type}")
+        return BinaryCalibrationError(n_bins=15, norm="l1")
     else:
         raise ValueError(f"Unknown metric: {name}")
 
