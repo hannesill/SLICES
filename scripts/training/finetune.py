@@ -315,6 +315,10 @@ def main(cfg: DictConfig) -> None:
         for key, value in test_results[0].items():
             print(f"  - {key}: {value:.4f}")
 
+        # Log test results to wandb summary for easy retrieval
+        if logger:
+            logger.experiment.summary.update(test_results[0])
+
     print(f"\n✓ Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")
 

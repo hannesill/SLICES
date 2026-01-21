@@ -425,9 +425,12 @@ def main(cfg: DictConfig) -> None:
             else:
                 print("  -> WARNING: Model performs at or below random baseline!")
 
-    # Log baseline metrics to W&B if enabled
-    if logger and baseline_metrics:
-        logger.experiment.summary.update(baseline_metrics)
+    # Log test results and baseline metrics to W&B summary for easy retrieval
+    if logger:
+        if test_results:
+            logger.experiment.summary.update(test_results[0])
+        if baseline_metrics:
+            logger.experiment.summary.update(baseline_metrics)
 
     print(f"\n Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")

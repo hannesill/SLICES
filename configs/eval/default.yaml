@@ -4,15 +4,24 @@
 # Metrics are computed using torchmetrics and logged to tensorboard/wandb.
 #
 # Available metrics by task type:
-#   binary:     auroc, auprc, accuracy, f1
-#   multiclass: auroc, auprc, accuracy, f1
+#   binary:     auroc, auprc, accuracy, f1, precision, recall, specificity,
+#               brier_score, ece (expected calibration error)
+#   multiclass: auroc, auprc, accuracy, f1, precision, recall
 #   multilabel: auroc, auprc, accuracy, f1
 #   regression: (not yet implemented)
+#
+# Clinical metrics explanation:
+#   - auroc: Area under ROC curve (discrimination)
+#   - auprc: Area under precision-recall curve (useful for imbalanced data)
+#   - brier_score: Mean squared error of predictions (calibration + discrimination)
+#   - ece: Expected calibration error (how well probabilities match true rates)
+#   - specificity: True negative rate (important for ruling out conditions)
+#   - recall/sensitivity: True positive rate (important for screening)
 
 # Metric configuration
 metrics:
   # Metrics to compute (null = use defaults for task type)
-  # Defaults: binary/multiclass -> [auroc, auprc], multilabel -> [auroc]
+  # Defaults: binary -> [auroc, auprc, brier_score], multiclass -> [auroc, accuracy]
   names: null
 
   # Decision threshold for binary classification

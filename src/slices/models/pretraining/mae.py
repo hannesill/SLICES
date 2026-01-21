@@ -301,6 +301,7 @@ class MAEObjective(BaseSSLObjective):
 
             metrics = {
                 "mae_loss": loss.detach(),
+                "reconstruction_loss": loss.detach(),  # Alias for consistent naming
                 "mae_recon_loss_masked": loss.detach(),
                 "mae_recon_loss_visible": visible_loss,
                 "mae_mask_ratio_actual": n_masked / n_total,
