@@ -25,8 +25,9 @@ Example usage:
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import polars as pl
 import yaml
 
@@ -77,6 +78,105 @@ def get_task_columns(labels_df: pl.DataFrame) -> List[str]:
         List of task column names.
     """
     return [col for col in labels_df.columns if col != "stay_id"]
+
+
+def bootstrap_positive_rate_ci(
+    labels: np.ndarray,
+    n_bootstrap: int = 10000,
+    ci: float = 0.95,
+    seed: Optional[int] = None,
+) -> Tuple[float, float, float]:
+    """Compute bootstrap confidence interval for positive rate.
+
+    Args:
+        labels: Binary labels array (0s and 1s).
+        n_bootstrap: Number of bootstrap iterations.
+        ci: Confidence level (e.g., 0.95 for 95% CI).
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Tuple of (point_estimate, lower_bound, upper_bound).
+    """
+    rng = np.random.default_rng(seed)
+    n = len(labels)
+    point_estimate = np.mean(labels)
+
+    bootstrap_rates = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        bootstrap_rates[i] = np.mean(labels[idx])
+
+    alpha = 1 - ci
+    lower = np.percentile(bootstrap_rates, alpha / 2 * 100)
+    upper = np.percentile(bootstrap_rates, (1 - alpha / 2) * 100)
+
+    return point_estimate, lower, upper
+
+
+def hanley_mcneil_auroc_se(
+    n_pos: int,
+    n_neg: int,
+    auroc: float = 0.85,
+) -> float:
+    """Estimate AUROC standard error using Hanley-McNeil approximation.
+
+    This provides an estimate of the expected variance in AUROC given the
+    sample size and class imbalance, useful for understanding whether
+    observed AUROC differences between splits could be due to chance.
+
+    Args:
+        n_pos: Number of positive samples.
+        n_neg: Number of negative samples.
+        auroc: Reference AUROC value (default 0.85).
+
+    Returns:
+        Estimated standard error of AUROC.
+
+    Reference:
+        Hanley & McNeil (1982). The meaning and use of the area under a
+        receiver operating characteristic (ROC) curve. Radiology.
+    """
+    if n_pos == 0 or n_neg == 0:
+        return float("inf")
+
+    q1 = auroc / (2 - auroc)
+    q2 = 2 * auroc**2 / (1 + auroc)
+
+    numerator = auroc * (1 - auroc) + (n_pos - 1) * (q1 - auroc**2) + (n_neg - 1) * (q2 - auroc**2)
+    denominator = n_pos * n_neg
+
+    if numerator < 0:
+        return 0.0
+
+    return np.sqrt(numerator / denominator)
+
+
+def compute_auroc_ci_width(
+    n_pos: int,
+    n_neg: int,
+    auroc: float = 0.85,
+    ci: float = 0.95,
+) -> Tuple[float, float]:
+    """Compute expected AUROC confidence interval bounds.
+
+    Args:
+        n_pos: Number of positive samples.
+        n_neg: Number of negative samples.
+        auroc: Reference AUROC value.
+        ci: Confidence level.
+
+    Returns:
+        Tuple of (lower_bound, upper_bound) for the CI.
+    """
+    import scipy.stats as stats
+
+    se = hanley_mcneil_auroc_se(n_pos, n_neg, auroc)
+    z = stats.norm.ppf((1 + ci) / 2)
+
+    lower = max(0.5, auroc - z * se)
+    upper = min(1.0, auroc + z * se)
+
+    return lower, upper
 
 
 def analyze_task(
@@ -164,6 +264,9 @@ def analyze_splits(
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = 42,
+    reference_auroc: float = 0.85,
+    n_bootstrap: int = 10000,
+    ci: float = 0.95,
 ) -> Dict[str, Dict[str, Any]]:
     """Analyze label distribution across train/val/test splits.
 
@@ -174,6 +277,9 @@ def analyze_splits(
         val_ratio: Validation set ratio.
         test_ratio: Test set ratio.
         seed: Random seed for splits.
+        reference_auroc: Reference AUROC for SE estimation.
+        n_bootstrap: Number of bootstrap iterations for CIs.
+        ci: Confidence level for intervals.
 
     Returns:
         Dictionary with per-split statistics.
@@ -195,25 +301,26 @@ def analyze_splits(
 
     split_stats = {}
 
-    for split_name, dataset in [
-        ("train", datamodule.train_dataset),
-        ("val", datamodule.val_dataset),
-        ("test", datamodule.test_dataset),
+    for split_name, indices in [
+        ("train", datamodule.train_indices),
+        ("val", datamodule.val_indices),
+        ("test", datamodule.test_indices),
     ]:
         labels = []
-        for i in range(len(dataset)):
-            sample = dataset[i]
+        for idx in indices:
+            sample = datamodule.dataset[idx]
             if "label" in sample and sample["label"] is not None:
                 labels.append(int(sample["label"]))
 
         if not labels:
             split_stats[split_name] = {
-                "n_samples": len(dataset),
+                "n_samples": len(indices),
                 "n_valid_labels": 0,
                 "class_distribution": {},
             }
             continue
 
+        labels_array = np.array(labels)
         labels_series = pl.Series(labels)
         class_counts = labels_series.value_counts().sort("count", descending=True)
 
@@ -227,14 +334,38 @@ def analyze_splits(
             }
 
         split_stats[split_name] = {
-            "n_samples": len(dataset),
+            "n_samples": len(indices),
             "n_valid_labels": len(labels),
             "class_distribution": class_distribution,
         }
 
-        # Add positive rate for binary tasks
+        # Add positive rate with bootstrap CI for binary tasks
         if 0 in class_distribution and 1 in class_distribution:
-            split_stats[split_name]["positive_rate"] = class_distribution[1]["percentage"]
+            n_pos = class_distribution[1]["count"]
+            n_neg = class_distribution[0]["count"]
+
+            # Bootstrap CI for positive rate
+            pos_rate, pos_lower, pos_upper = bootstrap_positive_rate_ci(
+                labels_array, n_bootstrap=n_bootstrap, ci=ci, seed=seed
+            )
+            split_stats[split_name]["positive_rate"] = round(pos_rate * 100, 2)
+            split_stats[split_name]["positive_rate_ci"] = {
+                "lower": round(pos_lower * 100, 2),
+                "upper": round(pos_upper * 100, 2),
+                "level": ci,
+            }
+
+            # Expected AUROC standard error and CI
+            auroc_se = hanley_mcneil_auroc_se(n_pos, n_neg, reference_auroc)
+            auroc_lower, auroc_upper = compute_auroc_ci_width(n_pos, n_neg, reference_auroc, ci)
+            split_stats[split_name]["expected_auroc_stats"] = {
+                "reference_auroc": reference_auroc,
+                "standard_error": round(auroc_se, 4),
+                "ci_lower": round(auroc_lower, 3),
+                "ci_upper": round(auroc_upper, 3),
+                "ci_width": round(auroc_upper - auroc_lower, 3),
+                "level": ci,
+            }
 
     return split_stats
 
@@ -281,11 +412,11 @@ def print_split_stats(split_stats: Dict[str, Dict[str, Any]], task_name: str) ->
         task_name: Name of the task.
     """
     print(f"\n  Per-Split Statistics for '{task_name}':")
-    print(f"  {'─' * 50}")
+    print(f"  {'─' * 60}")
 
-    # Header
-    print(f"  {'Split':<10} {'Samples':>10} {'Positive':>12} {'Negative':>12} {'Pos Rate':>10}")
-    print(f"  {'-' * 10} {'-' * 10} {'-' * 12} {'-' * 12} {'-' * 10}")
+    # Basic counts header
+    print(f"  {'Split':<10} {'Samples':>10} {'Positive':>12} {'Negative':>12} {'Pos Rate':>12}")
+    print(f"  {'-' * 10} {'-' * 10} {'-' * 12} {'-' * 12} {'-' * 12}")
 
     for split_name in ["train", "val", "test"]:
         if split_name not in split_stats:
@@ -298,9 +429,64 @@ def print_split_stats(split_stats: Dict[str, Dict[str, Any]], task_name: str) ->
             pos = stats["class_distribution"].get(1, {}).get("count", 0)
             neg = stats["class_distribution"].get(0, {}).get("count", 0)
             pos_rate = stats.get("positive_rate", 0)
-            print(f"  {split_name:<10} {n_samples:>10,} {pos:>12,} {neg:>12,} {pos_rate:>9.1f}%")
+
+            # Include CI if available
+            if "positive_rate_ci" in stats:
+                ci = stats["positive_rate_ci"]
+                pos_rate_str = f"{pos_rate:.1f}% [{ci['lower']:.1f}-{ci['upper']:.1f}]"
+            else:
+                pos_rate_str = f"{pos_rate:.1f}%"
+
+            print(f"  {split_name:<10} {n_samples:>10,} {pos:>12,} {neg:>12,} {pos_rate_str:>12}")
         else:
-            print(f"  {split_name:<10} {n_samples:>10,} {'N/A':>12} {'N/A':>12} {'N/A':>10}")
+            print(f"  {split_name:<10} {n_samples:>10,} {'N/A':>12} {'N/A':>12} {'N/A':>12}")
+
+    # Print expected AUROC variance analysis
+    has_auroc_stats = any(
+        "expected_auroc_stats" in split_stats.get(s, {}) for s in ["train", "val", "test"]
+    )
+
+    if has_auroc_stats:
+        print("\n  Expected AUROC Variance (Hanley-McNeil estimation):")
+        print(f"  {'─' * 60}")
+
+        # Get reference AUROC from first split that has it
+        ref_auroc = None
+        for s in ["train", "val", "test"]:
+            if s in split_stats and "expected_auroc_stats" in split_stats[s]:
+                ref_auroc = split_stats[s]["expected_auroc_stats"]["reference_auroc"]
+                break
+
+        if ref_auroc:
+            print(f"  Reference AUROC: {ref_auroc:.3f}")
+            print()
+
+        print(f"  {'Split':<10} {'SE':>10} {'95% CI':>20} {'CI Width':>12}")
+        print(f"  {'-' * 10} {'-' * 10} {'-' * 20} {'-' * 12}")
+
+        for split_name in ["train", "val", "test"]:
+            if split_name not in split_stats:
+                continue
+
+            stats = split_stats[split_name]
+            if "expected_auroc_stats" not in stats:
+                continue
+
+            auroc_stats = stats["expected_auroc_stats"]
+            se = auroc_stats["standard_error"]
+            ci_lower = auroc_stats["ci_lower"]
+            ci_upper = auroc_stats["ci_upper"]
+            ci_width = auroc_stats["ci_width"]
+
+            ci_str = f"[{ci_lower:.3f} - {ci_upper:.3f}]"
+            print(f"  {split_name:<10} {se:>10.4f} {ci_str:>20} {ci_width:>12.3f}")
+
+        # Add interpretation
+        print()
+        print("  Interpretation:")
+        print("  - CI width shows expected AUROC variance due to finite sample size")
+        print("  - Observed AUROC differences within CI width may be due to chance")
+        print("  - Smaller positive class → wider CI → more variance")
 
 
 def main():
@@ -345,6 +531,24 @@ def main():
         type=int,
         default=42,
         help="Random seed for split analysis (default: 42)",
+    )
+    parser.add_argument(
+        "--reference-auroc",
+        type=float,
+        default=0.85,
+        help="Reference AUROC for variance estimation (default: 0.85)",
+    )
+    parser.add_argument(
+        "--n-bootstrap",
+        type=int,
+        default=10000,
+        help="Number of bootstrap iterations for CIs (default: 10000)",
+    )
+    parser.add_argument(
+        "--ci",
+        type=float,
+        default=0.95,
+        help="Confidence level for intervals (default: 0.95)",
     )
 
     args = parser.parse_args()
@@ -416,6 +620,9 @@ def main():
                     val_ratio=val_ratio,
                     test_ratio=test_ratio,
                     seed=args.seed,
+                    reference_auroc=args.reference_auroc,
+                    n_bootstrap=args.n_bootstrap,
+                    ci=args.ci,
                 )
                 all_stats[task_name]["splits"] = split_stats
                 print_split_stats(split_stats, task_name)
