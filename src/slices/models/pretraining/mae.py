@@ -38,7 +38,7 @@ class MAEConfig(SSLConfig):
     Note:
         - norm_target is NOT SUPPORTED and must be False. Data should be
           normalized during preprocessing instead.
-        - During validation, masks are deterministic for reproducible metrics.
+        - Random masks are used for both training and validation (standard practice).
         - Block masking is capped to not exceed target mask_ratio significantly.
     """
 
@@ -165,9 +165,6 @@ class MAEObjective(BaseSSLObjective):
         >>> loss, metrics = mae(x, obs_mask)
     """
 
-    # Fixed seed for deterministic validation masks
-    _VAL_MASK_SEED: int = 42
-
     def __init__(self, encoder: nn.Module, config: MAEConfig) -> None:
         """Initialize MAE objective.
 
@@ -229,21 +226,16 @@ class MAEObjective(BaseSSLObjective):
             - metrics: Dict of additional metrics to log
 
         Note:
-            - During validation (self.training=False), masks are generated with a
-              fixed seed for reproducibility.
+            - Random masks are used for both training and validation (standard practice).
             - MISSING_TOKEN is placed at genuinely missing positions (obs_mask=False)
             - MASK_TOKEN is placed at SSL-masked positions (obs_mask=True AND selected for masking)
             - Loss is only computed on MASK_TOKEN positions
         """
         B, T, D = x.shape
 
-        # Use deterministic masks for validation (reproducible metrics)
-        if self.training:
-            generator = None  # Random masks during training
-        else:
-            # Fixed seed for validation - ensures same masks each validation run
-            generator = torch.Generator(device=x.device)
-            generator.manual_seed(self._VAL_MASK_SEED)
+        # Use random masks for both training and validation
+        # This is standard practice in MAE and makes metrics directly comparable
+        generator = None
 
         # Step 1: Replace genuinely missing positions with MISSING_TOKEN
         # obs_mask: True = observed, False = missing
