@@ -1,0 +1,32 @@
+# @package encoder
+# Linear Encoder Configuration
+#
+# The simplest possible baseline: a single linear projection from input
+# features to embeddings. No attention, no hidden layers, no nonlinearities.
+#
+# Usage:
+#   uv run python scripts/training/supervised.py model=linear
+#
+# With observation mask:
+#   uv run python scripts/training/supervised.py model=linear encoder.use_observation_mask=true
+
+name: linear
+
+# Input/Output dimensions
+d_model: 64  # Output embedding dimension
+max_seq_length: 168  # Maximum sequence length in hours (7 days)
+
+# No layers - this is a single linear projection
+n_layers: 1  # Ignored, kept for config compatibility
+
+# Regularization
+dropout: 0.0  # No dropout for linear baseline
+
+# Pooling strategy for sequence-level representation
+# Options: mean | max | last | none
+pooling: mean
+
+# Observation mask handling
+use_observation_mask: false
+mask_input_mode: concat
+zero_imputed_values: false

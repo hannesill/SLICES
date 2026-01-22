@@ -7,16 +7,19 @@ with proper configuration validation.
 from typing import Any, Dict, Type
 
 from .base import BaseEncoder, EncoderConfig
+from .linear import LinearConfig, LinearEncoder
 from .transformer import TransformerConfig, TransformerEncoder
 
 # Registry of available encoders
 ENCODER_REGISTRY: Dict[str, Type[BaseEncoder]] = {
     "transformer": TransformerEncoder,
+    "linear": LinearEncoder,
 }
 
 # Registry of encoder configs
 ENCODER_CONFIG_REGISTRY: Dict[str, Type[EncoderConfig]] = {
     "transformer": TransformerConfig,
+    "linear": LinearConfig,
 }
 
 
