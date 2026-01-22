@@ -98,7 +98,8 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: ${experiment_name}_${task.task_name}
+  run_name: ${experiment_name}_${task.task_name}_s${seed}
+  wandb_group: ${experiment_name}_${task.task_name}  # Groups multi-seed runs together
   log_every_n_steps: 10
 
 # Hydra configuration

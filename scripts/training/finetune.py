@@ -102,6 +102,7 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
         name=cfg.logging.get("run_name", None),
+        group=cfg.logging.get("wandb_group", None),
         save_dir=cfg.output_dir,
         log_model=False,
     )
