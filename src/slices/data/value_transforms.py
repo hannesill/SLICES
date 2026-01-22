@@ -151,6 +151,16 @@ def minutes_to_hours(values: pl.Series) -> pl.Series:
     return values / 60.0
 
 
+@register_transform("percent_to_fraction")
+def percent_to_fraction(values: pl.Series) -> pl.Series:
+    """Convert percentage (0-100) to fraction (0-1).
+
+    Used for FiO2 which is stored as percentage in MIMIC-IV (e.g., 21-100)
+    but clinically expressed as fraction (e.g., 0.21-1.0).
+    """
+    return values / 100.0
+
+
 # =============================================================================
 # DataFrame-based Transforms (for context-dependent transformations)
 # =============================================================================

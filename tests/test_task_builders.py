@@ -753,6 +753,74 @@ class TestWindowedMortalityLabels:
         # All should be null (excluded)
         assert labels["label"].null_count() == 3, "All patients should be excluded"
 
+    def test_windowed_mortality_until_icu_discharge(self):
+        """Test windowed mortality until ICU discharge (prediction_window_hours=-1).
+
+        Timeline: |-- obs (48h) --|-- pred (until ICU discharge) --|
+                  0h            48h                            outtime
+
+        This tests the "mortality" task which predicts death during the
+        remaining ICU stay after observation ends.
+        """
+        # Different outtime for each stay to test the dynamic prediction window
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5, 6],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 6,
+                "outtime": [
+                    datetime(2020, 1, 5, 0, 0),  # 96h stay (48h pred window)
+                    datetime(2020, 1, 5, 0, 0),  # 96h stay
+                    datetime(2020, 1, 5, 0, 0),  # 96h stay
+                    datetime(2020, 1, 4, 0, 0),  # 72h stay (24h pred window)
+                    datetime(2020, 1, 10, 0, 0),  # 216h stay (long stay)
+                    datetime(2020, 1, 5, 0, 0),  # 96h stay
+                ],
+            }
+        )
+
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5, 6],
+                "date_of_death": [
+                    datetime(2020, 1, 2, 0, 0),  # 24h - during obs
+                    datetime(2020, 1, 4, 0, 0),  # 72h - during pred, before outtime
+                    datetime(2020, 1, 5, 0, 0),  # 96h - at outtime
+                    datetime(2020, 1, 4, 0, 0),  # 72h - at outtime (short stay)
+                    None,  # Survived (long stay)
+                    datetime(2020, 1, 6, 0, 0),  # 120h - after outtime (died post-discharge)
+                ],
+                "hospital_expire_flag": [1, 1, 1, 1, 0, 1],
+                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 6,
+                "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME", "DIED"],
+            }
+        )
+
+        config = LabelConfig(
+            task_name="mortality",
+            task_type="binary_classification",
+            prediction_window_hours=-1,  # Until ICU discharge
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = MortalityLabelBuilder(config)
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
+
+        labels_dict = dict(zip(labels["stay_id"], labels["label"]))
+
+        # Death during observation → excluded (null)
+        assert labels_dict[1] is None, "Death at 24h should be excluded (during obs)"
+
+        # Death during prediction window (between obs end and outtime) → positive
+        assert labels_dict[2] == 1, "Death at 72h should be positive (during pred, before outtime)"
+        assert labels_dict[3] == 1, "Death at 96h should be positive (at outtime)"
+        assert labels_dict[4] == 1, "Death at 72h should be positive (at outtime for short stay)"
+
+        # Survivor or death after discharge → negative
+        assert labels_dict[5] == 0, "Survivor should be negative"
+        assert labels_dict[6] == 0, "Death at 120h should be negative (after outtime)"
+
 
 class TestLabelBuilderFactory:
     """Tests for LabelBuilderFactory (minimal - mortality only)."""

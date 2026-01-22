@@ -7,29 +7,26 @@
 #
 # Common configurations:
 #
-# Small (for debugging/testing):
-#   encoder.d_model=64 encoder.n_layers=2 encoder.n_heads=4 encoder.d_ff=256
-#   ~200K parameters
+# SMART-like (default, ~100K parameters):
+#   encoder.d_model=32 encoder.n_layers=2 encoder.n_heads=4 encoder.d_ff=128
+#   Matches SMART (NeurIPS 2024) architecture for missing-aware EHR modeling.
+#   Prevents overfitting on small positive classes typical in ICU prediction.
 #
-# Medium (default):
+# Medium (~500K parameters):
 #   encoder.d_model=128 encoder.n_layers=4 encoder.n_heads=8 encoder.d_ff=512
-#   ~1.5M parameters
-#
-# Large (research-scale):
-#   encoder.d_model=512 encoder.n_layers=8 encoder.n_heads=16 encoder.d_ff=2048
-#   ~25M parameters
+
 
 name: transformer
 
 # Input/Output dimensions
 # d_input is typically set automatically from data config
-d_model: 128  # Model dimension (embedding size)
+d_model: 64  # Model dimension (embedding size)
 max_seq_length: 168  # Maximum sequence length in hours (7 days)
 
 # Transformer architecture
-n_layers: 4  # Number of transformer encoder layers
-n_heads: 8  # Number of attention heads (must divide d_model evenly)
-d_ff: 512  # Feedforward dimension (typically 4 * d_model)
+n_layers: 2  # Number of transformer encoder layers
+n_heads: 4  # Number of attention heads (must divide d_model evenly)
+d_ff: 256  # Feedforward dimension (typically 4 * d_model)
 
 # Regularization
 dropout: 0.1  # Dropout probability for attention and feedforward

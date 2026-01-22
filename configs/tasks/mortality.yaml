@@ -1,0 +1,38 @@
+# ICU mortality prediction task (after observation window)
+# Predict if patient will die during the remainder of their ICU stay AFTER observation ends
+#
+# Timeline (with default settings):
+#   |---- observation (48h) ----|-- gap (0h) --|---- prediction (until ICU discharge) ----|
+#   intime                    +48h           +48h                                     outtime
+#
+# - Model sees: hours 0-48 of ICU stay
+# - Model predicts: will patient die before ICU discharge?
+# - Patients who die during observation (hours 0-48) are excluded (label=null)
+
+task_name: mortality
+task_type: binary_classification
+
+# Prediction parameters
+prediction_window_hours: -1  # -1 means "until ICU discharge" (entire remaining ICU stay)
+observation_window_hours: 48  # Must match seq_length_hours in data config
+gap_hours: 0  # No gap between observation end and prediction start
+
+# Data requirements
+label_sources:
+  - stays
+  - mortality_info
+
+label_params: {}
+
+# Evaluation metrics
+primary_metric: auprc  # AUPRC preferred for imbalanced mortality prediction
+additional_metrics:
+  - auroc
+  - accuracy
+  - sensitivity
+  - specificity
+
+# Class information
+n_classes: 2
+class_names: [survived, died]
+positive_class: died
