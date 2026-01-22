@@ -91,7 +91,8 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: ${experiment_name}
+  run_name: ${experiment_name}_s${seed}
+  wandb_group: ${experiment_name}  # Groups multi-seed runs together
   log_every_n_steps: 50
 
 # Hydra configuration
