@@ -59,13 +59,16 @@ def create_mae_model(
     encoder = TransformerEncoder(encoder_config)
 
     # Configure MAE objective
+    # Note: The MAE now uses a two-token system:
+    # - MISSING_TOKEN: replaces genuinely missing positions (obs_mask=False)
+    # - MASK_TOKEN: replaces SSL-masked positions (obs_mask=True AND selected for masking)
+    # Loss is only computed on MASK_TOKEN positions.
     mae_config = MAEConfig(
         name="mae",
         mask_ratio=mask_ratio,
         mask_strategy=mask_strategy,
         min_block_size=3,
         max_block_size=10,
-        mask_value=0.0,
         decoder_d_model=d_model // 2,  # Lighter decoder
         decoder_n_layers=2,
         decoder_n_heads=4,
@@ -386,10 +389,12 @@ def main():
     print("  3. Timestep: Entire timesteps (all features)")
     print("  4. Feature: Entire features (all timesteps)")
     print("\n✓ Key features:")
-    print("  - Respects observation mask (only masks observed values)")
+    print("  - Two-token system: MISSING_TOKEN and MASK_TOKEN")
+    print("  - MISSING_TOKEN replaces genuinely missing positions")
+    print("  - MASK_TOKEN replaces SSL-masked positions (for reconstruction)")
     print("  - Configurable mask ratio and strategy")
     print("  - Lightweight decoder for reconstruction")
-    print("  - Loss computed only on masked positions")
+    print("  - Loss computed only on MASK_TOKEN positions")
     print("  - Easy to switch objectives via factory pattern")
     print("\n✓ Next steps:")
     print("  - Implement other SSL objectives (contrastive, JEPA, etc.)")

@@ -16,13 +16,24 @@ from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 
-from ...data.transforms import MaskingStrategy, apply_mask, create_ssl_mask
+from ...data.transforms import MaskingStrategy, create_ssl_mask
 from .base import BaseSSLObjective, SSLConfig
 
 
 @dataclass
 class MAEConfig(SSLConfig):
     """Configuration for MAE objective.
+
+    Two-Token System:
+        This implementation uses two learned tokens to handle missing/masked values:
+        - **MISSING_TOKEN**: Replaces genuinely missing positions (obs_mask=False).
+          These positions were never observed in the ICU data.
+        - **MASK_TOKEN**: Replaces SSL-masked positions (obs_mask=True AND ssl_mask=False).
+          These are artificially hidden for self-supervision.
+
+        Both tokens have shape (1, 1, d_input) - one learned scalar per feature.
+        The encoder receives input with these tokens substituted, and reconstruction
+        loss is only computed on MASK_TOKEN positions.
 
     Note:
         - norm_target is NOT SUPPORTED and must be False. Data should be
@@ -39,7 +50,6 @@ class MAEConfig(SSLConfig):
     mask_strategy: MaskingStrategy = "random"  # random, block, timestep, feature
     min_block_size: int = 3  # For block masking
     max_block_size: int = 10
-    mask_value: float = 0.0  # Value to use for masked positions
 
     # Decoder parameters
     decoder_d_model: int = 128  # Decoder hidden dimension
@@ -123,20 +133,32 @@ class MAEObjective(BaseSSLObjective):
     """Masked Autoencoder objective for ICU time-series.
 
     Implements the MAE SSL objective:
-    1. Randomly mask portions of the input
-    2. Encode the masked input
-    3. Decode to reconstruct the original input
-    4. Compute reconstruction loss on masked positions
+    1. Replace genuinely missing positions with MISSING_TOKEN
+    2. Create SSL mask and replace those positions with MASK_TOKEN
+    3. Encode the modified input
+    4. Decode to reconstruct the original input
+    5. Compute reconstruction loss only on MASK_TOKEN positions
 
-    The encoder sees masked input (with mask tokens), while the decoder
-    tries to reconstruct the original values. This encourages the encoder
-    to learn robust representations that capture temporal structure.
+    Two-Token System:
+        This implementation uses two learned tokens to clearly distinguish
+        between different types of "unknown" values:
+
+        - **MISSING_TOKEN**: Replaces genuinely missing positions (obs_mask=False).
+          These were never observed in the ICU. No reconstruction loss is computed
+          on these positions since we don't know the true values.
+
+        - **MASK_TOKEN**: Replaces SSL-masked positions (obs_mask=True AND selected
+          for masking by the SSL objective). Reconstruction loss IS computed on
+          these positions to train the model.
+
+        Both tokens have shape (1, 1, d_input) with one learned scalar per feature.
+        This allows each feature to have its own "missing" and "masked" representation.
 
     Example:
         >>> from slices.models.encoders import TransformerEncoder, TransformerConfig
-        >>> enc_config = TransformerConfig(d_input=35, d_model=128, n_layers=4)
+        >>> enc_config = TransformerConfig(d_input=35, d_model=128, n_layers=4, pooling="none")
         >>> encoder = TransformerEncoder(enc_config)
-        >>> mae_config = MAEConfig(mask_ratio=0.15, mask_strategy="block")
+        >>> mae_config = MAEConfig(mask_ratio=0.15)
         >>> mae = MAEObjective(encoder, mae_config)
         >>> x = torch.randn(32, 48, 35)
         >>> obs_mask = torch.rand(32, 48, 35) > 0.3
@@ -169,6 +191,17 @@ class MAEObjective(BaseSSLObjective):
         # Create decoder
         self.decoder = MAEDecoder(d_encoder, d_input, config)
 
+        # Two learned tokens: one per feature dimension
+        # Shape (1, 1, D) broadcasts across batch and time dimensions
+        # MISSING_TOKEN: replaces genuinely missing positions (obs_mask=False)
+        self.missing_token = nn.Parameter(torch.zeros(1, 1, d_input))
+        # MASK_TOKEN: replaces SSL-masked positions (obs_mask=True AND ssl_mask=False)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_input))
+
+        # Initialize with small random values
+        nn.init.normal_(self.missing_token, std=0.02)
+        nn.init.normal_(self.mask_token, std=0.02)
+
         # Store encoder config for pooling checks
         self._encoder_pooling = getattr(encoder.config, "pooling", "none")
         if self._encoder_pooling != "none":
@@ -182,10 +215,11 @@ class MAEObjective(BaseSSLObjective):
         x: torch.Tensor,
         obs_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Compute MAE loss.
+        """Compute MAE loss using the two-token system.
 
         Args:
-            x: Input tensor of shape (B, T, D).
+            x: Input tensor of shape (B, T, D). May contain imputed values at
+               positions where obs_mask=False.
             obs_mask: Observation mask of shape (B, T, D) where True indicates
                      observed values and False indicates missing/imputed.
 
@@ -195,9 +229,11 @@ class MAEObjective(BaseSSLObjective):
             - metrics: Dict of additional metrics to log
 
         Note:
-            During validation (self.training=False), masks are generated with a
-            fixed seed for reproducibility. This ensures consistent validation
-            metrics across epochs.
+            - During validation (self.training=False), masks are generated with a
+              fixed seed for reproducibility.
+            - MISSING_TOKEN is placed at genuinely missing positions (obs_mask=False)
+            - MASK_TOKEN is placed at SSL-masked positions (obs_mask=True AND selected for masking)
+            - Loss is only computed on MASK_TOKEN positions
         """
         B, T, D = x.shape
 
@@ -209,28 +245,37 @@ class MAEObjective(BaseSSLObjective):
             generator = torch.Generator(device=x.device)
             generator.manual_seed(self._VAL_MASK_SEED)
 
-        # Create SSL mask (which positions to mask for reconstruction)
+        # Step 1: Replace genuinely missing positions with MISSING_TOKEN
+        # obs_mask: True = observed, False = missing
+        x_input = torch.where(obs_mask, x, self.missing_token.expand(B, T, D))
+
+        # Step 2: Create SSL mask (which observed positions to mask for reconstruction)
+        # ssl_mask: True = visible, False = masked for SSL
         ssl_mask = create_ssl_mask(
             shape=(B, T, D),
             mask_ratio=self.config.mask_ratio,
             strategy=self.config.mask_strategy,
-            obs_mask=obs_mask,
+            obs_mask=obs_mask,  # Only mask observed positions
             min_block_size=self.config.min_block_size,
             max_block_size=self.config.max_block_size,
             device=x.device,
             generator=generator,
-        )  # False = masked for SSL
+        )
 
-        # Apply masking to input
-        x_masked = apply_mask(x, ssl_mask, mask_value=self.config.mask_value)
+        # Step 3: Replace SSL-masked positions with MASK_TOKEN
+        # SSL-masked positions are:
+        # - originally observed (obs_mask=True)
+        # - selected for masking (ssl_mask=False)
+        ssl_masked_positions = obs_mask & ~ssl_mask
+        x_input = torch.where(ssl_masked_positions, self.mask_token.expand(B, T, D), x_input)
 
-        # Encode masked input
-        encoder_output = self.encoder(x_masked, mask=obs_mask)  # (B, T, d_model)
+        # Step 4: Encode (no mask input needed - tokens carry the information)
+        encoder_output = self.encoder(x_input, mask=None, padding_mask=None)  # (B, T, d_model)
 
-        # Decode to reconstruct
+        # Step 5: Decode to reconstruct
         x_recon = self.decoder(encoder_output)  # (B, T, D)
 
-        # Compute reconstruction loss
+        # Step 6: Compute reconstruction loss (only on MASK_TOKEN positions)
         loss, metrics = self._compute_reconstruction_loss(x_recon, x, ssl_mask, obs_mask)
 
         return loss, metrics

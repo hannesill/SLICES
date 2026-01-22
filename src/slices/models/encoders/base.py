@@ -18,11 +18,6 @@ class EncoderConfig:
     dropout: float = 0.1
     max_seq_length: int = 168  # 7 days
 
-    # Observation mask handling
-    use_observation_mask: bool = False  # Use mask as explicit input
-    mask_input_mode: str = "concat"  # How to incorporate mask: "concat"
-    zero_imputed_values: bool = False  # Zero out imputed values when using mask
-
 
 class BaseEncoder(ABC, nn.Module):
     """Abstract base class for time-series encoders."""

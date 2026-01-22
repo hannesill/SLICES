@@ -199,6 +199,7 @@ cython_debug/
 .cursorindexingignore
 .cursorrules
 .claude/
+.cursor/
 
 # Marimo
 marimo/_static/

@@ -29,17 +29,19 @@ class LinearEncoder(BaseEncoder):
 
     The simplest possible encoder architecture:
     - Linear projection from input features to output dimension
-    - Observation mask integration (same as transformer)
     - Pooling for sequence-level representation
 
     No attention, no hidden layers, no nonlinearities.
+
+    Note:
+        For MAE pretraining, the input should have learned tokens (MISSING_TOKEN
+        and MASK_TOKEN) already substituted by the SSL objective.
 
     Example:
         >>> config = LinearConfig(d_input=35, d_model=128)
         >>> encoder = LinearEncoder(config)
         >>> x = torch.randn(32, 48, 35)  # (batch, seq_len, features)
-        >>> mask = torch.rand(32, 48, 35) > 0.3  # 30% missing
-        >>> out = encoder(x, mask=mask)  # (32, 128) if pooled
+        >>> out = encoder(x)  # (32, 128) if pooled
     """
 
     def __init__(self, config: LinearConfig) -> None:
@@ -56,42 +58,8 @@ class LinearEncoder(BaseEncoder):
         if config.pooling not in valid_pooling:
             raise ValueError(f"Invalid pooling '{config.pooling}'. Choose from: {valid_pooling}")
 
-        # Compute actual input dimension based on observation mask mode
-        if config.use_observation_mask and config.mask_input_mode == "concat":
-            actual_d_input = config.d_input * 2
-        else:
-            actual_d_input = config.d_input
-
-        # Single linear projection: (B, T, actual_d_input) -> (B, T, d_model)
-        self.linear = nn.Linear(actual_d_input, config.d_model)
-
-    def _apply_mask_input(self, x: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
-        """Prepare input with observation mask when use_observation_mask is enabled.
-
-        Args:
-            x: Input tensor (B, T, D) - may contain forward-filled values.
-            mask: Observation mask (B, T, D) - True = observed, False = imputed.
-
-        Returns:
-            Modified input ready for projection.
-        """
-        if not self.config.use_observation_mask:
-            return x
-
-        B, T, D = x.shape
-
-        # Default to all observed if mask not provided
-        if mask is None:
-            mask = torch.ones(B, T, D, dtype=torch.bool, device=x.device)
-
-        # Optionally zero out imputed values
-        if self.config.zero_imputed_values:
-            x = x * mask.float()
-
-        if self.config.mask_input_mode == "concat":
-            return torch.cat([x, mask.float()], dim=-1)
-
-        return x
+        # Single linear projection: (B, T, d_input) -> (B, T, d_model)
+        self.linear = nn.Linear(config.d_input, config.d_model)
 
     def forward(
         self,
@@ -102,8 +70,10 @@ class LinearEncoder(BaseEncoder):
         """Encode input time-series with a linear projection.
 
         Args:
-            x: Input tensor of shape (B, T, D).
-            mask: Optional observation mask of shape (B, T, D).
+            x: Input tensor of shape (B, T, D). For MAE pretraining, this should
+               have MISSING_TOKEN and MASK_TOKEN already substituted.
+            mask: Optional observation mask of shape (B, T, D). Reserved for
+                  future use. Currently ignored.
             padding_mask: Optional padding mask of shape (B, T) where True
                          indicates valid timesteps.
 
@@ -112,9 +82,6 @@ class LinearEncoder(BaseEncoder):
             - If pooling='none': shape (B, T, d_model)
             - Otherwise: shape (B, d_model)
         """
-        # Apply observation mask as explicit input if enabled
-        x = self._apply_mask_input(x, mask)
-
         # Linear projection
         x = self.linear(x)  # (B, T, d_model)
 

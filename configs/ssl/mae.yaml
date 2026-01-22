@@ -1,13 +1,19 @@
 # MAE (Masked Autoencoder) SSL Configuration
+#
+# Two-Token System:
+# This implementation uses two learned tokens to handle missing/masked values:
+# - MISSING_TOKEN: Replaces genuinely missing positions (obs_mask=False)
+# - MASK_TOKEN: Replaces SSL-masked positions (obs_mask=True AND selected for masking)
+# Both tokens are learned parameters with shape (1, 1, d_input).
+# Reconstruction loss is only computed on MASK_TOKEN positions.
 
 name: mae
 
 # Masking parameters
-mask_ratio: 0.15  # Fraction of input to mask (15% is BERT default)
+mask_ratio: 0.15  # Fraction of observed positions to mask (15% is BERT default)
 mask_strategy: random  # random | block | timestep | feature
 min_block_size: 3  # For block masking
 max_block_size: 10  # For block masking
-mask_value: 0.0  # Value to use for masked positions
 
 # Decoder parameters (lighter than encoder)
 decoder_d_model: 64  # Decoder hidden dimension (smaller than encoder)

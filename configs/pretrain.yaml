@@ -44,7 +44,7 @@ ssl:
   mask_strategy: block  # random | block | timestep | feature
   min_block_size: 3
   max_block_size: 10
-  mask_value: 0.0
+  # Note: Uses learned MASK_TOKEN and MISSING_TOKEN (two-token system)
   decoder_d_model: 128
   decoder_n_layers: 2
   decoder_n_heads: 4

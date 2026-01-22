@@ -35,7 +35,7 @@ import polars as pl
 import torch
 import torch.nn as nn
 import yaml
-from slices.data.transforms import apply_mask, create_ssl_mask
+from slices.data.transforms import create_ssl_mask
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective
 from slices.models.pretraining.mae import MAEConfig
@@ -217,13 +217,13 @@ def run_sanity_check(
     )
 
     # Build MAE objective with NO dropout
+    # Note: MAE now uses two-token system (MISSING_TOKEN and MASK_TOKEN)
     mae_config = MAEConfig(
         name="mae",
         mask_ratio=mask_ratio,
         mask_strategy=mask_strategy,
         min_block_size=3,
         max_block_size=10,
-        mask_value=0.0,
         decoder_d_model=32,
         decoder_n_layers=1,
         decoder_n_heads=4,
@@ -270,12 +270,21 @@ def run_sanity_check(
         optimizer.zero_grad()
 
         if use_fixed_mask and fixed_ssl_mask is not None:
-            # Manual forward with fixed mask
-            x_masked = apply_mask(x, fixed_ssl_mask, mask_value=mae_config.mask_value)
-            encoder_output = mae.encoder(x_masked, mask=obs_mask)
+            # Manual forward with fixed mask using two-token system
+            B, T, D = x.shape
+
+            # Step 1: Replace missing positions with MISSING_TOKEN
+            x_input = torch.where(obs_mask, x, mae.missing_token.expand(B, T, D))
+
+            # Step 2: Replace SSL-masked positions with MASK_TOKEN
+            ssl_masked_positions = obs_mask & ~fixed_ssl_mask
+            x_input = torch.where(ssl_masked_positions, mae.mask_token.expand(B, T, D), x_input)
+
+            # Step 3: Encode and decode
+            encoder_output = mae.encoder(x_input, mask=None, padding_mask=None)
             x_recon = mae.decoder(encoder_output)
 
-            # Loss only on masked AND observed positions
+            # Loss only on masked AND observed positions (MASK_TOKEN positions)
             squared_error = (x_recon - x) ** 2
             loss_mask = (~fixed_ssl_mask) & obs_mask
             loss = (squared_error * loss_mask.float()).sum() / loss_mask.float().sum().clamp(min=1)

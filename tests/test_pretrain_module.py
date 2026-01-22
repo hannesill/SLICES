@@ -48,7 +48,6 @@ def minimal_config():
                 "norm_target": False,
                 "min_block_size": 3,
                 "max_block_size": 10,
-                "mask_value": 0.0,
             },
             "optimizer": {
                 "name": "adamw",
@@ -345,7 +344,6 @@ class TestLRWarmup:
                     "norm_target": False,
                     "min_block_size": 3,
                     "max_block_size": 10,
-                    "mask_value": 0.0,
                 },
                 "optimizer": {
                     "name": "adamw",
@@ -411,7 +409,6 @@ class TestLRWarmup:
                     "norm_target": False,
                     "min_block_size": 3,
                     "max_block_size": 10,
-                    "mask_value": 0.0,
                 },
                 "optimizer": {
                     "name": "adamw",
@@ -488,7 +485,6 @@ class TestLRWarmup:
                     "norm_target": False,
                     "min_block_size": 3,
                     "max_block_size": 10,
-                    "mask_value": 0.0,
                 },
                 "optimizer": {
                     "name": "adamw",
