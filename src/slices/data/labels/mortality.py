@@ -77,8 +77,8 @@ class MortalityLabelBuilder(LabelBuilder):
                 ]
             )
 
-        elif window_hours == -1:
-            # ICU mortality (died during or at ICU discharge)
+        elif window_hours == -1 and obs_hours is None:
+            # ICU mortality (died during or at ICU discharge), no observation window
             if is_date_type:
                 # For DATE type, compare dates only (ignores time component)
                 comparison = pl.col("date_of_death") <= pl.col("outtime").cast(pl.Date)
@@ -138,15 +138,19 @@ class MortalityLabelBuilder(LabelBuilder):
     ) -> pl.DataFrame:
         """Build mortality labels with explicit observation and prediction windows.
 
-        Timeline:
+        Timeline (for bounded prediction window):
             |---- observation ----|-- gap --|---- prediction ----|
             intime            obs_end    gap_end              pred_end
+
+        Timeline (for prediction_hours == -1, until ICU discharge):
+            |---- observation ----|-- gap --|---- prediction (until discharge) ----|
+            intime            obs_end    gap_end                               outtime
 
         Args:
             merged: DataFrame with stays and mortality info joined.
             obs_hours: Hours of observation window from admission.
             gap_hours: Hours of gap between observation and prediction.
-            prediction_hours: Hours of prediction window.
+            prediction_hours: Hours of prediction window, or -1 for "until ICU discharge".
             is_date_type: Whether date_of_death is DATE (vs DATETIME).
 
         Returns:
@@ -158,9 +162,10 @@ class MortalityLabelBuilder(LabelBuilder):
         # Calculate window boundaries
         # obs_end = intime + obs_hours
         # gap_end = obs_end + gap_hours = intime + obs_hours + gap_hours
-        # pred_end = gap_end + prediction_hours = intime + obs_hours + gap_hours + prediction_hours
         prediction_start_hours = obs_hours + gap_hours
-        prediction_end_hours = prediction_start_hours + prediction_hours
+
+        # Check if prediction window extends until ICU discharge
+        until_icu_discharge = prediction_hours == -1
 
         if is_date_type:
             # For DATE type, cast boundaries to Date for comparison
@@ -168,12 +173,21 @@ class MortalityLabelBuilder(LabelBuilder):
             pred_start = (pl.col("intime") + pl.duration(hours=prediction_start_hours)).cast(
                 pl.Date
             )
-            pred_end = (pl.col("intime") + pl.duration(hours=prediction_end_hours)).cast(pl.Date)
 
             # Death during observation window (exclude these stays)
             died_during_obs = pl.col("date_of_death").is_not_null() & (
                 pl.col("date_of_death") <= obs_end
             )
+
+            if until_icu_discharge:
+                # Prediction window ends at ICU discharge (outtime)
+                pred_end = pl.col("outtime").cast(pl.Date)
+            else:
+                # Prediction window ends at fixed time after observation
+                prediction_end_hours = prediction_start_hours + prediction_hours
+                pred_end = (pl.col("intime") + pl.duration(hours=prediction_end_hours)).cast(
+                    pl.Date
+                )
 
             # Death during prediction window
             died_during_pred = (
@@ -185,12 +199,19 @@ class MortalityLabelBuilder(LabelBuilder):
             # For DATETIME type, use full precision
             obs_end = pl.col("intime") + pl.duration(hours=obs_hours)
             pred_start = pl.col("intime") + pl.duration(hours=prediction_start_hours)
-            pred_end = pl.col("intime") + pl.duration(hours=prediction_end_hours)
 
             # Death during observation window (exclude these stays)
             died_during_obs = pl.col("date_of_death").is_not_null() & (
                 pl.col("date_of_death") <= obs_end
             )
+
+            if until_icu_discharge:
+                # Prediction window ends at ICU discharge (outtime)
+                pred_end = pl.col("outtime")
+            else:
+                # Prediction window ends at fixed time after observation
+                prediction_end_hours = prediction_start_hours + prediction_hours
+                pred_end = pl.col("intime") + pl.duration(hours=prediction_end_hours)
 
             # Death during prediction window
             died_during_pred = (

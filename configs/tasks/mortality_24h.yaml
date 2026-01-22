@@ -31,9 +31,9 @@ label_sources:
 label_params: {}
 
 # Evaluation metrics
-primary_metric: auroc
+primary_metric: auprc  # AUPRC preferred for imbalanced mortality prediction
 additional_metrics:
-  - auprc
+  - auroc
   - accuracy
   - sensitivity
   - specificity
