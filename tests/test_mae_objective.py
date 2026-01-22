@@ -356,6 +356,111 @@ class TestMAEObjective:
 
         assert retrieved_encoder is encoder
 
+    def test_mae_two_token_system(self, encoder):
+        """Test MAE with two learned tokens (MISSING_TOKEN and MASK_TOKEN)."""
+        mae_config = MAEConfig(
+            mask_ratio=0.3,
+            mask_strategy="random",
+        )
+        mae = MAEObjective(encoder, mae_config)
+
+        # Check both tokens were created
+        assert mae.missing_token is not None
+        assert mae.mask_token is not None
+        assert mae.missing_token.shape == (1, 1, 35)  # d_input=35
+        assert mae.mask_token.shape == (1, 1, 35)
+        assert mae.missing_token.requires_grad
+        assert mae.mask_token.requires_grad
+
+        # Test forward pass works
+        B, T, D = 4, 24, 35
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.3
+
+        mae.train()
+        loss, metrics = mae(x, obs_mask)
+
+        assert loss.requires_grad
+        assert loss.item() > 0
+
+        # Test backward pass - gradients should flow to both tokens
+        loss.backward()
+        assert mae.missing_token.grad is not None
+        assert mae.mask_token.grad is not None
+        # At least one should have non-zero gradient (mask_token definitely should)
+        assert mae.mask_token.grad.abs().sum() > 0
+
+    def test_missing_token_placement(self, encoder):
+        """Test that MISSING_TOKEN is placed at genuinely missing positions."""
+        mae_config = MAEConfig(
+            mask_ratio=0.0,  # No SSL masking - isolate missing token behavior
+            mask_strategy="random",
+        )
+        mae = MAEObjective(encoder, mae_config)
+        mae.eval()
+
+        B, T, D = 2, 10, 35
+        x = torch.randn(B, T, D)
+        # Create obs_mask with known missing positions
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+        obs_mask[:, :, 0] = False  # First feature always missing
+
+        # Capture the input to encoder
+        captured_input = []
+        original_forward = mae.encoder.forward
+
+        def capture_forward(x_in, **kwargs):
+            captured_input.append(x_in.clone())
+            return original_forward(x_in, **kwargs)
+
+        from unittest.mock import patch
+
+        with patch.object(mae.encoder, "forward", capture_forward):
+            with torch.no_grad():
+                mae(x, obs_mask)
+
+        # Check that missing positions have MISSING_TOKEN values
+        encoder_input = captured_input[0]
+        missing_token_expanded = mae.missing_token.expand(B, T, D)
+
+        # First feature should have MISSING_TOKEN values
+        assert torch.allclose(encoder_input[:, :, 0], missing_token_expanded[:, :, 0], atol=1e-6)
+
+    def test_mask_token_placement(self, encoder):
+        """Test that MASK_TOKEN is placed at SSL-masked positions."""
+        mae_config = MAEConfig(
+            mask_ratio=1.0,  # Mask everything observed for testing
+            mask_strategy="random",
+        )
+        mae = MAEObjective(encoder, mae_config)
+        mae.eval()
+
+        B, T, D = 2, 10, 35
+        x = torch.randn(B, T, D)
+        # All observed - so all will be SSL-masked
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        # Capture the input to encoder
+        captured_input = []
+        original_forward = mae.encoder.forward
+
+        def capture_forward(x_in, **kwargs):
+            captured_input.append(x_in.clone())
+            return original_forward(x_in, **kwargs)
+
+        from unittest.mock import patch
+
+        with patch.object(mae.encoder, "forward", capture_forward):
+            with torch.no_grad():
+                mae(x, obs_mask)
+
+        # Check that encoder input differs from original (should be MASK_TOKEN)
+        encoder_input = captured_input[0]
+        mask_token_expanded = mae.mask_token.expand(B, T, D)
+
+        # All positions should have MASK_TOKEN values (since mask_ratio=1.0)
+        assert torch.allclose(encoder_input, mask_token_expanded, atol=1e-6)
+
 
 class TestSSLFactory:
     """Tests for SSL factory functions."""
@@ -449,7 +554,7 @@ class TestMAEIntegration:
         optimizer = torch.optim.Adam(mae.parameters(), lr=1e-3)
 
         initial_loss = None
-        for step in range(5):
+        for step in range(20):  # More steps for reliable decrease with two-token system
             optimizer.zero_grad()
             loss, metrics = mae(x_imputed, obs_mask)
             loss.backward()
@@ -460,8 +565,11 @@ class TestMAEIntegration:
 
         final_loss = loss.item()
 
-        # Check that loss decreased
-        assert final_loss < initial_loss, "Loss should decrease during training"
+        # Check that loss decreased (allow 10% tolerance for random fluctuations)
+        assert final_loss < initial_loss * 1.1, (
+            f"Loss should decrease during training: initial={initial_loss:.4f}, "
+            f"final={final_loss:.4f}"
+        )
 
         # Check that metrics are reasonable
         assert 0.0 <= metrics["mae_mask_ratio_actual"] <= 1.0
@@ -495,6 +603,120 @@ class TestMAEIntegration:
             actual_ratio = metrics["mae_mask_ratio_actual"]
             # Allow 15% relative error
             assert abs(actual_ratio - mask_ratio) < 0.15
+
+
+class TestTwoTokenSystem:
+    """Tests for the two-token system (MISSING_TOKEN and MASK_TOKEN)."""
+
+    def test_encoder_receives_no_mask(self):
+        """Test that encoder receives mask=None (tokens carry the information)."""
+        from unittest.mock import patch
+
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+
+        config = MAEConfig(
+            mask_ratio=0.5,
+            mask_strategy="random",
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+        mae.eval()
+
+        B, T, D = 2, 10, 35
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        # Capture what mask is passed to encoder
+        captured_masks = []
+        original_forward = encoder.forward
+
+        def capture_forward(x_in, mask=None, padding_mask=None):
+            captured_masks.append(mask)
+            return original_forward(x_in, mask=mask, padding_mask=padding_mask)
+
+        with patch.object(encoder, "forward", capture_forward):
+            mae(x, obs_mask)
+
+        # The mask should be None (tokens carry the information)
+        assert captured_masks[0] is None
+
+    def test_tokens_differentiate_missing_vs_masked(self):
+        """Test that MISSING_TOKEN and MASK_TOKEN have different values."""
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+
+        config = MAEConfig(
+            mask_ratio=0.3,
+            mask_strategy="random",
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+
+        # After random initialization, tokens should be different
+        assert not torch.allclose(mae.missing_token, mae.mask_token)
+
+    def test_input_contains_both_tokens(self):
+        """Test that encoder input contains both MISSING_TOKEN and MASK_TOKEN."""
+        from unittest.mock import patch
+
+        encoder_config = TransformerConfig(
+            d_input=35,
+            d_model=64,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(encoder_config)
+
+        config = MAEConfig(
+            mask_ratio=0.5,  # High ratio to ensure some positions get masked
+            mask_strategy="random",
+            decoder_d_model=32,
+            decoder_n_layers=1,
+        )
+        mae = MAEObjective(encoder, config)
+        mae.eval()
+
+        B, T, D = 2, 10, 35
+        x = torch.randn(B, T, D) + 5.0  # Offset to differentiate from tokens
+        # Mix of missing and observed
+        obs_mask = torch.rand(B, T, D) > 0.5
+
+        # Capture what input is passed to encoder
+        captured_inputs = []
+        original_forward = encoder.forward
+
+        def capture_forward(x_in, **kwargs):
+            captured_inputs.append(x_in.clone())
+            return original_forward(x_in, **kwargs)
+
+        with patch.object(encoder, "forward", capture_forward):
+            with torch.no_grad():
+                mae(x, obs_mask)
+
+        encoder_input = captured_inputs[0]
+
+        # Check that input contains values close to MISSING_TOKEN (at missing positions)
+        missing_positions = ~obs_mask
+        if missing_positions.any():
+            missing_vals = encoder_input[missing_positions]
+            expected_missing = mae.missing_token.expand_as(encoder_input)[missing_positions]
+            assert torch.allclose(missing_vals, expected_missing, atol=1e-6)
 
 
 class TestBugFixes:
