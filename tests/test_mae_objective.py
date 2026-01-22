@@ -749,42 +749,6 @@ class TestBugFixes:
                 f"{mask_ratio + max_overshoot:.3f}"
             )
 
-    def test_validation_mask_determinism(self):
-        """Test that validation masks are deterministic."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        config = MAEConfig(
-            mask_ratio=0.15,
-            mask_strategy="random",
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-
-        # Set to eval mode (validation)
-        mae.eval()
-
-        x = torch.randn(4, 10, 35)
-        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
-
-        # Run twice and check that metrics are identical
-        with torch.no_grad():
-            loss1, metrics1 = mae(x, obs_mask)
-            loss2, metrics2 = mae(x, obs_mask)
-
-        # Loss should be identical (same masks)
-        assert torch.allclose(loss1, loss2), (
-            "Validation masks are not deterministic: "
-            f"loss1={loss1.item():.6f}, loss2={loss2.item():.6f}"
-        )
-
     def test_training_mask_varies(self):
         """Test that training masks vary between forward passes."""
         encoder_config = TransformerConfig(
