@@ -10,6 +10,7 @@ Key features:
 - Comprehensive metrics (AUROC, AUPRC, accuracy, etc.)
 """
 
+import warnings
 from typing import Any, Dict, Literal, Optional
 
 import lightning.pytorch as pl
@@ -18,7 +19,7 @@ import torch.nn as nn
 from omegaconf import DictConfig
 
 from slices.eval import MetricConfig, build_metrics
-from slices.models.encoders import build_encoder
+from slices.models.encoders import EncoderWithMissingToken, build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
 
 
@@ -67,11 +68,17 @@ class FineTuneModule(pl.LightningModule):
         encoder_config_dict = {k: v for k, v in config.encoder.items() if k != "name"}
         self.encoder = build_encoder(encoder_name, encoder_config_dict)
 
-        # Load pretrained weights
+        # Check if missing token wrapper should be used
+        self.use_missing_token = config.training.get("use_missing_token", True)
+
+        # Load pretrained weights (may wrap encoder with EncoderWithMissingToken)
         if checkpoint_path:
             self._load_encoder_weights(checkpoint_path)
         elif pretrain_checkpoint_path:
             self._load_from_pretrain_checkpoint(pretrain_checkpoint_path)
+        elif self.use_missing_token:
+            # No pretrained weights, but still wrap encoder for consistency
+            self._wrap_encoder_with_missing_token(missing_token=None)
 
         # Build task head
         task_config = self._build_task_config(config)
@@ -127,19 +134,55 @@ class FineTuneModule(pl.LightningModule):
     def _load_encoder_weights(self, path: str) -> None:
         """Load encoder weights from .pt file.
 
+        Handles both old format (raw state_dict) and new format (checkpoint
+        dict with encoder_state_dict, missing_token, and version).
+
+        For new format, wraps encoder with EncoderWithMissingToken using the
+        saved missing_token for consistent preprocessing.
+
         Args:
-            path: Path to encoder state dict.
+            path: Path to encoder checkpoint.
 
         Raises:
             FileNotFoundError: If checkpoint file doesn't exist.
             RuntimeError: If state dict keys don't match encoder architecture.
         """
-        state_dict = torch.load(path, map_location="cpu", weights_only=True)
-        self.encoder.load_state_dict(state_dict)
-        print(f"✓ Loaded encoder weights from: {path}")
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+
+        # Detect checkpoint format
+        if isinstance(checkpoint, dict) and "version" in checkpoint:
+            # New format (version 2+)
+            version = checkpoint["version"]
+            state_dict = checkpoint["encoder_state_dict"]
+            missing_token = checkpoint.get("missing_token", None)
+
+            self.encoder.load_state_dict(state_dict)
+            print(f"✓ Loaded encoder weights from: {path} (format v{version})")
+
+            # Wrap encoder with missing token if available and enabled
+            if self.use_missing_token:
+                self._wrap_encoder_with_missing_token(missing_token)
+        else:
+            # Old format (raw state_dict)
+            warnings.warn(
+                f"Loading old-format checkpoint from {path}. "
+                "Missing token will be randomly initialized. "
+                "Re-save the encoder using SSLPretrainModule.save_encoder() "
+                "to include the learned missing_token.",
+                UserWarning,
+            )
+            self.encoder.load_state_dict(checkpoint)
+            print(f"✓ Loaded encoder weights from: {path} (legacy format)")
+
+            # Wrap encoder with random missing token if enabled
+            if self.use_missing_token:
+                self._wrap_encoder_with_missing_token(missing_token=None)
 
     def _load_from_pretrain_checkpoint(self, path: str) -> None:
         """Load encoder from full pretraining checkpoint (.ckpt).
+
+        Also extracts the missing_token from the SSL objective if present
+        and wraps the encoder with EncoderWithMissingToken.
 
         Args:
             path: Path to Lightning checkpoint.
@@ -173,6 +216,41 @@ class FineTuneModule(pl.LightningModule):
 
         self.encoder.load_state_dict(encoder_state_dict)
         print(f"✓ Loaded encoder from pretrain checkpoint: {path}")
+
+        # Extract missing_token from SSL objective if present
+        missing_token = None
+        if "ssl_objective.missing_token" in state_dict:
+            missing_token = state_dict["ssl_objective.missing_token"]
+
+        # Wrap encoder with missing token if enabled
+        if self.use_missing_token:
+            self._wrap_encoder_with_missing_token(missing_token)
+
+    def _wrap_encoder_with_missing_token(self, missing_token: Optional[torch.Tensor]) -> None:
+        """Wrap encoder with EncoderWithMissingToken.
+
+        Args:
+            missing_token: Optional pretrained missing token. If None,
+                a random token will be initialized.
+        """
+        d_input = self.encoder.config.d_input
+
+        if missing_token is not None:
+            self.encoder = EncoderWithMissingToken(
+                encoder=self.encoder,
+                d_input=d_input,
+                missing_token=missing_token,
+                init_missing_token=False,
+            )
+            print("✓ Wrapped encoder with pretrained missing token")
+        else:
+            self.encoder = EncoderWithMissingToken(
+                encoder=self.encoder,
+                d_input=d_input,
+                missing_token=None,
+                init_missing_token=True,
+            )
+            print("✓ Wrapped encoder with randomly initialized missing token")
 
     def _apply_freeze_strategy(self) -> None:
         """Apply freezing strategy to encoder."""

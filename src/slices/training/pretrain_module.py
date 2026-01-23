@@ -298,9 +298,29 @@ class SSLPretrainModule(pl.LightningModule):
         return self.encoder
 
     def save_encoder(self, path: str) -> None:
-        """Save encoder weights for downstream fine-tuning.
+        """Save encoder weights and missing token for downstream fine-tuning.
+
+        Saves a checkpoint dictionary containing:
+        - encoder_state_dict: Encoder model weights
+        - missing_token: Learned MISSING_TOKEN from SSL objective (if available)
+        - d_input: Input dimension for token shape validation
+        - version: Checkpoint format version (2)
+
+        This format allows FineTuneModule to wrap the encoder with
+        EncoderWithMissingToken for consistent preprocessing between
+        pretraining and finetuning.
 
         Args:
-            path: Path to save encoder weights.
+            path: Path to save encoder checkpoint.
         """
-        torch.save(self.encoder.state_dict(), path)
+        checkpoint = {
+            "encoder_state_dict": self.encoder.state_dict(),
+            "version": 2,
+        }
+
+        # Save missing_token if the SSL objective has one
+        if hasattr(self.ssl_objective, "missing_token"):
+            checkpoint["missing_token"] = self.ssl_objective.missing_token.data.clone()
+            checkpoint["d_input"] = self.encoder.config.d_input
+
+        torch.save(checkpoint, path)
