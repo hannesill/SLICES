@@ -66,7 +66,7 @@ def main(cfg: DictConfig) -> None:
         feature_set=cfg.data.feature_set,
         min_stay_hours=cfg.data.min_stay_hours,
         batch_size=cfg.data.extraction_batch_size,
-        tasks=list(cfg.data.tasks) if cfg.data.tasks else ["mortality_24h"],
+        tasks=list(cfg.data.get("tasks", [])) if cfg.data.get("tasks") else [],
         categories=list(cfg.data.categories) if cfg.data.get("categories") else None,
         concepts_dir=cfg.data.get("concepts_dir"),
         datasets_dir=cfg.data.get("datasets_dir"),

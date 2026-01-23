@@ -2,6 +2,7 @@
 
 Handles patient-level splits, data loading, and batching for training.
 Ensures no patient appears in multiple splits (prevents data leakage).
+Supports sliding windows for SSL pretraining with longer sequences.
 """
 
 import logging
@@ -16,6 +17,7 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from slices.data.dataset import ICUDataset
+from slices.data.sliding_window import SlidingWindowDataset
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -27,8 +29,11 @@ TQDM_MIN_ITEMS = 1000  # Only show progress bar for collections larger than this
 def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     """Collate function for batching ICU samples.
 
+    Handles both regular ICUDataset samples and SlidingWindowDataset samples
+    which include additional window_start and window_idx fields.
+
     Args:
-        batch: List of sample dictionaries from ICUDataset.
+        batch: List of sample dictionaries from ICUDataset or SlidingWindowDataset.
 
     Returns:
         Batched dictionary with stacked tensors.
@@ -48,6 +53,12 @@ def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     if "label" in batch[0]:
         labels = torch.stack([s["label"] for s in batch])  # (B,)
         result["label"] = labels
+
+    # Stack sliding window metadata if present
+    if "window_start" in batch[0]:
+        result["window_start"] = torch.tensor([s["window_start"] for s in batch])  # (B,)
+    if "window_idx" in batch[0]:
+        result["window_idx"] = torch.tensor([s["window_idx"] for s in batch])  # (B,)
 
     return result
 
@@ -82,6 +93,10 @@ class ICUDataModule(L.LightningDataModule):
         normalize: bool = True,
         impute_strategy: str = "forward_fill",
         pin_memory: bool = True,
+        # Sliding window parameters for SSL pretraining
+        enable_sliding_windows: bool = False,
+        window_size: Optional[int] = None,
+        window_stride: Optional[int] = None,
     ) -> None:
         """Initialize DataModule.
 
@@ -98,6 +113,15 @@ class ICUDataModule(L.LightningDataModule):
             normalize: Whether to normalize features.
             impute_strategy: Imputation strategy ('forward_fill', 'zero', 'mean', 'none').
             pin_memory: Whether to pin memory for faster GPU transfer.
+            enable_sliding_windows: Whether to use sliding windows for training.
+                Useful for SSL pretraining with longer sequences (e.g., 168h).
+                When enabled, train_dataloader uses overlapping windows and
+                val_dataloader uses non-overlapping windows.
+            window_size: Size of sliding windows in timesteps (hours).
+                Defaults to seq_length if None (no windowing effect).
+            window_stride: Step between consecutive windows.
+                Defaults to window_size // 2 (50% overlap) for training.
+                Validation always uses stride=window_size (non-overlapping).
         """
         super().__init__()
         self.processed_dir = Path(processed_dir)
@@ -112,6 +136,11 @@ class ICUDataModule(L.LightningDataModule):
         self.normalize = normalize
         self.impute_strategy = impute_strategy
         self.pin_memory = pin_memory
+
+        # Sliding window parameters
+        self.enable_sliding_windows = enable_sliding_windows
+        self.window_size = window_size
+        self.window_stride = window_stride
 
         # Validate ratios
         total_ratio = train_ratio + val_ratio + test_ratio
@@ -511,11 +540,31 @@ class ICUDataModule(L.LightningDataModule):
         )
 
     def train_dataloader(self) -> DataLoader:
-        """Return training DataLoader."""
+        """Return training DataLoader.
+
+        If sliding windows are enabled, wraps the base dataset with
+        SlidingWindowDataset using overlapping windows.
+        """
         if self.dataset is None:
             raise RuntimeError("Call setup() before train_dataloader()")
 
-        train_dataset = Subset(self.dataset, self.train_indices)
+        if self.enable_sliding_windows:
+            # Use sliding windows for training (overlapping by default)
+            window_size = self.window_size or self.dataset.seq_length
+            window_stride = self.window_stride or window_size // 2
+            train_dataset = SlidingWindowDataset(
+                self.dataset,
+                window_size=window_size,
+                stride=window_stride,
+                stay_indices=self.train_indices,
+            )
+            logger.info(
+                f"Train dataloader using sliding windows: {len(train_dataset)} windows "
+                f"(window_size={window_size}, stride={window_stride})"
+            )
+        else:
+            train_dataset = Subset(self.dataset, self.train_indices)
+
         return DataLoader(
             train_dataset,
             batch_size=self.batch_size,
@@ -527,11 +576,30 @@ class ICUDataModule(L.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader:
-        """Return validation DataLoader."""
+        """Return validation DataLoader.
+
+        If sliding windows are enabled, uses NON-overlapping windows
+        (stride=window_size) to avoid inflated validation metrics.
+        """
         if self.dataset is None:
             raise RuntimeError("Call setup() before val_dataloader()")
 
-        val_dataset = Subset(self.dataset, self.val_indices)
+        if self.enable_sliding_windows:
+            # Use non-overlapping windows for validation to avoid inflated metrics
+            window_size = self.window_size or self.dataset.seq_length
+            val_dataset = SlidingWindowDataset(
+                self.dataset,
+                window_size=window_size,
+                stride=window_size,  # Non-overlapping
+                stay_indices=self.val_indices,
+            )
+            logger.info(
+                f"Val dataloader using sliding windows: {len(val_dataset)} windows "
+                f"(window_size={window_size}, stride={window_size})"
+            )
+        else:
+            val_dataset = Subset(self.dataset, self.val_indices)
+
         return DataLoader(
             val_dataset,
             batch_size=self.batch_size,

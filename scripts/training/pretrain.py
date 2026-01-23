@@ -161,6 +161,10 @@ def main(cfg: DictConfig) -> None:
         normalize=cfg.data.get("normalize", True),
         impute_strategy=cfg.data.get("impute_strategy", "forward_fill"),
         pin_memory=cfg.data.get("pin_memory", True),
+        # Sliding window parameters for longer sequences
+        enable_sliding_windows=cfg.data.get("enable_sliding_windows", False),
+        window_size=cfg.data.get("window_size", None),
+        window_stride=cfg.data.get("window_stride", None),
     )
 
     # Setup data
