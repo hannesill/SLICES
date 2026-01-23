@@ -31,6 +31,13 @@ data:
   # Increase workers for pretraining (larger batches)
   num_workers: 8
 
+  # Sliding window configuration for longer sequences
+  # Enable after re-extracting with longer seq_length_hours (e.g., 168h)
+  # Example: uv run python scripts/preprocessing/extract_mimic_iv.py data.seq_length_hours=168
+  enable_sliding_windows: false  # Set true after re-extraction
+  window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
+  window_stride: 24              # Stride for overlapping windows (50% overlap)
+
 # Encoder configuration inherited from configs/model/transformer.yaml
 # Override pretraining-specific settings:
 encoder:
