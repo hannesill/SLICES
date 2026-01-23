@@ -134,6 +134,32 @@ class SSLPretrainModule(pl.LightningModule):
 
         return loss
 
+    def on_train_batch_end(
+        self,
+        outputs: torch.Tensor,
+        batch: Dict[str, torch.Tensor],
+        batch_idx: int,
+    ) -> None:
+        """Hook called after each training batch.
+
+        Used to update momentum encoders (e.g., SMART) after each optimizer step.
+
+        Args:
+            outputs: Output from training_step (loss tensor).
+            batch: The batch that was just processed.
+            batch_idx: Index of the batch.
+        """
+        # Update momentum encoder if the SSL objective supports it
+        if hasattr(self.ssl_objective, "momentum_update"):
+            # Calculate training progress as fraction [0, 1]
+            if self.trainer.max_steps is not None and self.trainer.max_steps > 0:
+                progress = self.trainer.global_step / self.trainer.max_steps
+            else:
+                # Fallback: use epoch-based progress
+                max_epochs = self.trainer.max_epochs if self.trainer.max_epochs is not None else 1
+                progress = self.trainer.current_epoch / max(1, max_epochs)
+            self.ssl_objective.momentum_update(progress=progress)
+
     def validation_step(
         self,
         batch: Dict[str, torch.Tensor],

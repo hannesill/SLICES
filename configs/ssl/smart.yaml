@@ -1,0 +1,49 @@
+# @package ssl
+# SMART SSL Configuration
+#
+# SMART: Self-supervised Missing-Aware Reconstruction Transformer (NeurIPS 2024)
+# Paper: https://openreview.net/forum?id=7UenF4kx4j
+# Code: https://github.com/yzhHoward/SMART
+#
+# This objective implements momentum-based self-distillation where an online encoder
+# learns to predict representations from a momentum-updated target encoder.
+#
+# Key features:
+# - Per-sample random mask ratios from U[min_mask_ratio, max_mask_ratio]
+# - ELEMENT-WISE masking (each value masked independently, not entire timesteps)
+# - Momentum encoder (EMA target) with linear schedule from base to final
+# - Simple MLP predictor (NOT transformer) to map online to target representations
+# - Smooth L1 loss on masked positions
+#
+# IMPORTANT: SMART requires the SMARTEncoder (MART architecture).
+# Use encoder=smart when training with this SSL objective.
+
+name: smart
+
+# Masking parameters (per-sample random ratios)
+# Each sample in a batch gets a different mask ratio sampled from U[min, max]
+# IMPORTANT: Original uses ELEMENT-WISE masking (each (t,v) position independent)
+min_mask_ratio: 0.0   # Minimum mask ratio (some samples see all data)
+max_mask_ratio: 0.75  # Maximum mask ratio (aggressive masking)
+
+# Predictor parameters (simple MLP, matches original implementation)
+# Original: MLP(d_model -> 4*d_model -> d_model) + Linear(d_model -> d_model)
+predictor_mlp_ratio: 4.0  # Hidden dimension = d_model * mlp_ratio
+predictor_dropout: 0.1
+
+# Momentum encoder parameters
+# Target encoder is updated via EMA: target = m * target + (1-m) * online
+# Momentum increases linearly from base to final during training
+momentum_base: 0.996   # Initial momentum (start of training)
+momentum_final: 1.0    # Final momentum (end of training)
+
+# Loss parameters
+loss_type: smooth_l1    # smooth_l1 | mse
+smooth_l1_beta: 1.0     # Beta for smooth L1 loss (robustness to outliers)
+loss_on_observed_only: true  # Only compute loss on originally observed values
+
+# Notes:
+# - Unlike MAE which reconstructs raw values, SMART reconstructs encoder representations
+# - The momentum schedule ensures stable training (high momentum = slow target updates)
+# - Per-sample random masking provides diverse views for self-supervision
+# - Element-wise masking (NOT timestep-level) matches the original implementation

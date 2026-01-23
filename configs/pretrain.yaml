@@ -4,12 +4,26 @@
 # architecture and SSL objective. Override any setting via command line:
 #   uv run python scripts/training/pretrain.py encoder.d_model=256 ssl.mask_ratio=0.20
 #
+# Switching between models/objectives:
+#   # Default: MAE + Transformer
+#   uv run python scripts/training/pretrain.py
+#
+#   # SMART encoder + SMART objective (with paper defaults)
+#   uv run python scripts/training/pretrain.py --config-name pretrain_smart
+#
+#   # SMART encoder + SMART objective (from this config)
+#   uv run python scripts/training/pretrain.py model=smart ssl=smart encoder.d_model=32
+#
+#   # Mix and match (e.g., MAE objective with SMART encoder - experimental)
+#   uv run python scripts/training/pretrain.py model=smart ssl=mae encoder.pooling=none
+#
 # Note: This uses similar settings to configs/model/transformer.yaml but with
 # encoder.pooling=none (required for MAE) instead of pooling=mean (for tasks).
 
 defaults:
   - data: mimic_iv
   - model: transformer
+  - ssl: mae
   - _self_
 
 # Project info
@@ -44,21 +58,12 @@ encoder:
   d_model: 256  # Larger model for pretraining
   pooling: none  # Required for MAE - need per-timestep outputs (vs 'mean' for tasks)
 
-# SSL objective configuration
+# SSL objective configuration overrides (base from configs/ssl/mae.yaml)
+# To switch SSL objective: uv run python scripts/training/pretrain.py ssl=smart model=smart
 ssl:
-  name: mae
-  mask_ratio: 0.3
-  mask_strategy: block  # random | block | timestep | feature
-  min_block_size: 3
-  max_block_size: 10
-  # Note: Uses learned MASK_TOKEN and MISSING_TOKEN (two-token system)
-  decoder_d_model: 128
-  decoder_n_layers: 2
-  decoder_n_heads: 4
-  decoder_d_ff: 256
-  decoder_dropout: 0.1
-  loss_on_observed_only: true
-  norm_target: false
+  mask_ratio: 0.3  # Override: more aggressive masking for pretraining (default: 0.15)
+  mask_strategy: block  # Override: block masking for temporal structure (default: random)
+  decoder_d_model: 128  # Override: larger decoder for pretraining (default: 64)
 
 # Training configuration
 training:

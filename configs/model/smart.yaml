@@ -1,0 +1,42 @@
+# @package encoder
+# SMART (MART) Encoder Configuration
+#
+# Implements the Missing-Aware Transformer (MART) architecture from:
+# "SMART: Self-supervised Missing-Aware Reconstruction Transformer" (NeurIPS 2024)
+#
+# Key features:
+# - MLPEmbedder: Jointly embeds (value, observation_mask) pairs
+# - Per-variable query tokens for representation learning
+# - Temporal attention (SeqAttention) respecting observation masks
+# - Cross-variable attention (VarAttention) using query-based pooling
+#
+# Architecture differences from standard transformer:
+# - Uses (B, V, T) internal format instead of (B, T, D)
+# - Separate attention for temporal and variable dimensions
+# - Missing-awareness built into the embedding layer
+#
+# For SSL pretraining, use pooling=none to get 4D output (B, V, T, d_model)
+# For downstream tasks, use pooling=query or pooling=mean
+
+name: smart
+
+# Input/Output dimensions
+# d_input is the number of input variables (V dimension)
+# d_model is the embedding dimension per variable
+d_model: 32  # Embedding dimension (smaller than standard transformer)
+max_seq_length: 168  # Maximum sequence length in hours (7 days)
+
+# MART architecture
+n_layers: 2  # Number of BasicBlocks (SeqAtt + VarAtt + MLP)
+n_heads: 4  # Attention heads for both seq and var attention
+d_ff: 256  # Feedforward dimension (typically 8 * d_model)
+
+# Regularization
+dropout: 0.1  # Dropout probability
+
+# Pooling strategy for final representation
+# Options: query | mean | none
+# - query: Use per-variable query tokens, flatten to (B, V*d_model) - default for SMART downstream
+# - mean: Mean pool over time and variables to (B, d_model)
+# - none: Return full 4D output (B, V, T, d_model) - required for SSL (override in pretrain config)
+pooling: query

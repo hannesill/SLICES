@@ -8,18 +8,21 @@ from typing import Any, Dict, Type
 
 from .base import BaseEncoder, EncoderConfig
 from .linear import LinearConfig, LinearEncoder
+from .smart import SMARTEncoder, SMARTEncoderConfig
 from .transformer import TransformerConfig, TransformerEncoder
 
 # Registry of available encoders
 ENCODER_REGISTRY: Dict[str, Type[BaseEncoder]] = {
     "transformer": TransformerEncoder,
     "linear": LinearEncoder,
+    "smart": SMARTEncoder,
 }
 
 # Registry of encoder configs
 ENCODER_CONFIG_REGISTRY: Dict[str, Type[EncoderConfig]] = {
     "transformer": TransformerConfig,
     "linear": LinearConfig,
+    "smart": SMARTEncoderConfig,
 }
 
 

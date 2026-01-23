@@ -12,6 +12,7 @@ from slices.models.encoders.factory import (
     build_encoder,
     get_encoder_config_class,
 )
+from slices.models.encoders.smart import SMARTEncoder, SMARTEncoderConfig
 from slices.models.encoders.transformer import TransformerConfig, TransformerEncoder
 from slices.models.heads.base import TaskHeadConfig
 from slices.models.heads.factory import (
@@ -28,6 +29,7 @@ from slices.models.pretraining.factory import (
     get_ssl_config_class,
 )
 from slices.models.pretraining.mae import MAEConfig, MAEObjective
+from slices.models.pretraining.smart import SMARTObjective, SMARTSSLConfig
 
 
 class TestEncoderFactory:
@@ -107,6 +109,53 @@ class TestEncoderFactory:
 
         # With mean pooling, output should be (B, d_model)
         assert output.shape == (2, 64)
+
+    def test_encoder_registry_contains_smart(self):
+        """Encoder registry should contain SMART encoder."""
+        assert "smart" in ENCODER_REGISTRY
+        assert ENCODER_REGISTRY["smart"] is SMARTEncoder
+
+    def test_encoder_config_registry_contains_smart(self):
+        """Config registry should contain SMART config."""
+        assert "smart" in ENCODER_CONFIG_REGISTRY
+        assert ENCODER_CONFIG_REGISTRY["smart"] is SMARTEncoderConfig
+
+    def test_build_encoder_creates_smart(self):
+        """build_encoder should create SMARTEncoder correctly."""
+        config_dict = {
+            "d_input": 35,
+            "d_model": 32,
+            "n_layers": 2,
+            "n_heads": 4,
+            "pooling": "query",
+        }
+
+        encoder = build_encoder("smart", config_dict)
+
+        assert isinstance(encoder, SMARTEncoder)
+        assert encoder.config.d_input == 35
+        assert encoder.config.d_model == 32
+
+    def test_built_smart_encoder_produces_output(self):
+        """Built SMART encoder should produce output of correct shape."""
+        config_dict = {
+            "d_input": 35,
+            "d_model": 32,
+            "n_layers": 2,
+            "n_heads": 4,
+            "pooling": "query",
+        }
+
+        encoder = build_encoder("smart", config_dict)
+
+        # Test forward pass
+        x = torch.randn(2, 48, 35)
+        obs_mask = torch.ones(2, 48, 35, dtype=torch.bool)
+
+        output = encoder(x, mask=obs_mask)
+
+        # With query pooling, output should be (B, V*d_model)
+        assert output.shape == (2, 35 * 32)
 
 
 class TestTaskHeadFactory:
@@ -332,6 +381,74 @@ class TestSSLObjectiveFactory:
         assert loss.ndim == 0  # Scalar loss
         assert isinstance(metrics, dict)
 
+    def test_ssl_registry_contains_smart(self):
+        """SSL registry should contain SMART objective."""
+        assert "smart" in SSL_REGISTRY
+        assert SSL_REGISTRY["smart"] is SMARTObjective
+
+    def test_config_registry_contains_smart(self):
+        """Config registry should contain SMART config."""
+        assert "smart" in CONFIG_REGISTRY
+        assert CONFIG_REGISTRY["smart"] is SMARTSSLConfig
+
+    def test_build_ssl_objective_smart(self):
+        """build_ssl_objective should create SMARTObjective correctly."""
+        # SMART requires SMARTEncoder with pooling=none
+        encoder_config = SMARTEncoderConfig(
+            d_input=35,
+            d_model=32,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = SMARTEncoder(encoder_config)
+
+        smart_config = SMARTSSLConfig(
+            name="smart",
+            min_mask_ratio=0.0,
+            max_mask_ratio=0.75,
+        )
+
+        ssl_objective = build_ssl_objective(encoder, smart_config)
+
+        assert isinstance(ssl_objective, SMARTObjective)
+        assert ssl_objective.config.max_mask_ratio == 0.75
+
+    def test_get_ssl_config_class_smart(self):
+        """get_ssl_config_class should return SMART config class."""
+        config_cls = get_ssl_config_class("smart")
+        assert config_cls is SMARTSSLConfig
+
+    def test_built_smart_ssl_objective_forward_pass(self):
+        """Built SMART SSL objective should perform forward pass correctly."""
+        encoder_config = SMARTEncoderConfig(
+            d_input=35,
+            d_model=32,
+            n_layers=2,
+            n_heads=4,
+            pooling="none",
+        )
+        encoder = SMARTEncoder(encoder_config)
+
+        smart_config = SMARTSSLConfig(
+            name="smart",
+            min_mask_ratio=0.0,
+            max_mask_ratio=0.75,
+        )
+
+        ssl_objective = build_ssl_objective(encoder, smart_config)
+
+        # Test forward pass
+        x = torch.randn(2, 48, 35)
+        obs_mask = torch.ones(2, 48, 35, dtype=torch.bool)
+
+        loss, metrics = ssl_objective(x, obs_mask)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0  # Scalar loss
+        assert isinstance(metrics, dict)
+        assert "smart_loss" in metrics
+
 
 class TestFactoryIntegration:
     """Integration tests combining multiple factories."""
@@ -372,3 +489,71 @@ class TestFactoryIntegration:
         assert embeddings.shape == (4, 64)
         # Task heads return dict with 'logits'
         assert output["logits"].shape == (4, 2)  # Binary uses 2 outputs
+
+    def test_build_complete_smart_ssl_pipeline(self):
+        """Test building a complete SMART encoder + SSL objective pipeline."""
+        # Build SMART encoder with pooling=none for SSL
+        encoder = build_encoder(
+            "smart",
+            {
+                "d_input": 35,
+                "d_model": 32,
+                "n_layers": 2,
+                "n_heads": 4,
+                "pooling": "none",
+            },
+        )
+
+        # Build SMART SSL objective
+        smart_config = SMARTSSLConfig(
+            name="smart",
+            min_mask_ratio=0.0,
+            max_mask_ratio=0.75,
+        )
+        ssl_objective = build_ssl_objective(encoder, smart_config)
+
+        # Test forward pass
+        x = torch.randn(4, 48, 35)
+        obs_mask = torch.rand(4, 48, 35) > 0.3
+
+        loss, metrics = ssl_objective(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert "smart_loss" in metrics
+        assert "smart_mask_ratio_mean" in metrics
+
+    def test_build_smart_encoder_for_downstream(self):
+        """Test building SMART encoder for downstream task with query pooling."""
+        # Build SMART encoder with query pooling for downstream
+        encoder = build_encoder(
+            "smart",
+            {
+                "d_input": 35,
+                "d_model": 32,
+                "n_layers": 2,
+                "n_heads": 4,
+                "pooling": "query",
+            },
+        )
+
+        # Build task head
+        head = build_task_head_from_dict(
+            {
+                "name": "mlp",
+                "task_name": "mortality_24h",
+                "task_type": "binary",
+                "n_classes": None,
+                "input_dim": 35 * 32,  # V * d_model for query pooling
+                "hidden_dims": [128],
+            }
+        )
+
+        # Test forward pass
+        x = torch.randn(4, 48, 35)
+        obs_mask = torch.rand(4, 48, 35) > 0.3
+
+        embeddings = encoder(x, mask=obs_mask)
+        output = head(embeddings)
+
+        assert embeddings.shape == (4, 35 * 32)
+        assert output["logits"].shape == (4, 2)
