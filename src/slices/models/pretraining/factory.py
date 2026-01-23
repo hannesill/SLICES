@@ -10,15 +10,18 @@ import torch.nn as nn
 
 from .base import BaseSSLObjective, SSLConfig
 from .mae import MAEConfig, MAEObjective
+from .smart import SMARTObjective, SMARTSSLConfig
 
 # Registry of available SSL objectives
 SSL_REGISTRY: Dict[str, Type[BaseSSLObjective]] = {
     "mae": MAEObjective,
+    "smart": SMARTObjective,
 }
 
 # Registry of SSL configs
 CONFIG_REGISTRY: Dict[str, Type[SSLConfig]] = {
     "mae": MAEConfig,
+    "smart": SMARTSSLConfig,
 }
 
 
