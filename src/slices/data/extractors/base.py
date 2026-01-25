@@ -911,11 +911,16 @@ class BaseExtractor(ABC):
             with open(metadata_path) as f:
                 existing_metadata = yaml.safe_load(f)
 
-            # Verify config matches (critical fields)
+            # Verify config matches (all critical fields for reproducibility)
+            existing_task_names = set(existing_metadata.get("task_names", []))
+            current_task_names = set(self.config.tasks or [])
+
             if (
                 existing_metadata.get("feature_set") != self.config.feature_set
                 or existing_metadata.get("seq_length_hours") != self.config.seq_length_hours
                 or existing_metadata.get("categories") != self.config.categories
+                or existing_metadata.get("min_stay_hours") != self.config.min_stay_hours
+                or existing_task_names != current_task_names
             ):
                 console.print(
                     "[yellow]Warning: Existing extraction has different config. "

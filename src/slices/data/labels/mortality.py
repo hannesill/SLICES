@@ -190,9 +190,10 @@ class MortalityLabelBuilder(LabelBuilder):
                 )
 
             # Death during prediction window
+            # Use >= pred_start to include deaths exactly at prediction start
             died_during_pred = (
                 pl.col("date_of_death").is_not_null()
-                & (pl.col("date_of_death") > pred_start)
+                & (pl.col("date_of_death") >= pred_start)
                 & (pl.col("date_of_death") <= pred_end)
             )
         else:
@@ -214,9 +215,10 @@ class MortalityLabelBuilder(LabelBuilder):
                 pred_end = pl.col("intime") + pl.duration(hours=prediction_end_hours)
 
             # Death during prediction window
+            # Use >= pred_start to include deaths exactly at prediction start
             died_during_pred = (
                 pl.col("date_of_death").is_not_null()
-                & (pl.col("date_of_death") > pred_start)
+                & (pl.col("date_of_death") >= pred_start)
                 & (pl.col("date_of_death") <= pred_end)
             )
 

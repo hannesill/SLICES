@@ -213,7 +213,8 @@ def main(cfg: DictConfig) -> None:
 
     # Save splits FIRST
     splits_path = processed_dir / "splits.yaml"
-    # Don't save full patient lists to file (can be large), just the indices
+    # Save full patient lists to enable cache validation in datamodule
+    # (patient lists are required to verify split consistency)
     splits_to_save = {
         "seed": splits["seed"],
         "train_ratio": splits["train_ratio"],
@@ -225,9 +226,10 @@ def main(cfg: DictConfig) -> None:
         "train_stays": splits["train_stays"],
         "val_stays": splits["val_stays"],
         "test_stays": splits["test_stays"],
-        "train_patients_count": len(splits["train_patients"]),
-        "val_patients_count": len(splits["val_patients"]),
-        "test_patients_count": len(splits["test_patients"]),
+        # Full patient lists for datamodule cache validation
+        "train_patients": splits["train_patients"],
+        "val_patients": splits["val_patients"],
+        "test_patients": splits["test_patients"],
     }
     with open(splits_path, "w") as f:
         yaml.dump(splits_to_save, f, default_flow_style=False)

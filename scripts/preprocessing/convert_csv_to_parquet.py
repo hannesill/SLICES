@@ -6,7 +6,7 @@ Example usage:
 
     # Override paths via command line
     python scripts/convert_csv_to_parquet.py \
-        extraction.csv_root=/path/to/csv extraction.parquet_root=/path/to/parquet
+        data.csv_root=/path/to/csv data.parquet_root=/path/to/parquet
 """
 
 import sys
@@ -23,28 +23,28 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra configuration object. Expects:
-            - extraction.csv_root: Path to directory containing CSV.gz files
-            - extraction.parquet_root: Path to output directory for Parquet files
-            - extraction.name: Dataset name for logging
+            - data.csv_root: Path to directory containing CSV.gz files
+            - data.parquet_root: Path to output directory for Parquet files
+            - data.name: Dataset name for logging
     """
-    csv_root_str = cfg.extraction.get("csv_root")
+    csv_root_str = cfg.data.get("csv_root")
 
     if csv_root_str is None:
-        print("Error: extraction.csv_root must be specified in config or via command line")
+        print("Error: data.csv_root must be specified in config or via command line")
         print(
             "Example: python scripts/convert_csv_to_parquet.py \
-                extraction.csv_root=/path/to/mimic-iv-csv"
+                data.csv_root=/path/to/mimic-iv-csv"
         )
-        print("\nAlternatively, set csv_root in configs/extraction/mimic_iv.yaml")
+        print("\nAlternatively, set csv_root in configs/data/mimic_iv.yaml")
         sys.exit(1)
 
     csv_root = Path(csv_root_str)
-    parquet_root = Path(cfg.extraction.parquet_root)
-    dataset_name = cfg.extraction.get("name", "dataset")
+    parquet_root = Path(cfg.data.parquet_root)
+    dataset_name = cfg.data.get("name", "dataset")
 
     if not csv_root.exists():
         print(f"Error: CSV root directory not found: {csv_root}")
-        print("Please provide a valid path via extraction.csv_root")
+        print("Please provide a valid path via data.csv_root")
         sys.exit(1)
 
     print(f"Dataset: {dataset_name}")

@@ -100,7 +100,7 @@ class TestSlidingWindowDataset:
 
     def test_initialization(self, mock_long_sequence_data):
         """Test sliding window dataset initialization."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -119,7 +119,7 @@ class TestSlidingWindowDataset:
         - Each stay can have: (168 - 48) / 24 + 1 = 6 windows
         - Total: 10 stays * 6 windows = 60 windows
         """
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -136,7 +136,7 @@ class TestSlidingWindowDataset:
 
     def test_window_count_non_overlapping(self, mock_long_sequence_data):
         """Test window count with non-overlapping windows (stride=window_size)."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -153,7 +153,7 @@ class TestSlidingWindowDataset:
 
     def test_window_tensor_shapes(self, mock_long_sequence_data):
         """Test that windowed samples have correct tensor shapes."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -170,7 +170,7 @@ class TestSlidingWindowDataset:
 
     def test_window_metadata_fields(self, mock_long_sequence_data):
         """Test that window metadata fields are correct."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -193,7 +193,7 @@ class TestSlidingWindowDataset:
 
         Windows from different stays should never be mixed when using stay_indices.
         """
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
 
         # Only use stays 0, 1, 2 (indices)
         stay_indices = [0, 1, 2]
@@ -216,7 +216,7 @@ class TestSlidingWindowDataset:
 
     def test_default_stride(self, mock_long_sequence_data):
         """Test that default stride is window_size // 2."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -227,7 +227,7 @@ class TestSlidingWindowDataset:
 
     def test_invalid_window_size_raises_error(self, mock_long_sequence_data):
         """Test that window_size larger than seq_length raises error."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
 
         with pytest.raises(ValueError, match="cannot exceed base dataset"):
             SlidingWindowDataset(
@@ -238,7 +238,7 @@ class TestSlidingWindowDataset:
 
     def test_invalid_window_size_zero(self, mock_long_sequence_data):
         """Test that window_size of 0 raises error."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
 
         with pytest.raises(ValueError, match="window_size must be positive"):
             SlidingWindowDataset(
@@ -249,7 +249,7 @@ class TestSlidingWindowDataset:
 
     def test_invalid_stride_zero(self, mock_long_sequence_data):
         """Test that stride of 0 raises error."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
 
         with pytest.raises(ValueError, match="stride must be positive"):
             SlidingWindowDataset(
@@ -288,7 +288,7 @@ class TestSlidingWindowDataset:
 
     def test_get_windows_per_stay(self, mock_long_sequence_data):
         """Test get_windows_per_stay returns correct counts."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -303,7 +303,7 @@ class TestSlidingWindowDataset:
 
     def test_get_window_count_statistics(self, mock_long_sequence_data):
         """Test get_window_count_statistics returns correct stats."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -319,7 +319,7 @@ class TestSlidingWindowDataset:
 
     def test_feature_names_passthrough(self, mock_long_sequence_data):
         """Test that feature names are accessible through windowed dataset."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,
@@ -330,7 +330,7 @@ class TestSlidingWindowDataset:
 
     def test_index_out_of_range(self, mock_long_sequence_data):
         """Test that out of range index raises error."""
-        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None)
+        base_dataset = ICUDataset(mock_long_sequence_data, task_name=None, normalize=False)
         windowed = SlidingWindowDataset(
             base_dataset,
             window_size=48,

@@ -717,6 +717,58 @@ class TestWindowedMortalityLabels:
         # After pred boundary → negative
         assert labels_dict[3] == 0, "Death after 72h should be negative"
 
+    def test_death_exactly_at_prediction_start_is_positive(self, windowed_stays):
+        """Test that death exactly at prediction window start is positive (Issue #3 fix).
+
+        The prediction window uses >= pred_start, so a death exactly at the moment
+        the prediction window begins should be counted as a positive case.
+
+        Timeline: |-- obs (48h) --|-- pred (24h) --|
+                  0h            48h              72h
+        """
+        mortality_info = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "date_of_death": [
+                    datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs ends
+                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h - at obs boundary (excluded)
+                    datetime(2020, 1, 3, 12, 0),  # 60h - middle of pred window
+                    datetime(2020, 1, 4, 0, 0),  # 72h - at pred end
+                ],
+                "hospital_expire_flag": [1, 1, 1, 1],
+                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 4,
+                "discharge_location": ["DIED", "DIED", "DIED", "DIED"],
+            }
+        )
+
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = MortalityLabelBuilder(config)
+        labels = builder.build_labels(
+            {
+                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3, 4])),
+                "mortality_info": mortality_info,
+            }
+        )
+
+        labels_dict = dict(zip(labels["stay_id"], labels["label"]))
+
+        # Death just after obs ends → positive (in prediction window)
+        assert labels_dict[1] == 1, "Death 1s after obs end should be positive"
+        # Death exactly at obs boundary → excluded (during observation)
+        assert labels_dict[2] is None, "Death at exactly 48h should be excluded"
+        # Death in middle of pred window → positive
+        assert labels_dict[3] == 1, "Death at 60h should be positive"
+        # Death at pred end → positive
+        assert labels_dict[4] == 1, "Death at 72h should be positive"
+
     def test_windowed_mortality_all_excluded(self, windowed_stays):
         """Test when all patients die during observation (all excluded)."""
         mortality_info = pl.DataFrame(
