@@ -162,7 +162,7 @@ def percent_to_fraction(values: pl.Series) -> pl.Series:
 
 
 @register_transform("fio2_to_fraction_robust")
-def fio2_to_fraction_robust(values: pl.Series) -> pl.Series:
+def fio2_to_fraction_robust(values: pl.Series | pl.Expr) -> pl.Series | pl.Expr:
     """Convert FiO2 to fraction, handling both percentage and fraction inputs.
 
     MIMIC-IV FiO2 values can be recorded in two formats:
@@ -178,6 +178,12 @@ def fio2_to_fraction_robust(values: pl.Series) -> pl.Series:
     - Valid percentages are in range [21, 100]
     - Values between 1.0 and 1.5 are ambiguous but rare edge cases
     """
+    # Support both Series and Expr contexts:
+    # - During extraction we often call transforms inside `with_columns(...)`,
+    #   which passes a Polars expression (pl.Expr).
+    if isinstance(values, pl.Expr):
+        return pl.when(values > 1.5).then(values / 100.0).otherwise(values)
+
     # Convert to DataFrame to use pl.when().then().otherwise() expression
     result = values.to_frame("value").select(
         pl.when(pl.col("value") > 1.5)
