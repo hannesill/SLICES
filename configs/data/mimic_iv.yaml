@@ -65,6 +65,7 @@ extraction_batch_size: 5000
 # Tasks to extract labels for
 tasks:
   - mortality_24h
+  - mortality
 
 # =============================================================================
 # CONFIG DIRECTORY PATHS (auto-detected if null)
