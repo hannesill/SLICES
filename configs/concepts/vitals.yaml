@@ -105,7 +105,7 @@ fio2:
       itemid: [223835]
       value_col: valuenum
       time_col: charttime
-      transform: percent_to_fraction
+      transform: fio2_to_fraction_robust
 
 peep:
   description: Positive end-expiratory pressure

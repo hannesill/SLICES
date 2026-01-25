@@ -12,12 +12,14 @@ from slices.data.value_transforms import (
     apply_transform,
     eicu_age_parse,
     fahrenheit_to_celsius,
+    fio2_to_fraction_robust,
     gcs_eye_text_to_numeric,
     get_transform,
     list_transforms,
     mg_dl_to_mmol_l_glucose,
     minutes_to_days,
     minutes_to_hours,
+    percent_to_fraction,
     register_transform,
     to_celsius,
 )
@@ -106,6 +108,64 @@ class TestUnitConversions:
 
         expected = [1.0, 2.0, 0.5]
         np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_percent_to_fraction(self):
+        """Percent to fraction conversion should divide by 100."""
+        values = pl.Series([21.0, 50.0, 100.0])
+        result = percent_to_fraction(values)
+
+        expected = [0.21, 0.50, 1.0]
+        np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_fio2_robust_handles_percentages(self):
+        """FiO2 robust transform should convert percentage values (>1.5) to fractions."""
+        # Values clearly in percentage format (21-100)
+        values = pl.Series([21.0, 50.0, 100.0, 40.0])
+        result = fio2_to_fraction_robust(values)
+
+        expected = [0.21, 0.50, 1.0, 0.40]
+        np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_fio2_robust_handles_fractions(self):
+        """FiO2 robust transform should preserve fraction values (<=1.5)."""
+        # Values already in fraction format (0.21-1.0)
+        values = pl.Series([0.21, 0.50, 1.0, 0.40])
+        result = fio2_to_fraction_robust(values)
+
+        expected = [0.21, 0.50, 1.0, 0.40]
+        np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_fio2_robust_handles_mixed_inputs(self):
+        """FiO2 robust transform should handle mixed percentage and fraction inputs."""
+        # Mixed values: some percentage, some fraction
+        values = pl.Series([21.0, 0.5, 100.0, 0.21, 50.0, 1.0])
+        result = fio2_to_fraction_robust(values)
+
+        # 21.0 > 1.5 → 0.21, 0.5 <= 1.5 → 0.5, 100 > 1.5 → 1.0, etc.
+        expected = [0.21, 0.5, 1.0, 0.21, 0.50, 1.0]
+        np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_fio2_robust_handles_edge_case_values(self):
+        """FiO2 robust transform should handle edge case values around threshold."""
+        # Test values around the 1.5 threshold
+        values = pl.Series([1.0, 1.5, 1.6, 2.0])
+        result = fio2_to_fraction_robust(values)
+
+        # 1.0 <= 1.5 → 1.0 (fraction)
+        # 1.5 <= 1.5 → 1.5 (fraction, edge case)
+        # 1.6 > 1.5 → 0.016 (percentage)
+        # 2.0 > 1.5 → 0.02 (percentage)
+        expected = [1.0, 1.5, 0.016, 0.02]
+        np.testing.assert_array_almost_equal(result.to_numpy(), expected)
+
+    def test_fio2_robust_handles_nulls(self):
+        """FiO2 robust transform should propagate null values."""
+        values = pl.Series([21.0, None, 0.5])
+        result = fio2_to_fraction_robust(values)
+
+        assert result[0] == pytest.approx(0.21)
+        assert result[1] is None
+        assert result[2] == pytest.approx(0.5)
 
 
 class TestDataFrameTransforms:

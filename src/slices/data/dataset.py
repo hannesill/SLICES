@@ -345,13 +345,16 @@ class ICUDataset(Dataset):
             self.feature_stds = torch.tensor(cached_stats["feature_stds"], dtype=torch.float32)
             logger.debug("Using cached normalization statistics")
         elif self.normalize:
+            # CRITICAL: Require train_indices when normalizing to prevent data leakage
+            # Using all data for normalization statistics would leak val/test information
+            if train_indices is None:
+                raise ValueError(
+                    "train_indices must be provided when normalize=True to prevent data leakage. "
+                    "Pass train_indices from your data splits, or set normalize=False."
+                )
             # Determine which samples to use for statistics
-            if train_indices is not None:
-                train_ts = timeseries_tensor[train_indices]  # (n_train, seq_len, n_features)
-                train_masks = masks_tensor[train_indices]
-            else:
-                train_ts = timeseries_tensor
-                train_masks = masks_tensor
+            train_ts = timeseries_tensor[train_indices]  # (n_train, seq_len, n_features)
+            train_masks = masks_tensor[train_indices]
 
             # Vectorized computation of mean and std per feature
             # Reshape to (n_samples * seq_len, n_features) for easier computation

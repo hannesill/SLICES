@@ -161,6 +161,33 @@ def percent_to_fraction(values: pl.Series) -> pl.Series:
     return values / 100.0
 
 
+@register_transform("fio2_to_fraction_robust")
+def fio2_to_fraction_robust(values: pl.Series) -> pl.Series:
+    """Convert FiO2 to fraction, handling both percentage and fraction inputs.
+
+    MIMIC-IV FiO2 values can be recorded in two formats:
+    - Percentage (21-100): e.g., 21 means 21% oxygen
+    - Fraction (0.21-1.0): e.g., 0.21 means 21% oxygen
+
+    This transform handles both by using a threshold of 1.5:
+    - Values > 1.5 are assumed to be percentages and divided by 100
+    - Values <= 1.5 are assumed to be fractions already
+
+    The threshold of 1.5 is chosen because:
+    - Valid fractions are in range [0.21, 1.0]
+    - Valid percentages are in range [21, 100]
+    - Values between 1.0 and 1.5 are ambiguous but rare edge cases
+    """
+    # Convert to DataFrame to use pl.when().then().otherwise() expression
+    result = values.to_frame("value").select(
+        pl.when(pl.col("value") > 1.5)
+        .then(pl.col("value") / 100.0)
+        .otherwise(pl.col("value"))
+        .alias("value")
+    )
+    return result["value"]
+
+
 # =============================================================================
 # DataFrame-based Transforms (for context-dependent transformations)
 # =============================================================================

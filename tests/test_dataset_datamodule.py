@@ -100,7 +100,7 @@ class TestICUDataset:
 
     def test_initialization(self, mock_extracted_data):
         """Test dataset initialization loads data correctly."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         assert len(dataset) == 10
         assert dataset.n_features == 3
@@ -110,7 +110,7 @@ class TestICUDataset:
 
     def test_initialization_no_task(self, mock_extracted_data):
         """Test dataset initialization without task_name."""
-        dataset = ICUDataset(mock_extracted_data, task_name=None)
+        dataset = ICUDataset(mock_extracted_data, task_name=None, normalize=False)
 
         assert len(dataset) == 10
         sample = dataset[0]
@@ -136,7 +136,7 @@ class TestICUDataset:
 
     def test_getitem_returns_correct_tensors(self, mock_extracted_data):
         """Test __getitem__ returns correct tensor shapes and types."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         sample = dataset[0]
 
@@ -159,7 +159,10 @@ class TestICUDataset:
     def test_imputation_forward_fill(self, mock_extracted_data):
         """Test forward fill imputation strategy."""
         dataset = ICUDataset(
-            mock_extracted_data, task_name="mortality_24h", impute_strategy="forward_fill"
+            mock_extracted_data,
+            task_name="mortality_24h",
+            impute_strategy="forward_fill",
+            normalize=False,
         )
 
         sample = dataset[0]
@@ -199,10 +202,14 @@ class TestICUDataset:
 
     def test_normalization(self, mock_extracted_data):
         """Test that normalization is applied correctly."""
+        # Need to provide train_indices when normalize=True to prevent data leakage
+        train_indices = list(range(7))  # First 7 samples as training
+
         dataset_norm = ICUDataset(
             mock_extracted_data,
             task_name="mortality_24h",
             normalize=True,
+            train_indices=train_indices,
         )
 
         dataset_no_norm = ICUDataset(
@@ -220,7 +227,7 @@ class TestICUDataset:
 
     def test_get_label_statistics(self, mock_extracted_data):
         """Test label statistics computation."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         stats = dataset.get_label_statistics()
 
@@ -239,6 +246,7 @@ class TestICUDataset:
             mock_extracted_data,
             task_name="mortality_24h",
             seq_length=24,  # Override to 24 hours
+            normalize=False,
         )
 
         assert dataset.seq_length == 24
@@ -247,7 +255,7 @@ class TestICUDataset:
 
     def test_get_feature_names(self, mock_extracted_data):
         """Test get_feature_names returns correct list."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         feature_names = dataset.get_feature_names()
 
@@ -256,7 +264,7 @@ class TestICUDataset:
 
     def test_get_task_names(self, mock_extracted_data):
         """Test get_task_names returns available tasks."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         task_names = dataset.get_task_names()
 
@@ -265,7 +273,7 @@ class TestICUDataset:
 
     def test_static_features_in_sample(self, mock_extracted_data):
         """Test that static features are included in sample."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         sample = dataset[0]
 
@@ -276,7 +284,9 @@ class TestICUDataset:
 
     def test_imputation_mean(self, mock_extracted_data):
         """Test mean imputation strategy."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", impute_strategy="mean")
+        dataset = ICUDataset(
+            mock_extracted_data, task_name="mortality_24h", impute_strategy="mean", normalize=False
+        )
 
         sample = dataset[0]
 
@@ -288,12 +298,29 @@ class TestICUDataset:
         # Error happens during initialization because dataset pre-computes tensors
         with pytest.raises(ValueError, match="Unknown imputation strategy"):
             ICUDataset(
-                mock_extracted_data, task_name="mortality_24h", impute_strategy="invalid_strategy"
+                mock_extracted_data,
+                task_name="mortality_24h",
+                impute_strategy="invalid_strategy",
+                normalize=False,
+            )
+
+    def test_normalize_without_train_indices_raises_error(self, mock_extracted_data):
+        """Test that normalize=True without train_indices raises ValueError (Issue #4 fix).
+
+        This prevents data leakage by ensuring normalization statistics are only
+        computed from training data, not from all data including val/test sets.
+        """
+        with pytest.raises(ValueError, match="train_indices must be provided when normalize=True"):
+            ICUDataset(
+                mock_extracted_data,
+                task_name="mortality_24h",
+                normalize=True,
+                train_indices=None,  # This should raise an error
             )
 
     def test_all_samples_accessible(self, mock_extracted_data):
         """Test that all samples can be accessed without error."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         for i in range(len(dataset)):
             sample = dataset[i]
@@ -354,8 +381,8 @@ class TestICUDataset:
         )
         labels_df.write_parquet(data_dir / "labels.parquet")
 
-        # Load and test
-        dataset = ICUDataset(data_dir, task_name="mortality_24h")
+        # Load and test (normalize=False since we don't have train_indices)
+        dataset = ICUDataset(data_dir, task_name="mortality_24h", normalize=False)
 
         assert len(dataset) == 1
         sample = dataset[0]
@@ -419,7 +446,7 @@ class TestICUDataset:
         labels_df.write_parquet(data_dir / "labels.parquet")
 
         # Load dataset with default handle_missing_labels='filter'
-        dataset = ICUDataset(data_dir, task_name="mortality_24h")
+        dataset = ICUDataset(data_dir, task_name="mortality_24h", normalize=False)
 
         # Should have only 3 samples (stay_ids 1, 2, 4)
         assert len(dataset) == 3
@@ -499,7 +526,9 @@ class TestICUDataset:
 
         # Should raise ValueError when handle_missing_labels='raise'
         with pytest.raises(ValueError, match="Missing labels for 1 stays"):
-            ICUDataset(data_dir, task_name="mortality_24h", handle_missing_labels="raise")
+            ICUDataset(
+                data_dir, task_name="mortality_24h", handle_missing_labels="raise", normalize=False
+            )
 
     def test_no_nan_labels_in_output(self, mock_extracted_data):
         """Verify that labels are never NaN in the output (core fix for Issue #5).
@@ -507,7 +536,7 @@ class TestICUDataset:
         This is the critical assertion: with the fix, we should NEVER see NaN labels,
         which would corrupt gradient computation during training.
         """
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         # Check all samples
         for i in range(len(dataset)):
@@ -525,7 +554,7 @@ class TestICUDataset:
 
     def test_all_samples_have_labels_when_task_specified(self, mock_extracted_data):
         """Test that all loaded samples have labels when task_name is specified."""
-        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h")
+        dataset = ICUDataset(mock_extracted_data, task_name="mortality_24h", normalize=False)
 
         # Should have same number of labels as samples (stacked tensor)
         assert dataset._labels_tensor is not None
@@ -847,6 +876,48 @@ class TestICUDataModule:
 
         # Should still have test indices
         assert len(dm.test_indices) > 0
+
+    def test_cached_splits_load_correctly(self, mock_extracted_data):
+        """Test that cached splits with patient lists are saved and loaded correctly (Issue #2 fix).
+
+        This verifies that:
+        1. First setup creates and saves splits with full patient lists
+        2. Second setup with same seed loads cached splits
+        3. The loaded splits match the original
+        """
+        # First setup - creates splits
+        dm1 = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=12345,
+        )
+        dm1.setup()
+
+        # Verify splits.yaml was created with patient lists
+        splits_path = mock_extracted_data / "splits.yaml"
+        assert splits_path.exists(), "splits.yaml should be created"
+
+        with open(splits_path) as f:
+            saved_splits = yaml.safe_load(f)
+
+        # Check that patient lists are saved (not just counts)
+        assert "train_patients" in saved_splits, "train_patients list should be saved"
+        assert "val_patients" in saved_splits, "val_patients list should be saved"
+        assert "test_patients" in saved_splits, "test_patients list should be saved"
+        assert isinstance(saved_splits["train_patients"], list), "train_patients should be a list"
+
+        # Second setup with same seed - should load cached splits
+        dm2 = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=12345,
+        )
+        dm2.setup()
+
+        # Verify splits match
+        assert dm1.train_indices == dm2.train_indices, "Train indices should match after reload"
+        assert dm1.val_indices == dm2.val_indices, "Val indices should match after reload"
+        assert dm1.test_indices == dm2.test_indices, "Test indices should match after reload"
 
 
 class TestCollateFn:

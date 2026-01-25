@@ -271,21 +271,29 @@ class MIMICIVExtractor(BaseExtractor):
                 i.stay_id, l.{source.time_col}
             """
         else:
-            # chartevents and outputevents have stay_id directly
+            # chartevents, outputevents, inputevents have stay_id directly
+            # CRITICAL: Filter to only events within the ICU stay time window
+            # to prevent data leakage from events recorded before/after the stay
+            icustays_path = self._parquet_path("icu", "icustays")
             sql = f"""
             SELECT
-                stay_id,
-                {source.time_col} AS charttime,
-                itemid,
-                CAST({source.value_col} AS DOUBLE) AS valuenum
+                c.stay_id,
+                c.{source.time_col} AS charttime,
+                c.itemid,
+                CAST(c.{source.value_col} AS DOUBLE) AS valuenum
             FROM
-                read_parquet('{parquet_path}')
+                read_parquet('{parquet_path}') AS c
+            INNER JOIN
+                read_parquet('{icustays_path}') AS i
+                ON c.stay_id = i.stay_id
             WHERE
-                stay_id IN ({stay_ids_str})
-                AND itemid IN ({itemids_str})
-                AND {source.value_col} IS NOT NULL
+                c.stay_id IN ({stay_ids_str})
+                AND c.itemid IN ({itemids_str})
+                AND c.{source.value_col} IS NOT NULL
+                AND c.{source.time_col} >= i.intime
+                AND c.{source.time_col} <= i.outtime
             ORDER BY
-                stay_id, {source.time_col}
+                c.stay_id, c.{source.time_col}
             """
 
         raw_events = self._query(sql)
@@ -380,21 +388,29 @@ class MIMICIVExtractor(BaseExtractor):
                 i.stay_id, l.{time_col}
             """
         else:
-            # chartevents and outputevents have stay_id directly
+            # chartevents, outputevents, inputevents have stay_id directly
+            # CRITICAL: Filter to only events within the ICU stay time window
+            # to prevent data leakage from events recorded before/after the stay
+            icustays_path = self._parquet_path("icu", "icustays")
             sql = f"""
             SELECT
-                stay_id,
-                {time_col} AS charttime,
-                itemid,
-                CAST({value_col} AS DOUBLE) AS valuenum
+                c.stay_id,
+                c.{time_col} AS charttime,
+                c.itemid,
+                CAST(c.{value_col} AS DOUBLE) AS valuenum
             FROM
-                read_parquet('{parquet_path}')
+                read_parquet('{parquet_path}') AS c
+            INNER JOIN
+                read_parquet('{icustays_path}') AS i
+                ON c.stay_id = i.stay_id
             WHERE
-                stay_id IN ({stay_ids_str})
-                AND itemid IN ({itemids_str})
-                AND {value_col} IS NOT NULL
+                c.stay_id IN ({stay_ids_str})
+                AND c.itemid IN ({itemids_str})
+                AND c.{value_col} IS NOT NULL
+                AND c.{time_col} >= i.intime
+                AND c.{time_col} <= i.outtime
             ORDER BY
-                stay_id, {time_col}
+                c.stay_id, c.{time_col}
             """
 
         raw_events = self._query(sql)
@@ -642,12 +658,16 @@ class MIMICIVExtractor(BaseExtractor):
 
         feature_dfs = []
 
+        icustays_path = self._parquet_path("icu", "icustays")
+
         for feature_name, config in concepts.items():
             source = config.mimic_iv
             if source is None or source.itemid is None:
                 continue
 
             # Get first value per stay for this itemid
+            # CRITICAL: Filter to only values recorded during the ICU stay
+            # to prevent using pre-admission or post-discharge values
             sql = f"""
             WITH ranked AS (
                 SELECT
@@ -656,10 +676,15 @@ class MIMICIVExtractor(BaseExtractor):
                     ROW_NUMBER() OVER (PARTITION BY c.stay_id ORDER BY c.charttime) AS rn
                 FROM
                     read_parquet('{chartevents_path}') AS c
+                INNER JOIN
+                    read_parquet('{icustays_path}') AS i
+                    ON c.stay_id = i.stay_id
                 WHERE
                     c.stay_id IN ({stay_ids_str})
                     AND c.itemid = {source.itemid}
                     AND c.{source.column} IS NOT NULL
+                    AND c.charttime >= i.intime
+                    AND c.charttime <= i.outtime
             )
             SELECT
                 stay_id,
