@@ -129,6 +129,7 @@ class FineTuneModule(pl.LightningModule):
             hidden_dims=hidden_dims,
             dropout=task_cfg.get("dropout", 0.1),
             activation=task_cfg.get("activation", "relu"),
+            use_layer_norm=task_cfg.get("use_layer_norm", False),
         )
 
     def _load_encoder_weights(self, path: str) -> None:

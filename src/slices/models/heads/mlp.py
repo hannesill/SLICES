@@ -52,6 +52,9 @@ class MLPTaskHead(BaseTaskHead):
         # Hidden layers
         for hidden_dim in config.hidden_dims:
             layers.append(nn.Linear(in_dim, hidden_dim))
+            # Optionally add LayerNorm (SMART paper: "MLP with layer normalizations")
+            if config.use_layer_norm:
+                layers.append(nn.LayerNorm(hidden_dim))
             layers.append(self._get_activation(config.activation))
             layers.append(nn.Dropout(config.dropout))
             in_dim = hidden_dim

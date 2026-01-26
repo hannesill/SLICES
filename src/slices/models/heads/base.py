@@ -39,6 +39,7 @@ class TaskHeadConfig:
     hidden_dims: List[int] = field(default_factory=lambda: [64])
     dropout: float = 0.1
     activation: str = "relu"
+    use_layer_norm: bool = False  # Add LayerNorm before activation (SMART paper style)
 
     def __post_init__(self):
         """Validate configuration after initialization."""
