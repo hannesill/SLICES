@@ -164,6 +164,47 @@ class TestMLPTaskHead:
         with pytest.raises(ValueError, match="Unknown activation"):
             MLPTaskHead(config)
 
+    def test_layer_norm_option(self):
+        """Test MLP head with layer normalization (SMART paper style)."""
+        # Without layer norm
+        config_no_ln = TaskHeadConfig(
+            name="mlp",
+            input_dim=128,
+            hidden_dims=[64, 32],
+            use_layer_norm=False,
+        )
+        head_no_ln = MLPTaskHead(config_no_ln)
+
+        # With layer norm
+        config_with_ln = TaskHeadConfig(
+            name="mlp",
+            input_dim=128,
+            hidden_dims=[64, 32],
+            use_layer_norm=True,
+        )
+        head_with_ln = MLPTaskHead(config_with_ln)
+
+        # Check that layer norm adds extra modules
+        # Without LN: Linear, Activation, Dropout per hidden layer + final Linear
+        # With LN: Linear, LayerNorm, Activation, Dropout per hidden layer + final Linear
+        modules_no_ln = list(head_no_ln.mlp.modules())
+        modules_with_ln = list(head_with_ln.mlp.modules())
+
+        # Count LayerNorm modules
+        ln_count_no = sum(1 for m in modules_no_ln if isinstance(m, torch.nn.LayerNorm))
+        ln_count_with = sum(1 for m in modules_with_ln if isinstance(m, torch.nn.LayerNorm))
+
+        assert ln_count_no == 0
+        assert ln_count_with == 2  # One per hidden layer
+
+        # Both should produce valid outputs
+        encoder_out = torch.randn(8, 128)
+        out_no_ln = head_no_ln(encoder_out)
+        out_with_ln = head_with_ln(encoder_out)
+
+        assert out_no_ln["logits"].shape == (8, 2)
+        assert out_with_ln["logits"].shape == (8, 2)
+
 
 class TestLinearTaskHead:
     """Tests for LinearTaskHead."""

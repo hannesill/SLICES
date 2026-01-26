@@ -65,6 +65,7 @@ task:
   hidden_dims: [64]  # Hidden layer dimensions (empty for linear head)
   dropout: 0.1
   activation: relu
+  use_layer_norm: false  # Add LayerNorm in MLP head (set true for SMART paper protocol)
 
 # Training configuration
 training:
