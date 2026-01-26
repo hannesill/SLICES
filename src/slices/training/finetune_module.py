@@ -134,11 +134,13 @@ class FineTuneModule(pl.LightningModule):
     def _load_encoder_weights(self, path: str) -> None:
         """Load encoder weights from .pt file.
 
-        Handles both old format (raw state_dict) and new format (checkpoint
-        dict with encoder_state_dict, missing_token, and version).
+        Handles multiple checkpoint formats:
+        - v3+: Contains encoder_config for automatic architecture detection
+        - v2: Contains encoder_state_dict, missing_token but no config
+        - v1/legacy: Raw state_dict
 
-        For new format, wraps encoder with EncoderWithMissingToken using the
-        saved missing_token for consistent preprocessing.
+        For v3+, the encoder is rebuilt from saved config, ensuring architecture
+        matches between pretraining and finetuning.
 
         Args:
             path: Path to encoder checkpoint.
@@ -151,10 +153,36 @@ class FineTuneModule(pl.LightningModule):
 
         # Detect checkpoint format
         if isinstance(checkpoint, dict) and "version" in checkpoint:
-            # New format (version 2+)
             version = checkpoint["version"]
             state_dict = checkpoint["encoder_state_dict"]
             missing_token = checkpoint.get("missing_token", None)
+
+            # Version 3+: Rebuild encoder from saved config
+            if version >= 3 and "encoder_config" in checkpoint:
+                encoder_config = checkpoint["encoder_config"]
+                encoder_name = encoder_config.pop("name")
+                self.encoder = build_encoder(encoder_name, encoder_config)
+                print(
+                    f"✓ Rebuilt encoder from checkpoint config: "
+                    f"{encoder_name} (d_model={encoder_config.get('d_model', 'N/A')})"
+                )
+            elif version == 2:
+                # v2 checkpoint: try to infer encoder type from state_dict keys
+                inferred_encoder = self._infer_encoder_type(state_dict)
+                config_encoder = self.config.encoder.name
+
+                if inferred_encoder and inferred_encoder != config_encoder:
+                    raise RuntimeError(
+                        f"Encoder architecture mismatch!\n"
+                        f"  Checkpoint appears to be: {inferred_encoder}\n"
+                        f"  Config specifies: {config_encoder}\n\n"
+                        f"Fix: Add 'encoder={inferred_encoder}' to your command:\n"
+                        f"  uv run python scripts/training/finetune.py \\\n"
+                        f"      checkpoint={path} \\\n"
+                        f"      encoder={inferred_encoder} \\\n"
+                        f"      task.task_name=...\n\n"
+                        f"Or re-run pretraining to create a v3 checkpoint with embedded config."
+                    )
 
             self.encoder.load_state_dict(state_dict)
             print(f"✓ Loaded encoder weights from: {path} (format v{version})")
@@ -225,6 +253,29 @@ class FineTuneModule(pl.LightningModule):
         # Wrap encoder with missing token if enabled
         if self.use_missing_token:
             self._wrap_encoder_with_missing_token(missing_token)
+
+    def _infer_encoder_type(self, state_dict: Dict[str, Any]) -> Optional[str]:
+        """Infer encoder type from state_dict keys.
+
+        Used for v2 checkpoints that don't include encoder_config.
+
+        Args:
+            state_dict: Encoder state dictionary.
+
+        Returns:
+            Inferred encoder name or None if unknown.
+        """
+        keys = set(state_dict.keys())
+
+        # SMART encoder has distinctive keys
+        if any("embedder" in k or "blocks" in k or "seq_att" in k for k in keys):
+            return "smart"
+
+        # Standard transformer has input_proj and layers
+        if any("input_proj" in k or "layers" in k for k in keys):
+            return "transformer"
+
+        return None
 
     def _wrap_encoder_with_missing_token(self, missing_token: Optional[torch.Tensor]) -> None:
         """Wrap encoder with EncoderWithMissingToken.

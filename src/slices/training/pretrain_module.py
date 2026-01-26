@@ -328,20 +328,29 @@ class SSLPretrainModule(pl.LightningModule):
 
         Saves a checkpoint dictionary containing:
         - encoder_state_dict: Encoder model weights
+        - encoder_config: Encoder configuration dict (name + params)
         - missing_token: Learned MISSING_TOKEN from SSL objective (if available)
         - d_input: Input dimension for token shape validation
-        - version: Checkpoint format version (2)
+        - version: Checkpoint format version (3)
 
-        This format allows FineTuneModule to wrap the encoder with
-        EncoderWithMissingToken for consistent preprocessing between
-        pretraining and finetuning.
+        This format allows FineTuneModule to:
+        1. Rebuild the encoder with the correct architecture
+        2. Wrap the encoder with EncoderWithMissingToken for consistent
+           preprocessing between pretraining and finetuning.
 
         Args:
             path: Path to save encoder checkpoint.
         """
+        # Build encoder config dict from the Hydra config
+        encoder_config = {
+            "name": self.config.encoder.name,
+            **{k: v for k, v in self.config.encoder.items() if k != "name"},
+        }
+
         checkpoint = {
             "encoder_state_dict": self.encoder.state_dict(),
-            "version": 2,
+            "encoder_config": encoder_config,
+            "version": 3,
         }
 
         # Save missing_token if the SSL objective has one
