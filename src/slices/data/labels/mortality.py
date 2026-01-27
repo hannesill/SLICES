@@ -158,6 +158,13 @@ class MortalityLabelBuilder(LabelBuilder):
             - 1: Death occurred during prediction window
             - 0: Survived prediction window (or died after)
             - null: Death occurred during observation window (excluded)
+
+        Note:
+            Uses outtime (ICU discharge time) in addition to date_of_death to determine
+            if death occurred during observation. This fixes false positives when
+            date_of_death is a DATE type (day-level precision) - if outtime >= obs_end,
+            the patient was still in ICU at observation end and could not have died
+            during observation.
         """
         # Calculate window boundaries
         # obs_end = intime + obs_hours
@@ -167,16 +174,28 @@ class MortalityLabelBuilder(LabelBuilder):
         # Check if prediction window extends until ICU discharge
         until_icu_discharge = prediction_hours == -1
 
+        # Use outtime to determine if patient was still in ICU at end of observation.
+        # This is more reliable than date_of_death for DATE types (day-level precision).
+        # If outtime >= intime + obs_hours, patient was alive at observation end.
+        obs_end_datetime = pl.col("intime") + pl.duration(hours=obs_hours)
+        left_icu_during_obs = pl.col("outtime") < obs_end_datetime
+
         if is_date_type:
             # For DATE type, cast boundaries to Date for comparison
-            obs_end = (pl.col("intime") + pl.duration(hours=obs_hours)).cast(pl.Date)
+            obs_end = obs_end_datetime.cast(pl.Date)
             pred_start = (pl.col("intime") + pl.duration(hours=prediction_start_hours)).cast(
                 pl.Date
             )
 
             # Death during observation window (exclude these stays)
-            died_during_obs = pl.col("date_of_death").is_not_null() & (
-                pl.col("date_of_death") <= obs_end
+            # Must check BOTH date_of_death AND outtime because date_of_death has only
+            # day-level precision which causes false positives (see issue with DATE vs DATETIME).
+            # If outtime >= obs_end, patient was still in ICU at observation end, so they
+            # could not have died during observation regardless of what date_of_death says.
+            died_during_obs = (
+                pl.col("date_of_death").is_not_null()
+                & (pl.col("date_of_death") <= obs_end)
+                & left_icu_during_obs
             )
 
             if until_icu_discharge:
@@ -198,12 +217,15 @@ class MortalityLabelBuilder(LabelBuilder):
             )
         else:
             # For DATETIME type, use full precision
-            obs_end = pl.col("intime") + pl.duration(hours=obs_hours)
+            obs_end = obs_end_datetime
             pred_start = pl.col("intime") + pl.duration(hours=prediction_start_hours)
 
             # Death during observation window (exclude these stays)
-            died_during_obs = pl.col("date_of_death").is_not_null() & (
-                pl.col("date_of_death") <= obs_end
+            # Also check outtime for consistency with DATE type logic
+            died_during_obs = (
+                pl.col("date_of_death").is_not_null()
+                & (pl.col("date_of_death") <= obs_end)
+                & left_icu_during_obs
             )
 
             if until_icu_discharge:
