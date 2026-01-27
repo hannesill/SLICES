@@ -162,6 +162,18 @@ class FineTuneModule(pl.LightningModule):
             if version >= 3 and "encoder_config" in checkpoint:
                 encoder_config = checkpoint["encoder_config"]
                 encoder_name = encoder_config.pop("name")
+                # Override pooling with finetuning config's value.
+                # SSL pretraining uses pooling='none' but finetuning needs
+                # pooling='mean' or 'query' to get a single representation.
+                # Pooling doesn't affect learned weights, just output aggregation.
+                finetune_pooling = self.config.encoder.get("pooling", "mean")
+                ckpt_pooling = encoder_config.get("pooling", "none")
+                if ckpt_pooling != finetune_pooling:
+                    encoder_config["pooling"] = finetune_pooling
+                    print(
+                        f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
+                        f"(finetuning requires aggregated output)"
+                    )
                 self.encoder = build_encoder(encoder_name, encoder_config)
                 print(
                     f"✓ Rebuilt encoder from checkpoint config: "
@@ -213,6 +225,11 @@ class FineTuneModule(pl.LightningModule):
         Also extracts the missing_token from the SSL objective if present
         and wraps the encoder with EncoderWithMissingToken.
 
+        The encoder architecture is auto-detected from the checkpoint's
+        hyperparameters (saved by save_hyperparameters() during pretraining),
+        and the encoder is rebuilt with the correct architecture before
+        loading weights.
+
         Args:
             path: Path to Lightning checkpoint.
 
@@ -242,6 +259,50 @@ class FineTuneModule(pl.LightningModule):
                 f"No encoder weights found in checkpoint {path}. "
                 "Expected keys prefixed with 'encoder.' in state_dict."
             )
+
+        # Auto-detect encoder architecture from checkpoint hyperparameters
+        if "hyper_parameters" in checkpoint:
+            hyper_params = checkpoint["hyper_parameters"]
+            if "config" in hyper_params and "encoder" in hyper_params["config"]:
+                ckpt_encoder_cfg = hyper_params["config"]["encoder"]
+                ckpt_encoder_name = ckpt_encoder_cfg.get("name")
+                config_encoder_name = self.config.encoder.name
+
+                if ckpt_encoder_name and ckpt_encoder_name != config_encoder_name:
+                    # Rebuild encoder with the correct architecture from checkpoint
+                    encoder_config_dict = {k: v for k, v in ckpt_encoder_cfg.items() if k != "name"}
+                    # Override pooling with finetuning config's value.
+                    # SSL pretraining uses pooling='none' but finetuning needs
+                    # pooling='mean' or 'query' to get a single representation.
+                    finetune_pooling = self.config.encoder.get("pooling", "mean")
+                    ckpt_pooling = encoder_config_dict.get("pooling", "none")
+                    if ckpt_pooling != finetune_pooling:
+                        encoder_config_dict["pooling"] = finetune_pooling
+                        print(
+                            f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
+                            f"(finetuning requires aggregated output)"
+                        )
+                    self.encoder = build_encoder(ckpt_encoder_name, encoder_config_dict)
+                    print(
+                        f"✓ Auto-detected encoder architecture from checkpoint: "
+                        f"{ckpt_encoder_name} (d_model={encoder_config_dict.get('d_model', 'N/A')})"
+                    )
+        else:
+            # No hyper_parameters - infer encoder type from state_dict keys
+            inferred_encoder = self._infer_encoder_type(encoder_state_dict)
+            config_encoder = self.config.encoder.name
+
+            if inferred_encoder and inferred_encoder != config_encoder:
+                raise RuntimeError(
+                    f"Encoder architecture mismatch!\n"
+                    f"  Checkpoint appears to be: {inferred_encoder}\n"
+                    f"  Config specifies: {config_encoder}\n\n"
+                    f"Fix: Add 'encoder={inferred_encoder}' to your command:\n"
+                    f"  uv run python scripts/training/finetune.py \\\n"
+                    f"      pretrain_checkpoint={path} \\\n"
+                    f"      encoder={inferred_encoder} \\\n"
+                    f"      task.task_name=...\n"
+                )
 
         self.encoder.load_state_dict(encoder_state_dict)
         print(f"✓ Loaded encoder from pretrain checkpoint: {path}")

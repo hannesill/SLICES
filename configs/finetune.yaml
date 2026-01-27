@@ -113,7 +113,7 @@ scheduler:
 
 # Logging configuration
 logging:
-  use_wandb: false  # Set to true to enable W&B logging
+  use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
   run_name: ${experiment_name}_${task.task_name}_s${seed}

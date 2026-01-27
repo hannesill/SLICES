@@ -382,6 +382,82 @@ class TestFineTuneModule:
 
         assert module.encoder is not None
 
+    def test_load_pretrain_checkpoint_auto_detect_encoder(self, sample_config, tmp_path):
+        """Test that pretrain checkpoint auto-detects encoder architecture.
+
+        When loading a pretrain checkpoint (.ckpt) that was trained with a
+        different encoder (e.g., SMART) than specified in the finetuning config
+        (e.g., transformer), the encoder should be automatically rebuilt from
+        the checkpoint's hyperparameters.
+        """
+        from slices.models.encoders.smart import SMARTEncoder
+        from slices.training import SSLPretrainModule
+
+        # Create a pretrain module with SMART encoder
+        # Note: pooling='none' is required for MAE pretraining
+        pretrain_config = OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "smart",
+                    "d_input": 35,
+                    "d_model": 32,  # Different from sample_config
+                    "n_layers": 2,
+                    "n_heads": 4,
+                    "d_ff": 128,
+                    "dropout": 0.1,
+                    "max_seq_length": 48,
+                    "pooling": "none",  # Required for MAE
+                },
+                "ssl": {
+                    "name": "mae",
+                    "mask_ratio": 0.15,
+                    "mask_strategy": "variable_block",
+                },
+                "optimizer": {
+                    "name": "adamw",
+                    "lr": 1e-3,
+                    "weight_decay": 0.01,
+                },
+            }
+        )
+        pretrain_module = SSLPretrainModule(pretrain_config)
+
+        # Save as .ckpt (Lightning checkpoint format)
+        ckpt_path = tmp_path / "pretrain.ckpt"
+        torch.save(
+            {
+                "state_dict": pretrain_module.state_dict(),
+                "hyper_parameters": {"config": OmegaConf.to_container(pretrain_config)},
+            },
+            ckpt_path,
+        )
+
+        # Finetuning config specifies transformer, but checkpoint has SMART
+        assert sample_config.encoder.name == "transformer"
+
+        # Load checkpoint - encoder should be auto-detected as SMART
+        module = FineTuneModule(sample_config, pretrain_checkpoint_path=str(ckpt_path))
+
+        # Verify encoder was rebuilt as SMART, not transformer
+        # The inner encoder should be SMART (after EncoderWithMissingToken wrapper)
+        inner_encoder = module.encoder.encoder
+        assert isinstance(inner_encoder, SMARTEncoder)
+        assert inner_encoder.config.d_model == 32  # From pretrain_config, not sample_config
+
+        # Verify pooling was overridden from 'none' (pretraining) to 'mean' (finetuning)
+        # The pretrain config had pooling='none' but finetuning config has pooling='mean'
+        assert inner_encoder.config.pooling == sample_config.encoder.pooling
+
+        # Verify forward pass works (would fail if pooling='none' since output shape would be 4D)
+        batch_size = 4
+        seq_len = 48
+        n_features = 35
+        timeseries = torch.randn(batch_size, seq_len, n_features)
+        mask = torch.ones(batch_size, seq_len, n_features, dtype=torch.bool)
+        outputs = module(timeseries, mask)
+        assert "logits" in outputs
+        assert outputs["logits"].dim() == 2  # (B, n_classes)
+
     def test_freeze_encoder(self, sample_config):
         """Test encoder freezing."""
         sample_config.training.freeze_encoder = True
