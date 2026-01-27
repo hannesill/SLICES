@@ -515,30 +515,42 @@ class TestWindowedMortalityLabels:
     - gap_hours optionally adds buffer between observation and prediction
     """
 
-    @pytest.fixture
-    def windowed_stays(self):
-        """Stays for windowed mortality testing."""
-        return pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5, 6, 7],
-                "intime": [datetime(2020, 1, 1, 0, 0)] * 7,
-                "outtime": [datetime(2020, 1, 10, 0, 0)] * 7,
-            }
-        )
-
-    def test_windowed_mortality_basic(self, windowed_stays):
+    def test_windowed_mortality_basic(self):
         """Test basic windowed mortality with obs=48h, gap=0h, pred=24h.
 
         Timeline: |-- obs (48h) --|-- pred (24h) --|
                   0h            48h              72h
 
+        Key: outtime determines if we have complete observation data.
+        - If outtime < obs_end: incomplete observation → excluded (null)
+        - If outtime >= obs_end: complete observation → usable (0 or 1)
+
         Deaths at:
-        - 24h: during observation → null (excluded)
-        - 50h: during prediction → 1
-        - 72h: at prediction boundary → 1
-        - 80h: after prediction → 0
-        - None: survived → 0
+        - 24h with outtime=24h: left ICU during obs → null (excluded)
+        - 50h with outtime=50h: died during prediction → 1
+        - 72h with outtime=72h: at prediction boundary → 1
+        - 80h with outtime=80h: after prediction → 0
+        - None with outtime=216h: survived → 0
+        - 47h with outtime=47h: during obs, left before obs end → null (excluded)
+        - 48h+1s with outtime=48h+1s: just after obs → 1
         """
+        # Stays with realistic outtime matching when patient left ICU
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5, 6, 7],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 7,
+                "outtime": [
+                    datetime(2020, 1, 2, 0, 0),  # 24h - left during obs
+                    datetime(2020, 1, 3, 2, 0),  # 50h - left during pred
+                    datetime(2020, 1, 4, 0, 0),  # 72h - left at pred boundary
+                    datetime(2020, 1, 4, 8, 0),  # 80h - left after pred
+                    datetime(2020, 1, 10, 0, 0),  # 216h - long stay, survived
+                    datetime(2020, 1, 2, 23, 0),  # 47h - left during obs
+                    datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - left just after obs
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3, 4, 5, 6, 7],
@@ -548,7 +560,7 @@ class TestWindowedMortalityLabels:
                     datetime(2020, 1, 4, 0, 0),  # 72h - at pred boundary
                     datetime(2020, 1, 4, 8, 0),  # 80h - after pred
                     None,  # Survived
-                    datetime(2020, 1, 3, 0, 0),  # 48h - at obs boundary
+                    datetime(2020, 1, 2, 23, 0),  # 47h - during obs
                     datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs
                 ],
                 "hospital_expire_flag": [1, 1, 1, 1, 0, 1, 1],
@@ -567,13 +579,13 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels({"stays": windowed_stays, "mortality_info": mortality_info})
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
-        # Death during observation → excluded (null)
-        assert labels_dict[1] is None, "Death at 24h should be excluded (during obs)"
-        assert labels_dict[6] is None, "Death at exactly 48h should be excluded (obs boundary)"
+        # Left ICU during observation → excluded (null) - incomplete observation data
+        assert labels_dict[1] is None, "Death at 24h with outtime=24h should be excluded"
+        assert labels_dict[6] is None, "Death at 47h with outtime=47h should be excluded"
 
         # Death during prediction window → positive
         assert labels_dict[2] == 1, "Death at 50h should be positive (during pred)"
@@ -584,14 +596,30 @@ class TestWindowedMortalityLabels:
         assert labels_dict[4] == 0, "Death at 80h should be negative (after pred)"
         assert labels_dict[5] == 0, "Survivor should be negative"
 
-    def test_windowed_mortality_with_gap(self, windowed_stays):
+    def test_windowed_mortality_with_gap(self):
         """Test windowed mortality with gap between observation and prediction.
 
         Timeline: |-- obs (24h) --|-- gap (6h) --|-- pred (24h) --|
                   0h            24h            30h              54h
 
         Deaths during gap are labeled as 0 (survived the prediction window).
+        outtime must be < obs_end for a patient to be excluded as "died during obs".
         """
+        # Stays with realistic outtime values
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4, 5],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 5,
+                "outtime": [
+                    datetime(2020, 1, 1, 20, 0),  # 20h - left during obs
+                    datetime(2020, 1, 2, 3, 0),  # 27h - left during gap
+                    datetime(2020, 1, 2, 8, 0),  # 32h - left during pred
+                    datetime(2020, 1, 3, 10, 0),  # 58h - left after pred
+                    datetime(2020, 1, 10, 0, 0),  # 216h - long stay, survived
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3, 4, 5],
@@ -618,12 +646,7 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels(
-            {
-                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3, 4, 5])),
-                "mortality_info": mortality_info,
-            }
-        )
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
@@ -633,8 +656,30 @@ class TestWindowedMortalityLabels:
         assert labels_dict[4] == 0, "Death after pred should be negative"
         assert labels_dict[5] == 0, "Survivor should be negative"
 
-    def test_windowed_mortality_boundary_at_obs_end(self, windowed_stays):
-        """Test boundary condition exactly at observation window end."""
+    def test_windowed_mortality_boundary_at_obs_end(self):
+        """Test boundary condition exactly at observation window end.
+
+        With outtime-based logic:
+        - If outtime < obs_end: left ICU during observation → excluded
+        - If outtime >= obs_end: complete observation data → usable
+
+        Death at exactly 48h with outtime=48h means patient was in ICU for full
+        observation period, so they're usable. The death is at pred_start (48h)
+        which is >= pred_start, so it's a positive case.
+        """
+        # Stays with outtime matching death time
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 3,
+                "outtime": [
+                    datetime(2020, 1, 3, 0, 0),  # 48h - exactly at obs boundary
+                    datetime(2020, 1, 2, 23, 59, 59),  # 1 second before 48h
+                    datetime(2020, 1, 3, 0, 0, 1),  # 1 second after 48h
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3],
@@ -659,24 +704,33 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels(
-            {
-                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3])),
-                "mortality_info": mortality_info,
-            }
-        )
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
-        # At exactly obs boundary → excluded (died_during_obs uses <=)
-        assert labels_dict[1] is None, "Death at exactly 48h should be excluded"
-        # Before obs boundary → excluded
-        assert labels_dict[2] is None, "Death before 48h should be excluded"
+        # At exactly obs boundary with outtime=48h → NOT excluded (outtime >= obs_end)
+        # Death at pred_start (48h) is in prediction window → positive
+        assert labels_dict[1] == 1, "Death at exactly 48h with outtime=48h should be positive"
+        # Before obs boundary with outtime<48h → excluded (incomplete observation)
+        assert labels_dict[2] is None, "Death before 48h with outtime<48h should be excluded"
         # After obs boundary → in prediction window
         assert labels_dict[3] == 1, "Death just after 48h should be positive"
 
-    def test_windowed_mortality_boundary_at_pred_end(self, windowed_stays):
+    def test_windowed_mortality_boundary_at_pred_end(self):
         """Test boundary condition exactly at prediction window end."""
+        # Stays with outtime matching death time (all after obs_end, so all usable)
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 3,
+                "outtime": [
+                    datetime(2020, 1, 4, 0, 0),  # 72h
+                    datetime(2020, 1, 3, 23, 59, 59),  # ~72h
+                    datetime(2020, 1, 4, 0, 0, 1),  # 72h + 1s
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3],
@@ -701,12 +755,7 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels(
-            {
-                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3])),
-                "mortality_info": mortality_info,
-            }
-        )
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
@@ -717,21 +766,38 @@ class TestWindowedMortalityLabels:
         # After pred boundary → negative
         assert labels_dict[3] == 0, "Death after 72h should be negative"
 
-    def test_death_exactly_at_prediction_start_is_positive(self, windowed_stays):
-        """Test that death exactly at prediction window start is positive (Issue #3 fix).
+    def test_death_exactly_at_prediction_start_is_positive(self):
+        """Test that death exactly at prediction window start is positive.
 
         The prediction window uses >= pred_start, so a death exactly at the moment
         the prediction window begins should be counted as a positive case.
 
+        With outtime-based logic, death at 48h with outtime=48h means patient was
+        in ICU for full observation, so they're usable (not excluded).
+
         Timeline: |-- obs (48h) --|-- pred (24h) --|
                   0h            48h              72h
         """
+        # Stays with outtime matching death time
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 4,
+                "outtime": [
+                    datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s
+                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h
+                    datetime(2020, 1, 3, 12, 0),  # 60h
+                    datetime(2020, 1, 4, 0, 0),  # 72h
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3, 4],
                 "date_of_death": [
                     datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs ends
-                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h - at obs boundary (excluded)
+                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h - at prediction start
                     datetime(2020, 1, 3, 12, 0),  # 60h - middle of pred window
                     datetime(2020, 1, 4, 0, 0),  # 72h - at pred end
                 ],
@@ -751,33 +817,46 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels(
-            {
-                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3, 4])),
-                "mortality_info": mortality_info,
-            }
-        )
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
         # Death just after obs ends → positive (in prediction window)
         assert labels_dict[1] == 1, "Death 1s after obs end should be positive"
-        # Death exactly at obs boundary → excluded (during observation)
-        assert labels_dict[2] is None, "Death at exactly 48h should be excluded"
+        # Death exactly at obs boundary with outtime=48h → positive (at pred_start)
+        # Patient was in ICU for full 48h observation, death at pred_start is in pred window
+        assert labels_dict[2] == 1, "Death at exactly 48h with outtime=48h should be positive"
         # Death in middle of pred window → positive
         assert labels_dict[3] == 1, "Death at 60h should be positive"
         # Death at pred end → positive
         assert labels_dict[4] == 1, "Death at 72h should be positive"
 
-    def test_windowed_mortality_all_excluded(self, windowed_stays):
-        """Test when all patients die during observation (all excluded)."""
+    def test_windowed_mortality_all_excluded(self):
+        """Test when all patients leave ICU during observation (all excluded).
+
+        For a patient to be excluded, they must have left ICU during observation
+        (outtime < obs_end). All patients here have outtime < 48h.
+        """
+        # Stays with outtime during observation (all < 48h)
+        stays = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "intime": [datetime(2020, 1, 1, 0, 0)] * 3,
+                "outtime": [
+                    datetime(2020, 1, 1, 12, 0),  # 12h - during obs
+                    datetime(2020, 1, 2, 0, 0),  # 24h - during obs
+                    datetime(2020, 1, 2, 23, 59, 59),  # 47h 59m 59s - just before obs end
+                ],
+            }
+        )
+
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3],
                 "date_of_death": [
                     datetime(2020, 1, 1, 12, 0),  # 12h
                     datetime(2020, 1, 2, 0, 0),  # 24h
-                    datetime(2020, 1, 3, 0, 0),  # 48h (boundary)
+                    datetime(2020, 1, 2, 23, 59, 59),  # 47h 59m 59s
                 ],
                 "hospital_expire_flag": [1, 1, 1],
                 "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
@@ -795,14 +874,9 @@ class TestWindowedMortalityLabels:
         )
 
         builder = MortalityLabelBuilder(config)
-        labels = builder.build_labels(
-            {
-                "stays": windowed_stays.filter(pl.col("stay_id").is_in([1, 2, 3])),
-                "mortality_info": mortality_info,
-            }
-        )
+        labels = builder.build_labels({"stays": stays, "mortality_info": mortality_info})
 
-        # All should be null (excluded)
+        # All should be null (excluded) - all left ICU during observation
         assert labels["label"].null_count() == 3, "All patients should be excluded"
 
     def test_windowed_mortality_until_icu_discharge(self):
@@ -813,19 +887,22 @@ class TestWindowedMortalityLabels:
 
         This tests the "mortality" task which predicts death during the
         remaining ICU stay after observation ends.
+
+        Note: outtime must be consistent with date_of_death (outtime ~ death time for deaths).
         """
         # Different outtime for each stay to test the dynamic prediction window
+        # outtime is consistent with death times
         stays = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3, 4, 5, 6],
                 "intime": [datetime(2020, 1, 1, 0, 0)] * 6,
                 "outtime": [
-                    datetime(2020, 1, 5, 0, 0),  # 96h stay (48h pred window)
-                    datetime(2020, 1, 5, 0, 0),  # 96h stay
-                    datetime(2020, 1, 5, 0, 0),  # 96h stay
-                    datetime(2020, 1, 4, 0, 0),  # 72h stay (24h pred window)
-                    datetime(2020, 1, 10, 0, 0),  # 216h stay (long stay)
-                    datetime(2020, 1, 5, 0, 0),  # 96h stay
+                    datetime(2020, 1, 2, 0, 0),  # 24h - died during obs, left ICU at death
+                    datetime(2020, 1, 4, 0, 0),  # 72h - died during pred
+                    datetime(2020, 1, 5, 0, 0),  # 96h - died at outtime
+                    datetime(2020, 1, 4, 0, 0),  # 72h - died at outtime (short stay)
+                    datetime(2020, 1, 10, 0, 0),  # 216h stay (long stay, survived)
+                    datetime(2020, 1, 5, 0, 0),  # 96h - discharged, died later
                 ],
             }
         )
@@ -835,7 +912,7 @@ class TestWindowedMortalityLabels:
                 "stay_id": [1, 2, 3, 4, 5, 6],
                 "date_of_death": [
                     datetime(2020, 1, 2, 0, 0),  # 24h - during obs
-                    datetime(2020, 1, 4, 0, 0),  # 72h - during pred, before outtime
+                    datetime(2020, 1, 4, 0, 0),  # 72h - during pred, at outtime
                     datetime(2020, 1, 5, 0, 0),  # 96h - at outtime
                     datetime(2020, 1, 4, 0, 0),  # 72h - at outtime (short stay)
                     None,  # Survived (long stay)
@@ -861,11 +938,11 @@ class TestWindowedMortalityLabels:
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
-        # Death during observation → excluded (null)
+        # Death during observation with outtime during obs → excluded (null)
         assert labels_dict[1] is None, "Death at 24h should be excluded (during obs)"
 
         # Death during prediction window (between obs end and outtime) → positive
-        assert labels_dict[2] == 1, "Death at 72h should be positive (during pred, before outtime)"
+        assert labels_dict[2] == 1, "Death at 72h should be positive (during pred)"
         assert labels_dict[3] == 1, "Death at 96h should be positive (at outtime)"
         assert labels_dict[4] == 1, "Death at 72h should be positive (at outtime for short stay)"
 
