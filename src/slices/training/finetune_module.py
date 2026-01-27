@@ -266,27 +266,27 @@ class FineTuneModule(pl.LightningModule):
             if "config" in hyper_params and "encoder" in hyper_params["config"]:
                 ckpt_encoder_cfg = hyper_params["config"]["encoder"]
                 ckpt_encoder_name = ckpt_encoder_cfg.get("name")
-                config_encoder_name = self.config.encoder.name
 
-                if ckpt_encoder_name and ckpt_encoder_name != config_encoder_name:
-                    # Rebuild encoder with the correct architecture from checkpoint
-                    encoder_config_dict = {k: v for k, v in ckpt_encoder_cfg.items() if k != "name"}
-                    # Override pooling with finetuning config's value.
-                    # SSL pretraining uses pooling='none' but finetuning needs
-                    # pooling='mean' or 'query' to get a single representation.
-                    finetune_pooling = self.config.encoder.get("pooling", "mean")
-                    ckpt_pooling = encoder_config_dict.get("pooling", "none")
-                    if ckpt_pooling != finetune_pooling:
-                        encoder_config_dict["pooling"] = finetune_pooling
-                        print(
-                            f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
-                            f"(finetuning requires aggregated output)"
-                        )
-                    self.encoder = build_encoder(ckpt_encoder_name, encoder_config_dict)
+                # Always rebuild encoder from checkpoint config to ensure dimensions match.
+                # This handles both encoder name mismatches (e.g., transformer vs smart)
+                # and parameter mismatches (e.g., d_model=64 vs d_model=32).
+                encoder_config_dict = {k: v for k, v in ckpt_encoder_cfg.items() if k != "name"}
+                # Override pooling with finetuning config's value.
+                # SSL pretraining uses pooling='none' but finetuning needs
+                # pooling='mean' or 'query' to get a single representation.
+                finetune_pooling = self.config.encoder.get("pooling", "mean")
+                ckpt_pooling = encoder_config_dict.get("pooling", "none")
+                if ckpt_pooling != finetune_pooling:
+                    encoder_config_dict["pooling"] = finetune_pooling
                     print(
-                        f"✓ Auto-detected encoder architecture from checkpoint: "
-                        f"{ckpt_encoder_name} (d_model={encoder_config_dict.get('d_model', 'N/A')})"
+                        f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
+                        f"(finetuning requires aggregated output)"
                     )
+                self.encoder = build_encoder(ckpt_encoder_name, encoder_config_dict)
+                print(
+                    f"✓ Rebuilt encoder from checkpoint config: "
+                    f"{ckpt_encoder_name} (d_model={encoder_config_dict.get('d_model', 'N/A')})"
+                )
         else:
             # No hyper_parameters - infer encoder type from state_dict keys
             inferred_encoder = self._infer_encoder_type(encoder_state_dict)
