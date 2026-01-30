@@ -66,6 +66,7 @@ extraction_batch_size: 5000
 tasks:
   - mortality_24h
   - mortality
+  - phenotyping
 
 # =============================================================================
 # CONFIG DIRECTORY PATHS (auto-detected if null)

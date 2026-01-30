@@ -829,6 +829,16 @@ class ICUDataset(Dataset):
 
         if self.task_name is not None:
             logger.debug(f"Extracting labels for task '{self.task_name}'")
+
+            # Detect multi-label tasks: look for columns prefixed with "{task_name}_"
+            # e.g., phenotyping_sepsis, phenotyping_respiratory_failure, ...
+            multilabel_cols = [
+                col for col in self.labels_df.columns if col.startswith(f"{self.task_name}_")
+            ]
+            is_multilabel = (
+                len(multilabel_cols) > 0 and self.task_name not in self.labels_df.columns
+            )
+
             # Validate labels exist for all samples
             missing_label_stays = []
             label_values = []
@@ -837,13 +847,23 @@ class ICUDataset(Dataset):
                 _maybe_tqdm(self.stay_ids, desc="  Validating labels", unit="stay")
             ):
                 label_row = labels_by_stay.get(stay_id, {})
-                label_val = label_row.get(self.task_name)
 
-                if label_val is not None:
-                    label_values.append(label_val)
-                    indices_to_keep.append(idx)
+                if is_multilabel:
+                    # Multi-label: extract vector of values from prefixed columns
+                    vals = [label_row.get(col) for col in multilabel_cols]
+                    if any(v is None for v in vals):
+                        missing_label_stays.append(stay_id)
+                    else:
+                        label_values.append(vals)
+                        indices_to_keep.append(idx)
                 else:
-                    missing_label_stays.append(stay_id)
+                    # Single-label: extract scalar value
+                    label_val = label_row.get(self.task_name)
+                    if label_val is not None:
+                        label_values.append(label_val)
+                        indices_to_keep.append(idx)
+                    else:
+                        missing_label_stays.append(stay_id)
 
             # Handle missing labels based on configuration
             if missing_label_stays:
@@ -880,6 +900,7 @@ class ICUDataset(Dataset):
                     )
 
             # Convert to stacked tensor for efficient access
+            # Multi-label: shape (N, n_classes), single-label: shape (N,)
             self._labels_tensor = torch.tensor(label_values, dtype=torch.float32)
             logger.info(f"Extracted {len(label_values):,} labels")
         else:

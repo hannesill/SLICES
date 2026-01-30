@@ -779,8 +779,12 @@ class BaseExtractor(ABC):
             # Compute labels
             task_labels = builder.build_labels(raw_data)
 
-            # Rename 'label' column to task name
-            task_labels = task_labels.rename({"label": task_config.task_name})
+            # For single-label tasks, the builder returns a 'label' column
+            # that we rename to the task name.
+            # For multi-label tasks (e.g., phenotyping), the builder returns
+            # pre-named columns (no 'label' column) — use as-is.
+            if "label" in task_labels.columns:
+                task_labels = task_labels.rename({"label": task_config.task_name})
 
             all_labels.append(task_labels)
 
