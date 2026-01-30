@@ -459,7 +459,7 @@ class MIMICIVExtractor(BaseExtractor):
         # Dispatch to appropriate extraction method
         extraction_methods = {
             "mortality_info": self._extract_mortality_info,
-            # TODO: Add more data sources as needed (creatinine, vasopressors, etc.)
+            "diagnoses": self._extract_diagnoses,
         }
 
         if source_name not in extraction_methods:
@@ -505,6 +505,41 @@ class MIMICIVExtractor(BaseExtractor):
             ON i.hadm_id = a.hadm_id
         WHERE
             i.stay_id IN ({stay_ids_str})
+        """
+
+        return self._query(sql)
+
+    def _extract_diagnoses(self, stay_ids: List[int]) -> pl.DataFrame:
+        """Extract ICD diagnosis codes per ICU stay.
+
+        Joins diagnoses_icd (per hadm_id) with icustays to get per-stay mapping.
+        Returns a dataset-agnostic format that the PhenotypingLabelBuilder expects.
+
+        Args:
+            stay_ids: List of ICU stay IDs to extract.
+
+        Returns:
+            DataFrame with columns: stay_id, icd_code, icd_version.
+        """
+        icu_path = self._parquet_path("icu", "icustays")
+        diagnoses_path = self._parquet_path("hosp", "diagnoses_icd")
+
+        stay_ids_str = ",".join(map(str, stay_ids))
+
+        sql = f"""
+        SELECT
+            i.stay_id,
+            d.icd_code,
+            d.icd_version
+        FROM
+            read_parquet('{icu_path}') AS i
+        INNER JOIN
+            read_parquet('{diagnoses_path}') AS d
+            ON i.hadm_id = d.hadm_id
+        WHERE
+            i.stay_id IN ({stay_ids_str})
+        ORDER BY
+            i.stay_id, d.seq_num
         """
 
         return self._query(sql)

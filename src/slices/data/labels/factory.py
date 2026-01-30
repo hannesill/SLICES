@@ -4,6 +4,7 @@ from typing import Dict, Type
 
 from .base import LabelBuilder, LabelConfig
 from .mortality import MortalityLabelBuilder
+from .phenotyping import PhenotypingLabelBuilder
 
 
 class LabelBuilderFactory:
@@ -18,6 +19,7 @@ class LabelBuilderFactory:
     # Registry mapping task categories to builder classes
     _REGISTRY: Dict[str, Type[LabelBuilder]] = {
         "mortality": MortalityLabelBuilder,
+        "phenotyping": PhenotypingLabelBuilder,
     }
 
     @classmethod
