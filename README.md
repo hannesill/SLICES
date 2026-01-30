@@ -20,19 +20,17 @@
 
 
 
-A benchmark framework for learning universal patient embeddings from unlabeled ICU time-series data using self-supervised learning (SSL). The learned embeddings transfer across clinical prediction tasks (mortality, length of stay, AKI, sepsis) and institutions.
+**SLICES** is a modular framework for learning patient embeddings from ICU time-series with SSL and evaluating them on clinical tasks. **Clinical researchers** can run benchmarks as-is, **plug in their own encoders or SSL objectives** via clear interfaces, and work entirely on **local files**—no cloud or API keys.
 
 ## Overview
 
-SLICES provides a complete pipeline for:
+Composable pipeline stages:
 
-1. **Data Conversion** (optional): Convert CSV.gz files to Parquet format for efficient queries
-2. **Feature Extraction**: Extract ICU time-series data from local MIMIC-IV Parquet files using DuckDB
-3. **Preprocessing**: Convert raw events into hourly-binned dense tensors with observation masks
-4. **SSL Pretraining**: Train self-supervised models (MAE, JEPA, contrastive) on unlabeled data
-5. **Downstream Evaluation**: Fine-tune and evaluate on clinical prediction tasks
-
-**Key Design Choice**: Works entirely with local files. Users can start with either CSV or Parquet files. No cloud credentials or API keys required.
+1. **Data conversion** (optional): CSV.gz → Parquet
+2. **Feature extraction**: MIMIC-IV Parquet → stay-level Parquet (static, timeseries, labels) via DuckDB
+3. **Preprocessing**: Raw events → hourly-binned dense tensors with observation masks
+4. **SSL pretraining**: Unlabeled data; config-driven encoders (Transformer, Linear, SMART) and objectives (MAE, SMART)
+5. **Downstream evaluation**: Fine-tune on configurable tasks (mortality, phenotyping). New encoders or tasks = implement base class + register; Hydra configs keep runs reproducible.
 
 ## Installation
 
