@@ -16,6 +16,18 @@ from typing import Annotated, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from slices.constants import (
+    EXTRACTION_BATCH_SIZE,
+    IMPUTE_STRATEGY,
+    MIN_STAY_HOURS,
+    NORMALIZE,
+    PIN_MEMORY,
+    SEQ_LENGTH_HOURS,
+    TEST_RATIO,
+    TRAIN_RATIO,
+    VAL_RATIO,
+)
+
 
 class ExtractionType(str, Enum):
     """Extraction method type for time-series concepts."""
@@ -285,11 +297,11 @@ class DataConfig(BaseModel):
     # ==========================================================================
     # Extraction Settings
     # ==========================================================================
-    seq_length_hours: int = 48  # Sequence length for time-series extraction
-    min_stay_hours: int = 48  # Minimum ICU stay length to include
+    seq_length_hours: int = SEQ_LENGTH_HOURS
+    min_stay_hours: int = MIN_STAY_HOURS
     feature_set: Literal["core", "extended"] = "core"  # Feature set to extract
     categories: Optional[List[str]] = None  # Feature categories (null = all)
-    extraction_batch_size: int = 5000  # Stays per batch during extraction
+    extraction_batch_size: int = EXTRACTION_BATCH_SIZE
     tasks: List[str] = Field(default_factory=lambda: ["mortality_24h"])
 
     # Config directory paths (auto-detected if null)
@@ -301,16 +313,16 @@ class DataConfig(BaseModel):
     # Training Data Loading
     # ==========================================================================
     num_workers: int = 4
-    pin_memory: bool = True
+    pin_memory: bool = PIN_MEMORY
 
     # Patient-level split ratios
-    train_ratio: float = 0.7
-    val_ratio: float = 0.15
-    test_ratio: float = 0.15
+    train_ratio: float = TRAIN_RATIO
+    val_ratio: float = VAL_RATIO
+    test_ratio: float = TEST_RATIO
 
     # Preprocessing applied during training
-    normalize: bool = True
-    impute_strategy: Literal["forward_fill", "zero", "mean", "none"] = "forward_fill"
+    normalize: bool = NORMALIZE
+    impute_strategy: Literal["forward_fill", "zero", "mean", "none"] = IMPUTE_STRATEGY
 
     model_config = {"extra": "allow"}  # Allow additional fields from Hydra
 

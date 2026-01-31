@@ -16,6 +16,14 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, Subset
 
+from slices.constants import (
+    IMPUTE_STRATEGY,
+    NORMALIZE,
+    PIN_MEMORY,
+    TEST_RATIO,
+    TRAIN_RATIO,
+    VAL_RATIO,
+)
 from slices.data.dataset import ICUDataset
 from slices.data.sliding_window import SlidingWindowDataset
 
@@ -86,13 +94,13 @@ class ICUDataModule(L.LightningDataModule):
         batch_size: int = 64,
         num_workers: int = 4,
         seq_length: Optional[int] = None,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
+        train_ratio: float = TRAIN_RATIO,
+        val_ratio: float = VAL_RATIO,
+        test_ratio: float = TEST_RATIO,
         seed: int = 42,
-        normalize: bool = True,
-        impute_strategy: str = "forward_fill",
-        pin_memory: bool = True,
+        normalize: bool = NORMALIZE,
+        impute_strategy: str = IMPUTE_STRATEGY,
+        pin_memory: bool = PIN_MEMORY,
         # Sliding window parameters for SSL pretraining
         enable_sliding_windows: bool = False,
         window_size: Optional[int] = None,
