@@ -4,7 +4,7 @@ This demonstrates the recommended way to configure the extractor using Hydra,
 which makes it robust for both development and production deployments.
 
 Usage:
-    # Default config (configs/extraction/mimic_iv.yaml)
+    # Default config (configs/config.yaml)
     uv run python examples/extract_timeseries_hydra_example.py
 
     # Override parquet root
