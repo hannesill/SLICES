@@ -5,6 +5,12 @@ CMS General Equivalence Mappings (GEMs) to derive corresponding ICD-10 codes.
 Updates the phenotype YAML in-place, merging derived codes with any existing
 manually-added ICD-10 codes.
 
+NOTE: The ICD-10 codes currently in ccs_phenotypes.yaml were manually curated
+and are NOT derived from the GEMs crosswalk. The GEMs CSV
+(configs/phenotypes/gems_icd10_to_icd9.csv) ships as an empty template.
+To use this script, first download the GEMs data from:
+https://www.cms.gov/medicare/coding-billing/icd-10-codes/general-equivalence-mappings-gems
+
 Example usage:
     # Use default paths
     uv run python scripts/preprocessing/build_phenotype_icd10_codes.py

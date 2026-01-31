@@ -10,7 +10,7 @@
 # - Patients who die during observation (hours 0-48) are excluded (label=null)
 
 task_name: mortality
-task_type: binary_classification
+task_type: binary
 
 # Prediction parameters
 prediction_window_hours: -1  # -1 means "until ICU discharge" (entire remaining ICU stay)
