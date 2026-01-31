@@ -140,7 +140,7 @@ def example_yaml_usage():
     print("\n=== Example: Using callbacks in YAML configs ===")
 
     yaml_example = """
-# In configs/concepts/vitals.yaml:
+# In src/slices/data/concepts/vitals.yaml:
 
 temperature:
   description: Body temperature
@@ -162,7 +162,7 @@ temperature:
       value_col: valuenum
       time_col: charttime
 
-# Example with custom transform in configs/concepts/labs.yaml:
+# Example with custom transform in src/slices/data/concepts/labs.yaml:
 glucose:
   description: Glucose (lab)
   units: mmol/L
@@ -208,7 +208,7 @@ def main():
     print("\nFor more details, see:")
     print("  - src/slices/data/value_transforms.py (transform implementation)")
     print("  - src/slices/data/callbacks.py (callback implementation)")
-    print("  - configs/concepts/vitals.yaml (transform usage in configs)")
+    print("  - src/slices/data/concepts/vitals.yaml (transform usage in concept definitions)")
 
 
 if __name__ == "__main__":

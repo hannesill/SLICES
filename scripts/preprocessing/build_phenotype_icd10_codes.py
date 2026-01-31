@@ -7,18 +7,18 @@ manually-added ICD-10 codes.
 
 NOTE: The ICD-10 codes currently in ccs_phenotypes.yaml were manually curated
 and are NOT derived from the GEMs crosswalk. The GEMs CSV
-(configs/phenotypes/gems_icd10_to_icd9.csv) ships as an empty template.
+(src/slices/data/phenotypes/gems_icd10_to_icd9.csv) ships as an empty template.
 To use this script, first download the GEMs data from:
 https://www.cms.gov/medicare/coding-billing/icd-10-codes/general-equivalence-mappings-gems
 
 Example usage:
-    # Use default paths
+    # Use default paths (resolves from package data directory)
     uv run python scripts/preprocessing/build_phenotype_icd10_codes.py
 
     # Specify custom paths
     uv run python scripts/preprocessing/build_phenotype_icd10_codes.py \
-        --gems-path configs/phenotypes/gems_icd10_to_icd9.csv \
-        --phenotype-config configs/phenotypes/ccs_phenotypes.yaml
+        --gems-path /path/to/gems_icd10_to_icd9.csv \
+        --phenotype-config /path/to/ccs_phenotypes.yaml
 """
 
 import argparse
@@ -27,6 +27,9 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
+from slices.data.config_loader import _get_package_data_dir
+
+_PHENOTYPES_DIR = _get_package_data_dir() / "phenotypes"
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,13 +40,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gems-path",
         type=Path,
-        default=Path("configs/phenotypes/gems_icd10_to_icd9.csv"),
+        default=_PHENOTYPES_DIR / "gems_icd10_to_icd9.csv",
         help="Path to the GEMs ICD-10-CM to ICD-9-CM crosswalk CSV.",
     )
     parser.add_argument(
         "--phenotype-config",
         type=Path,
-        default=Path("configs/phenotypes/ccs_phenotypes.yaml"),
+        default=_PHENOTYPES_DIR / "ccs_phenotypes.yaml",
         help="Path to the CCS phenotype definitions YAML.",
     )
     return parser.parse_args()

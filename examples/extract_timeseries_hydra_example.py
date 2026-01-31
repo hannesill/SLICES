@@ -11,9 +11,9 @@ Usage:
     uv run python examples/extract_timeseries_hydra_example.py \
         extraction.parquet_root=/path/to/mimic-iv
 
-    # Explicit concepts directory (production deployment)
+    # Explicit concepts directory override
     uv run python examples/extract_timeseries_hydra_example.py \
-        extraction.concepts_dir=/opt/slices/configs/concepts
+        extraction.concepts_dir=/opt/slices/concepts
 """
 
 import hydra
@@ -31,9 +31,7 @@ def main(cfg: DictConfig) -> None:
     extractor_fields = {
         "parquet_root",
         "output_dir",
-        "seq_length_hours",
         "feature_set",
-        "concepts_dir",
     }
     filtered_config = {k: v for k, v in extraction_config.items() if k in extractor_fields}
 
@@ -43,7 +41,6 @@ def main(cfg: DictConfig) -> None:
     print(f"  Parquet root: {extractor_config.parquet_root}")
     print(f"  Output dir: {extractor_config.output_dir}")
     print(f"  Feature set: {extractor_config.feature_set}")
-    print(f"  Concepts dir: {extractor_config.concepts_dir or 'auto-detect'}")
 
     # Create extractor
     extractor = MIMICIVExtractor(extractor_config)

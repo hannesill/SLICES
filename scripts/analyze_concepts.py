@@ -11,13 +11,12 @@ about:
 
 Usage:
     uv run python scripts/analyze_concepts.py \
-        --concepts-dir configs/concepts \
         --parquet-root /path/to/mimic-iv-parquet \
         [--output-dir reports/concept_analysis]
 
-    # Legacy single-file support (deprecated):
+    # With explicit concepts directory override:
     uv run python scripts/analyze_concepts.py \
-        --concept-file configs/concepts/vitals.yaml \
+        --concepts-dir /path/to/custom/concepts \
         --parquet-root /path/to/mimic-iv-parquet
 """
 
@@ -826,7 +825,7 @@ def main():
         "--concepts-dir",
         type=str,
         default=None,
-        help="Path to concepts directory (e.g., configs/concepts)",
+        help="Path to concepts directory (defaults to package data dir)",
     )
     parser.add_argument(
         "--concept-file",
@@ -851,8 +850,10 @@ def main():
 
     # Validate arguments
     if args.concepts_dir is None and args.concept_file is None:
-        # Default to configs/concepts if exists
-        default_dir = Path("configs/concepts")
+        # Default to package data directory
+        from slices.data.config_loader import _get_package_data_dir
+
+        default_dir = _get_package_data_dir() / "concepts"
         if default_dir.exists():
             args.concepts_dir = str(default_dir)
         else:
