@@ -152,13 +152,7 @@ def main(cfg: DictConfig) -> None:
         task_name=task_name,  # Load task labels
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.get("num_workers", 4),
-        train_ratio=cfg.data.get("train_ratio", 0.7),
-        val_ratio=cfg.data.get("val_ratio", 0.15),
-        test_ratio=cfg.data.get("test_ratio", 0.15),
         seed=cfg.seed,
-        normalize=cfg.data.get("normalize", True),
-        impute_strategy=cfg.data.get("impute_strategy", "forward_fill"),
-        pin_memory=cfg.data.get("pin_memory", True),
     )
 
     # Setup data

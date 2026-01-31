@@ -1,7 +1,8 @@
 # MIMIC-IV Data Configuration
 #
-# Complete configuration for the MIMIC-IV data pipeline, from raw files through
-# extraction to training. This is the single source of truth for all data settings.
+# Experiment knobs for the MIMIC-IV data pipeline. Benchmark invariants
+# (seq_length, split ratios, normalization, etc.) live in slices.constants
+# and are applied automatically via Python defaults.
 #
 # Pipeline flow:
 #   1. Raw CSV files (csv_root) -> convert_csv_to_parquet.py -> Parquet files (parquet_root)
@@ -43,13 +44,6 @@ processed_dir: data/processed/mimic-iv
 # EXTRACTION SETTINGS
 # =============================================================================
 
-# Sequence length for time-series extraction (hours from ICU admission)
-seq_length_hours: 48
-
-# Minimum ICU stay length to include (in hours)
-# Set equal to seq_length_hours for complete observation windows
-min_stay_hours: 48
-
 # Feature set to extract
 # - core: Essential vital signs and labs for most tasks
 # - extended: All available features including rare measurements
@@ -59,9 +53,6 @@ feature_set: core
 # Use for subset extraction, e.g., ["vitals_dense"] for only dense vitals
 categories: null
 
-# Number of stays per batch during extraction (reduce if running out of memory)
-extraction_batch_size: 5000
-
 # Tasks to extract labels for
 tasks:
   - mortality_24h
@@ -69,31 +60,8 @@ tasks:
   - phenotyping
 
 # =============================================================================
-# CONFIG DIRECTORY PATHS (auto-detected if null)
-# =============================================================================
-
-# Path to concepts directory containing feature definitions
-concepts_dir: null
-
-# Path to dataset configs directory
-datasets_dir: null
-
-# Path to task configs directory
-tasks_dir: null
-
-# =============================================================================
 # TRAINING DATA LOADING
 # =============================================================================
 
 # DataLoader settings
 num_workers: 4
-pin_memory: true
-
-# Patient-level split ratios (ensures no patient appears in multiple splits)
-train_ratio: 0.7
-val_ratio: 0.15
-test_ratio: 0.15
-
-# Preprocessing applied during training
-normalize: true
-impute_strategy: forward_fill  # forward_fill | zero | mean | none

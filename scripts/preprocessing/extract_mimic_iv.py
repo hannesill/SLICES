@@ -37,7 +37,6 @@ def main(cfg: DictConfig) -> None:
         cfg: Hydra configuration object. Uses cfg.data.* for all settings:
             - data.parquet_root: Path to Parquet files
             - data.processed_dir: Path for processed output
-            - data.seq_length_hours: Sequence length in hours
             - data.feature_set: Feature set to extract
             - data.tasks: List of task names for label extraction
     """
@@ -59,18 +58,14 @@ def main(cfg: DictConfig) -> None:
         sys.exit(1)
 
     # Build ExtractorConfig from unified data config
+    # Benchmark invariants (seq_length_hours, min_stay_hours, batch_size)
+    # use defaults from slices.constants via ExtractorConfig.
     extractor_config = ExtractorConfig(
         parquet_root=str(cfg.data.parquet_root),
         output_dir=str(cfg.data.processed_dir),
-        seq_length_hours=cfg.data.seq_length_hours,
         feature_set=cfg.data.feature_set,
-        min_stay_hours=cfg.data.min_stay_hours,
-        batch_size=cfg.data.extraction_batch_size,
         tasks=list(cfg.data.get("tasks", [])) if cfg.data.get("tasks") else [],
         categories=list(cfg.data.categories) if cfg.data.get("categories") else None,
-        concepts_dir=cfg.data.get("concepts_dir"),
-        datasets_dir=cfg.data.get("datasets_dir"),
-        tasks_dir=cfg.data.get("tasks_dir"),
     )
 
     # Create and run extractor
