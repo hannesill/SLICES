@@ -796,16 +796,12 @@ class TestPhenotypingHelpers:
         assert "5678" in icd9_map
         assert "A001" in icd10_map
 
-    def test_find_phenotype_config_not_found(self, tmp_path, monkeypatch):
-        """Verify FileNotFoundError when config cannot be found anywhere."""
-        # Change cwd to a directory without pyproject.toml so Strategy 1 fails.
-        monkeypatch.chdir(tmp_path)
-
-        # Strategy 2 uses Path(__file__).parents[4] which resolves to
-        # somewhere in the installed package tree. We need that path to also
-        # not contain the config. Patching __file__ in the module ensures
-        # the fallback path points to our empty tmp_path.
-        fake_file = tmp_path / "a" / "b" / "c" / "d" / "fake.py"
+    def test_find_phenotype_config_not_found(self, tmp_path):
+        """Verify FileNotFoundError when config cannot be found."""
+        # Patch __file__ so that the package data directory points to
+        # an empty tmp_path where the config does not exist.
+        # _find_phenotype_config resolves relative to Path(__file__).parent.parent
+        fake_file = tmp_path / "labels" / "fake.py"
         fake_file.parent.mkdir(parents=True, exist_ok=True)
         fake_file.touch()
 

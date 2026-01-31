@@ -172,33 +172,24 @@ class BaseExtractor(ABC):
         """
         return self.parquet_root / schema / f"{table}.parquet"
 
-    def _get_project_root(self) -> Optional[Path]:
-        """Find project root by looking for pyproject.toml.
+    @staticmethod
+    def _get_package_data_dir() -> Path:
+        """Get the package data directory (``src/slices/data/``).
 
         Returns:
-            Path to project root or None if not found.
+            Path to the directory containing benchmark YAML configs.
         """
-        current = Path.cwd()
-        for parent in [current, *current.parents]:
-            if (parent / "pyproject.toml").exists():
-                return parent
-        return None
+        return Path(__file__).parent.parent
 
     def _get_concepts_path(self) -> Path:
-        """Get path to concepts directory with robust fallback strategy.
+        """Get path to concepts directory.
 
         Returns:
             Path to concepts directory containing feature YAML files.
 
-        Strategy:
-            1. Use concepts_dir from config if explicitly provided
-            2. Try to find project root and look for configs/concepts
-            3. Try relative to this source file (development mode)
-
         Raises:
             FileNotFoundError: If concepts directory cannot be found.
         """
-        # Strategy 1: Explicit config path (most robust for deployment)
         if self.config.concepts_dir is not None:
             concepts_path = Path(self.config.concepts_dir)
             if concepts_path.exists():
@@ -207,29 +198,10 @@ class BaseExtractor(ABC):
                 f"Concepts directory specified in config not found: {concepts_path}"
             )
 
-        # Strategy 2: Try to find project root (works for editable installs)
-        project_root = self._get_project_root()
-        if project_root:
-            concepts_dir = project_root / "configs" / "concepts"
-            if concepts_dir.exists():
-                return concepts_dir
-
-        # Strategy 3: Relative to source file (development mode fallback)
-        # From src/slices/data/extractors/base.py -> configs/concepts
-        relative_path = Path(__file__).parents[4] / "configs" / "concepts"
-        if relative_path.exists():
-            return relative_path
-
-        # If nothing works, give helpful error
-        raise FileNotFoundError(
-            "Could not locate concepts directory. Options:\n"
-            "1. Set 'concepts_dir' in ExtractorConfig (recommended for deployment)\n"
-            "2. Run from project root containing pyproject.toml\n"
-            "3. Ensure configs/concepts exists relative to source tree"
-        )
+        return self._get_package_data_dir() / "concepts"
 
     def _get_tasks_path(self) -> Path:
-        """Get path to tasks directory with robust fallback strategy.
+        """Get path to tasks directory.
 
         Returns:
             Path to tasks directory containing task YAML files.
@@ -237,34 +209,16 @@ class BaseExtractor(ABC):
         Raises:
             FileNotFoundError: If tasks directory cannot be found.
         """
-        # Strategy 1: Explicit config path
         if self.config.tasks_dir is not None:
             tasks_path = Path(self.config.tasks_dir)
             if tasks_path.exists():
                 return tasks_path
             raise FileNotFoundError(f"Tasks directory specified in config not found: {tasks_path}")
 
-        # Strategy 2: Try to find project root
-        project_root = self._get_project_root()
-        if project_root:
-            tasks_dir = project_root / "configs" / "tasks"
-            if tasks_dir.exists():
-                return tasks_dir
-
-        # Strategy 3: Relative to source file
-        relative_path = Path(__file__).parents[4] / "configs" / "tasks"
-        if relative_path.exists():
-            return relative_path
-
-        raise FileNotFoundError(
-            "Could not locate tasks directory. Options:\n"
-            "1. Set 'tasks_dir' in ExtractorConfig\n"
-            "2. Run from project root containing pyproject.toml\n"
-            "3. Ensure configs/tasks exists relative to source tree"
-        )
+        return self._get_package_data_dir() / "tasks"
 
     def _get_datasets_path(self) -> Path:
-        """Get path to datasets directory with robust fallback strategy.
+        """Get path to datasets directory.
 
         Returns:
             Path to datasets directory containing dataset config YAML files.
@@ -272,7 +226,6 @@ class BaseExtractor(ABC):
         Raises:
             FileNotFoundError: If datasets directory cannot be found.
         """
-        # Strategy 1: Explicit config path
         if self.config.datasets_dir is not None:
             datasets_path = Path(self.config.datasets_dir)
             if datasets_path.exists():
@@ -281,24 +234,7 @@ class BaseExtractor(ABC):
                 f"Datasets directory specified in config not found: {datasets_path}"
             )
 
-        # Strategy 2: Try to find project root
-        project_root = self._get_project_root()
-        if project_root:
-            datasets_dir = project_root / "configs" / "datasets"
-            if datasets_dir.exists():
-                return datasets_dir
-
-        # Strategy 3: Relative to source file
-        relative_path = Path(__file__).parents[4] / "configs" / "datasets"
-        if relative_path.exists():
-            return relative_path
-
-        raise FileNotFoundError(
-            "Could not locate datasets directory. Options:\n"
-            "1. Set 'datasets_dir' in ExtractorConfig\n"
-            "2. Run from project root containing pyproject.toml\n"
-            "3. Ensure configs/datasets exists relative to source tree"
-        )
+        return self._get_package_data_dir() / "datasets"
 
     def _load_task_configs(self, task_names: List[str]) -> List[LabelConfig]:
         """Load task configurations from YAML files.

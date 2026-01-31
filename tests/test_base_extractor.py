@@ -897,25 +897,26 @@ class TestLoadTaskConfigs:
 class TestPathResolution:
     """Tests for path resolution methods."""
 
-    def test_get_project_root_finds_pyproject(self, tmp_path, monkeypatch):
-        """Test _get_project_root finds directory with pyproject.toml."""
-        # Create pyproject.toml in tmp_path
-        (tmp_path / "pyproject.toml").touch()
-
-        parquet_root = tmp_path / "data" / "parquet"
-        parquet_root.mkdir(parents=True)
-        (parquet_root / "icu").mkdir()
-        (parquet_root / "hosp").mkdir()
-
-        config = ExtractorConfig(parquet_root=str(parquet_root))
+    def test_get_package_data_dir(self, temp_parquet_structure):
+        """Test _get_package_data_dir returns src/slices/data/."""
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
         extractor = MockExtractor(config)
 
-        # Change working directory
-        monkeypatch.chdir(tmp_path / "data")
+        result = extractor._get_package_data_dir()
 
-        result = extractor._get_project_root()
+        # Should point to the package data directory
+        assert result.name == "data"
+        assert result.parent.name == "slices"
+        assert result.is_dir()
 
-        assert result == tmp_path
+    def test_get_concepts_path_defaults_to_package(self, temp_parquet_structure):
+        """Test _get_concepts_path defaults to package data directory."""
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)
+
+        result = extractor._get_concepts_path()
+
+        assert result == extractor._get_package_data_dir() / "concepts"
 
     def test_get_concepts_path_uses_explicit_config(self, tmp_path):
         """Test _get_concepts_path uses explicit concepts_dir when provided."""

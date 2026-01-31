@@ -26,6 +26,16 @@ from .config_schemas import (
     TimeSeriesConceptConfig,
 )
 
+
+def _get_package_data_dir() -> Path:
+    """Get the package data directory containing benchmark YAML configs.
+
+    Returns:
+        Path to ``src/slices/data/`` (the directory this module lives in).
+    """
+    return Path(__file__).parent
+
+
 # Time-series concept files to load (order matters for consistent feature ordering)
 TIMESERIES_FILES = [
     "vitals.yaml",
@@ -36,11 +46,15 @@ TIMESERIES_FILES = [
 ]
 
 
-def load_dataset_config(datasets_dir: Path, dataset_name: str) -> DatasetConfig:
+def load_dataset_config(
+    datasets_dir: Optional[Path] = None,
+    dataset_name: str = "mimic_iv",
+) -> DatasetConfig:
     """Load dataset-level configuration from YAML.
 
     Args:
-        datasets_dir: Path to configs/datasets directory.
+        datasets_dir: Path to datasets directory. Defaults to the package
+            data directory (``src/slices/data/datasets/``).
         dataset_name: Dataset name (e.g., "mimic_iv").
 
     Returns:
@@ -50,6 +64,8 @@ def load_dataset_config(datasets_dir: Path, dataset_name: str) -> DatasetConfig:
         FileNotFoundError: If config file doesn't exist.
         ValidationError: If config fails Pydantic validation.
     """
+    if datasets_dir is None:
+        datasets_dir = _get_package_data_dir() / "datasets"
     config_path = datasets_dir / f"{dataset_name}.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"Dataset config not found: {config_path}")
@@ -123,15 +139,16 @@ def _parse_timeseries_concept(
 
 
 def load_timeseries_concepts(
-    concepts_dir: Path,
-    dataset_name: str,
+    concepts_dir: Optional[Path] = None,
+    dataset_name: str = "mimic_iv",
     feature_set: str = "core",
     categories: Optional[List[str]] = None,
 ) -> Dict[str, TimeSeriesConceptConfig]:
     """Load time-series concept configs filtered by feature set.
 
     Args:
-        concepts_dir: Path to configs/concepts directory.
+        concepts_dir: Path to concepts directory. Defaults to the package
+            data directory (``src/slices/data/concepts/``).
         dataset_name: Dataset to filter for (e.g., "mimic_iv").
         feature_set: Feature set to filter ("core" or "extended").
         categories: Optional list of categories to load (default: all).
@@ -142,6 +159,8 @@ def load_timeseries_concepts(
     Raises:
         ValueError: If duplicate concept names are found.
     """
+    if concepts_dir is None:
+        concepts_dir = _get_package_data_dir() / "concepts"
     concepts: Dict[str, TimeSeriesConceptConfig] = {}
 
     files_to_load = TIMESERIES_FILES
@@ -189,18 +208,21 @@ def _parse_static_source(source_dict: Dict) -> StaticExtractionSource:
 
 
 def load_static_concepts(
-    concepts_dir: Path,
-    dataset_name: str,
+    concepts_dir: Optional[Path] = None,
+    dataset_name: str = "mimic_iv",
 ) -> Dict[str, StaticConceptConfig]:
     """Load static/demographic concept configs.
 
     Args:
-        concepts_dir: Path to configs/concepts directory.
+        concepts_dir: Path to concepts directory. Defaults to the package
+            data directory (``src/slices/data/concepts/``).
         dataset_name: Dataset to filter for.
 
     Returns:
         Dictionary mapping concept name to validated config.
     """
+    if concepts_dir is None:
+        concepts_dir = _get_package_data_dir() / "concepts"
     static_file = concepts_dir / "static.yaml"
     if not static_file.exists():
         return {}
@@ -229,14 +251,15 @@ def load_static_concepts(
 
 
 def get_feature_names(
-    concepts_dir: Path,
-    dataset_name: str,
+    concepts_dir: Optional[Path] = None,
+    dataset_name: str = "mimic_iv",
     feature_set: str = "core",
 ) -> List[str]:
     """Get ordered list of feature names for a dataset.
 
     Args:
-        concepts_dir: Path to configs/concepts directory.
+        concepts_dir: Path to concepts directory. Defaults to the package
+            data directory.
         dataset_name: Dataset to filter for.
         feature_set: Feature set to filter.
 
@@ -248,13 +271,14 @@ def get_feature_names(
 
 
 def get_static_feature_names(
-    concepts_dir: Path,
-    dataset_name: str,
+    concepts_dir: Optional[Path] = None,
+    dataset_name: str = "mimic_iv",
 ) -> List[str]:
     """Get ordered list of static feature names for a dataset.
 
     Args:
-        concepts_dir: Path to configs/concepts directory.
+        concepts_dir: Path to concepts directory. Defaults to the package
+            data directory.
         dataset_name: Dataset to filter for.
 
     Returns:
