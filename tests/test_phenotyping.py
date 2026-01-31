@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import patch
 
+import numpy as np
 import polars as pl
 import pytest
 import torch
@@ -65,7 +66,7 @@ def mini_label_config() -> LabelConfig:
     """LabelConfig for phenotyping task using mini definitions."""
     return LabelConfig(
         task_name="phenotyping",
-        task_type="multilabel_classification",
+        task_type="multilabel",
         observation_window_hours=48,
         prediction_window_hours=-1,
         gap_hours=0,
@@ -158,7 +159,7 @@ class TestPhenotypingConfig:
         """Test basic LabelConfig for phenotyping task."""
         config = LabelConfig(
             task_name="phenotyping",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             observation_window_hours=48,
             prediction_window_hours=-1,
             label_sources=["stays", "diagnoses"],
@@ -182,7 +183,7 @@ class TestPhenotypingConfig:
         )
 
         assert config.task_name == "phenotyping"
-        assert config.task_type == "multilabel_classification"
+        assert config.task_type == "multilabel"
         assert config.n_classes == 10
         assert len(config.class_names) == 10
         assert "stays" in config.label_sources
@@ -193,7 +194,7 @@ class TestPhenotypingConfig:
         """Test phenotyping LabelConfig with minimal required fields."""
         config = LabelConfig(
             task_name="phenotyping",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             label_sources=["stays", "diagnoses"],
         )
 
@@ -206,7 +207,7 @@ class TestPhenotypingConfig:
         """Test phenotyping LabelConfig with all fields populated."""
         config = LabelConfig(
             task_name="phenotyping",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             observation_window_hours=48,
             prediction_window_hours=-1,
             gap_hours=0,
@@ -402,7 +403,7 @@ class TestPhenotypingLabelBuilder:
         """When exclude_multi_stay_admissions=false, no exclusion happens."""
         config = LabelConfig(
             task_name="phenotyping",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             label_sources=["stays", "diagnoses"],
             label_params={
                 "phenotype_config": "phenotypes/ccs_phenotypes.yaml",
@@ -828,7 +829,7 @@ class TestPhenotypingFactory:
         """Verify factory creates PhenotypingLabelBuilder for phenotyping tasks."""
         config = LabelConfig(
             task_name="phenotyping",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             label_sources=["stays", "diagnoses"],
         )
 
@@ -839,7 +840,7 @@ class TestPhenotypingFactory:
         """Factory extracts 'phenotyping' from task names with underscores."""
         config = LabelConfig(
             task_name="phenotyping_ccs10",
-            task_type="multilabel_classification",
+            task_type="multilabel",
             label_sources=["stays", "diagnoses"],
         )
 
@@ -1017,3 +1018,88 @@ class TestMultilabelDatasetLoading:
         assert 200 in missing_label_stays
         assert 100 not in missing_label_stays
         assert len(valid_label_values) == 1
+
+
+# ===========================================================================
+# TestPhenotypingIntegration
+# ===========================================================================
+
+
+class TestPhenotypingIntegration:
+    """Integration tests verifying ICUDataset loads multi-label phenotyping labels."""
+
+    def test_dataset_loads_multilabel_phenotyping(self, tmp_path: Path):
+        """Create mock parquet files and load via ICUDataset with phenotyping task."""
+        from slices.data.dataset import ICUDataset
+
+        data_dir = tmp_path / "integration_data"
+        data_dir.mkdir()
+
+        n_stays = 5
+        seq_length = 48
+        n_features = 3
+        n_phenotypes = 10
+        stay_ids = list(range(1, n_stays + 1))
+
+        phenotype_names = [
+            "sepsis",
+            "respiratory_failure",
+            "acute_renal_failure",
+            "chf",
+            "shock",
+            "chronic_kidney_disease",
+            "diabetes",
+            "copd",
+            "pneumonia",
+            "coronary_atherosclerosis",
+        ]
+
+        # -- timeseries.parquet: nested list format --
+        np.random.seed(0)
+        timeseries_data = []
+        mask_data = []
+        for _ in stay_ids:
+            ts = np.random.randn(seq_length, n_features).tolist()
+            mask = np.ones((seq_length, n_features), dtype=bool).tolist()
+            timeseries_data.append(ts)
+            mask_data.append(mask)
+
+        pl.DataFrame(
+            {"stay_id": stay_ids, "timeseries": timeseries_data, "mask": mask_data}
+        ).write_parquet(data_dir / "timeseries.parquet")
+
+        # -- labels.parquet: 10 phenotyping_* columns --
+        labels_dict: Dict = {"stay_id": stay_ids}
+        np.random.seed(1)
+        for name in phenotype_names:
+            labels_dict[f"phenotyping_{name}"] = np.random.randint(0, 2, size=n_stays).tolist()
+        pl.DataFrame(labels_dict).write_parquet(data_dir / "labels.parquet")
+
+        # -- static.parquet --
+        pl.DataFrame(
+            {
+                "stay_id": stay_ids,
+                "age": [65.0, 70.0, 55.0, 80.0, 45.0],
+                "gender": ["M", "F", "M", "F", "M"],
+                "los_days": [3.0, 4.0, 2.0, 5.0, 3.5],
+            }
+        ).write_parquet(data_dir / "static.parquet")
+
+        # -- metadata.yaml --
+        metadata = {
+            "feature_names": [f"feat_{i}" for i in range(n_features)],
+            "seq_length_hours": seq_length,
+            "task_names": ["phenotyping"],
+        }
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        # Load dataset
+        dataset = ICUDataset(data_dir, task_name="phenotyping", normalize=False)
+
+        assert len(dataset) == n_stays
+
+        sample = dataset[0]
+        assert "label" in sample
+        assert sample["label"].shape == (n_phenotypes,)
+        assert sample["label"].dtype == torch.float32

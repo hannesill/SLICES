@@ -10,7 +10,7 @@
 # maps them to CCS phenotype groups.
 
 task_name: phenotyping
-task_type: multilabel_classification
+task_type: multilabel
 
 # Observation window: how much time-series data the model sees
 observation_window_hours: 48  # Must match seq_length_hours in data config

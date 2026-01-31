@@ -10,7 +10,7 @@
 # - Patients who die during observation (hours 0-48) are excluded (label=null)
 
 task_name: mortality_24h
-task_type: binary_classification
+task_type: binary
 
 # Prediction parameters
 prediction_window_hours: 24  # Predict mortality in 24h window after observation ends

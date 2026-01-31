@@ -2,4 +2,10 @@
 # Download from: https://www.cms.gov/medicare/coding-billing/icd-10-codes/general-equivalence-mappings-gems
 # After downloading, extract and convert to this format: icd10_code,icd9_code
 # Codes should not contain dots (e.g., A021 not A02.1)
+#
+# NOTE: This file is a template placeholder. The ICD-10 codes in
+# ccs_phenotypes.yaml were manually curated and are NOT derived from this
+# crosswalk. To populate this file and use the automated derivation script
+# (scripts/preprocessing/build_phenotype_icd10_codes.py), download the GEMs
+# data from the URL above.
 icd10_code,icd9_code

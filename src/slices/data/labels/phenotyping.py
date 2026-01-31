@@ -212,6 +212,8 @@ class PhenotypingLabelBuilder(LabelBuilder):
     ) -> pl.DataFrame:
         """Map ICD diagnosis codes to phenotype binary labels.
 
+        Uses vectorized Polars joins instead of row-by-row iteration.
+
         Args:
             stays: Stays DataFrame.
             diagnoses: Diagnoses DataFrame with stay_id, icd_code, icd_version.
@@ -223,50 +225,68 @@ class PhenotypingLabelBuilder(LabelBuilder):
         Returns:
             DataFrame with stay_id and one column per phenotype.
         """
-        all_stay_ids = stays["stay_id"].unique().to_list()
+        all_stay_ids = stays["stay_id"].unique()
 
-        # Initialize phenotype flags per stay
-        stay_phenotypes: Dict[int, Dict[str, int]] = {
-            sid: {name: 0 for name in phenotype_names} for sid in all_stay_ids
-        }
+        # Build a lookup DataFrame from both ICD maps: (icd_code, icd_version, phenotype)
+        lookup_rows: List[Dict[str, object]] = []
+        for code, phenos in icd9_map.items():
+            for p in phenos:
+                lookup_rows.append({"icd_code": code, "icd_version": 9, "phenotype": p})
+        for code, phenos in icd10_map.items():
+            for p in phenos:
+                lookup_rows.append({"icd_code": code, "icd_version": 10, "phenotype": p})
 
-        # Process diagnoses
-        if len(diagnoses) > 0 and "icd_code" in diagnoses.columns:
-            for row in diagnoses.iter_rows(named=True):
-                stay_id = row["stay_id"]
-                if stay_id not in stay_phenotypes:
-                    continue
+        if len(diagnoses) > 0 and "icd_code" in diagnoses.columns and lookup_rows:
+            lookup_df = pl.DataFrame(lookup_rows)
 
-                icd_code = str(row["icd_code"]).strip()
-                icd_version = row["icd_version"]
+            # Normalize icd_code in diagnoses to stripped strings for join
+            diag_norm = diagnoses.with_columns(
+                pl.col("icd_code").cast(pl.Utf8).str.strip_chars().alias("icd_code")
+            )
 
-                # Look up phenotypes for this ICD code
-                if icd_version == 9:
-                    matched = icd9_map.get(icd_code, [])
-                elif icd_version == 10:
-                    matched = icd10_map.get(icd_code, [])
-                else:
-                    continue
+            # Join diagnoses with lookup on (icd_code, icd_version) — hash join
+            matched = diag_norm.join(lookup_df, on=["icd_code", "icd_version"], how="inner")
 
-                for phenotype_name in matched:
-                    stay_phenotypes[stay_id][phenotype_name] = 1
+            # Deduplicate: one row per (stay_id, phenotype)
+            matched = matched.select("stay_id", "phenotype").unique()
 
-        # Build result DataFrame
-        records = []
-        for stay_id in all_stay_ids:
-            record: Dict = {"stay_id": stay_id}
-            phenotype_flags = stay_phenotypes[stay_id]
+            # Add indicator column and pivot to wide format
+            matched = matched.with_columns(pl.lit(1).alias("value"))
+            pivoted = matched.pivot(on="phenotype", index="stay_id", values="value")
+        else:
+            # No diagnoses to process — start with empty pivoted frame
+            pivoted = pl.DataFrame({"stay_id": pl.Series([], dtype=all_stay_ids.dtype)})
 
+        # Left-join with all stay_ids to ensure every stay is present
+        base = pl.DataFrame({"stay_id": all_stay_ids})
+        result = base.join(pivoted, on="stay_id", how="left")
+
+        # Ensure all phenotype columns exist (fill missing phenotypes with 0)
+        for name in phenotype_names:
+            if name not in result.columns:
+                result = result.with_columns(pl.lit(None, dtype=pl.Int64).alias(name))
+
+        # Fill nulls with 0 for phenotype columns, then rename to prefixed form
+        rename_map: Dict[str, str] = {}
+        fill_exprs = [pl.col("stay_id")]
+        for name in phenotype_names:
+            col_name = f"phenotyping_{name}"
+            fill_exprs.append(pl.col(name).fill_null(0).alias(col_name))
+            rename_map[name] = col_name
+
+        result = result.select(fill_exprs)
+
+        # Set excluded stays to null
+        if excluded_stays:
+            excluded_list = list(excluded_stays)
+            is_excluded = pl.col("stay_id").is_in(excluded_list)
+            null_exprs = [pl.col("stay_id")]
             for name in phenotype_names:
                 col_name = f"phenotyping_{name}"
-                if stay_id in excluded_stays:
-                    record[col_name] = None
-                else:
-                    record[col_name] = phenotype_flags[name]
-
-            records.append(record)
-
-        result = pl.DataFrame(records)
+                null_exprs.append(
+                    pl.when(is_excluded).then(None).otherwise(pl.col(col_name)).alias(col_name)
+                )
+            result = result.select(null_exprs)
 
         # Cast columns to correct types
         cast_exprs = [pl.col("stay_id").cast(pl.Int64)]

@@ -43,6 +43,31 @@ class TaskHeadConfig:
 
     def __post_init__(self):
         """Validate configuration after initialization."""
+        # Normalize task_type aliases to canonical names
+        _TASK_TYPE_ALIASES = {
+            "binary_classification": "binary",
+            "multiclass_classification": "multiclass",
+            "multilabel_classification": "multilabel",
+        }
+        if self.task_type in _TASK_TYPE_ALIASES:
+            import warnings
+
+            canonical = _TASK_TYPE_ALIASES[self.task_type]
+            warnings.warn(
+                f"task_type='{self.task_type}' is deprecated, use '{canonical}' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            object.__setattr__(self, "task_type", canonical)
+
+        # Validate task_type is one of the canonical values
+        _VALID_TASK_TYPES = {"regression", "binary", "multiclass", "multilabel"}
+        if self.task_type not in _VALID_TASK_TYPES:
+            raise ValueError(
+                f"Unknown task type: '{self.task_type}'. "
+                f"Must be one of {sorted(_VALID_TASK_TYPES)}."
+            )
+
         # Validate n_classes requirement
         if self.task_type in ("multiclass", "multilabel"):
             if self.n_classes is None:

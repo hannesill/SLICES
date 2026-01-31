@@ -16,7 +16,7 @@ class LabelConfig:
     """
 
     task_name: str  # Unique identifier (e.g., 'mortality_24h', 'aki_kdigo')
-    task_type: str  # 'binary_classification', 'multiclass_classification', 'regression'
+    task_type: str  # 'binary', 'multiclass', 'multilabel', 'regression'
 
     # Prediction parameters
     prediction_window_hours: Optional[int] = None  # How far ahead to predict (None = in-hospital)

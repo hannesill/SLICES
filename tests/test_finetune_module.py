@@ -69,6 +69,37 @@ class TestTaskHeadConfig:
         config = TaskHeadConfig(task_type="regression")
         assert config.get_output_dim() == 1
 
+    def test_task_type_alias_normalization(self):
+        """Test that deprecated task_type aliases are normalized to canonical names."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = TaskHeadConfig(task_type="multilabel_classification", n_classes=10)
+            assert config.task_type == "multilabel"
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "deprecated" in str(w[0].message).lower()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = TaskHeadConfig(task_type="binary_classification")
+            assert config.task_type == "binary"
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = TaskHeadConfig(task_type="multiclass_classification", n_classes=5)
+            assert config.task_type == "multiclass"
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+
+    def test_task_type_invalid_raises(self):
+        """Test that invalid task_type raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown task type"):
+            TaskHeadConfig(task_type="nonexistent_type")
+
 
 class TestMLPTaskHead:
     """Tests for MLPTaskHead."""
