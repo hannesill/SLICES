@@ -9,6 +9,7 @@ Minimal version for end-to-end testing with mortality tasks only.
 from pathlib import Path
 
 import yaml
+from slices.data.config_loader import _get_package_data_dir
 from slices.data.extractors.mimic_iv import ExtractorConfig, MIMICIVExtractor
 from slices.data.labels import LabelConfig
 
@@ -22,7 +23,7 @@ def load_task_config(task_name: str) -> LabelConfig:
     Returns:
         LabelConfig instance.
     """
-    config_path = Path(__file__).parent.parent / "configs" / "tasks" / f"{task_name}.yaml"
+    config_path = _get_package_data_dir() / "tasks" / f"{task_name}.yaml"
 
     with open(config_path) as f:
         config_dict = yaml.safe_load(f)
