@@ -20,7 +20,7 @@ Example usage:
     # With explicit phenotype config
     uv run python scripts/validation/validate_phenotyping.py \
         --data-dir data/processed/mimic-iv \
-        --phenotype-config configs/phenotypes/ccs_phenotypes.yaml
+        --phenotype-config /path/to/ccs_phenotypes.yaml
 """
 
 import argparse
@@ -65,22 +65,14 @@ DEVIATION_THRESHOLD: float = 0.05  # 5 percentage-point threshold
 
 
 def _find_phenotype_config() -> Optional[Path]:
-    """Attempt to auto-detect ccs_phenotypes.yaml relative to the project root.
+    """Locate ccs_phenotypes.yaml from the package data directory.
 
     Returns:
         Path to the config if found, else None.
     """
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / "pyproject.toml").exists():
-            candidate = parent / "configs" / "phenotypes" / "ccs_phenotypes.yaml"
-            if candidate.exists():
-                return candidate
-            break
+    from slices.data.config_loader import _get_package_data_dir
 
-    # Fallback: relative to this script
-    script_dir = Path(__file__).resolve().parent
-    candidate = script_dir.parents[1] / "configs" / "phenotypes" / "ccs_phenotypes.yaml"
+    candidate = _get_package_data_dir() / "phenotypes" / "ccs_phenotypes.yaml"
     if candidate.exists():
         return candidate
 

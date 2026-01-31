@@ -31,7 +31,7 @@ def _load_phenotype_definitions(config_path: Path) -> Dict[str, Dict]:
     if not config_path.exists():
         raise FileNotFoundError(
             f"Phenotype config not found: {config_path}. "
-            "Ensure configs/phenotypes/ccs_phenotypes.yaml exists."
+            "Ensure phenotypes/ccs_phenotypes.yaml exists in the package data directory."
         )
 
     with open(config_path) as f:

@@ -87,12 +87,8 @@ def main(cfg: DictConfig) -> None:
     extractor_fields = {
         "parquet_root",
         "output_dir",
-        "seq_length_hours",
         "feature_set",
-        "concepts_dir",
-        "tasks_dir",
         "tasks",
-        "min_stay_hours",
     }
 
     extraction_config = OmegaConf.to_container(cfg.extraction, resolve=True)
