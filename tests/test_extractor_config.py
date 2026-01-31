@@ -28,7 +28,7 @@ class TestExtractorConfigBasic:
         assert config.feature_set == "core"
         assert config.concepts_dir is None
         assert config.tasks_dir is None
-        assert config.min_stay_hours == 6
+        assert config.min_stay_hours == 48
         assert "mortality_24h" in config.tasks
 
     def test_custom_values(self):

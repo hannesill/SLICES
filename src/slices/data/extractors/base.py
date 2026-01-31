@@ -26,6 +26,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 from slices.data.config_loader import load_timeseries_concepts
 from slices.data.config_schemas import AggregationType, TimeSeriesConceptConfig
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
@@ -53,7 +54,7 @@ class ExtractorConfig(BaseModel):
 
     parquet_root: str
     output_dir: str = "data/processed"
-    seq_length_hours: int = Field(default=48, gt=0)
+    seq_length_hours: int = Field(default=SEQ_LENGTH_HOURS, gt=0)
     feature_set: str = "core"  # core | extended
     concepts_dir: Optional[str] = None
     datasets_dir: Optional[str] = None  # Path to dataset configs (auto-detected if None)
@@ -61,8 +62,8 @@ class ExtractorConfig(BaseModel):
     tasks: List[str] = Field(
         default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"]
     )
-    min_stay_hours: int = Field(default=6, ge=0)
-    batch_size: int = Field(default=5000, gt=0)
+    min_stay_hours: int = Field(default=MIN_STAY_HOURS, ge=0)
+    batch_size: int = Field(default=EXTRACTION_BATCH_SIZE, gt=0)
     categories: Optional[List[str]] = None  # e.g., ["vitals_dense"] for subset extraction
 
     model_config = {"extra": "forbid"}
