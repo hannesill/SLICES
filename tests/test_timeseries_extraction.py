@@ -1,7 +1,6 @@
 """Tests for time-series extraction functionality."""
 
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
@@ -152,10 +151,12 @@ class TestTimeSeriesExtraction:
         concepts_dir = tmp_path / "my_concepts"
         concepts_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy the concept files to the test location
-        project_root = Path(__file__).parent.parent
+        # Copy the concept files from the package data directory
+        from slices.data.config_loader import _get_package_data_dir
+
+        pkg_concepts_dir = _get_package_data_dir() / "concepts"
         for concept_file in ["vitals.yaml", "labs.yaml", "outputs.yaml"]:
-            source_config = project_root / "configs" / "concepts" / concept_file
+            source_config = pkg_concepts_dir / concept_file
             if source_config.exists():
                 shutil.copy(source_config, concepts_dir / concept_file)
 

@@ -70,7 +70,10 @@ def _build_icd_to_phenotype_map(
 
 
 def _find_phenotype_config(label_params: Dict) -> Path:
-    """Locate the phenotype config file using fallback strategy.
+    """Locate the phenotype config file.
+
+    Resolves the path relative to the package data directory
+    (``src/slices/data/``).
 
     Args:
         label_params: Task label_params dict containing 'phenotype_config'.
@@ -83,23 +86,15 @@ def _find_phenotype_config(label_params: Dict) -> Path:
     """
     relative_path = label_params.get("phenotype_config", "phenotypes/ccs_phenotypes.yaml")
 
-    # Strategy 1: Try relative to project root (from pyproject.toml)
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / "pyproject.toml").exists():
-            candidate = parent / "configs" / relative_path
-            if candidate.exists():
-                return candidate
-            break
-
-    # Strategy 2: Relative to this source file
-    src_relative = Path(__file__).parents[4] / "configs" / relative_path
-    if src_relative.exists():
-        return src_relative
+    # Resolve relative to package data directory (src/slices/data/)
+    package_data_dir = Path(__file__).parent.parent
+    resolved = package_data_dir / relative_path
+    if resolved.exists():
+        return resolved
 
     raise FileNotFoundError(
-        f"Could not locate phenotype config '{relative_path}'. "
-        "Ensure configs/phenotypes/ccs_phenotypes.yaml exists."
+        f"Could not locate phenotype config '{relative_path}' "
+        f"in package data directory ({package_data_dir})."
     )
 
 
