@@ -1,0 +1,59 @@
+# RICU Data Configuration
+#
+# For datasets extracted via the RICU R package. RICU handles concept lookup,
+# unit harmonization, hourly binning, and gap filling across ICU datasets.
+#
+# Pipeline flow:
+#   1. Rscript scripts/preprocessing/extract_with_ricu.R \
+#        --dataset miiv --output_dir data/ricu_output/miiv
+#   2. uv run python scripts/preprocessing/extract_ricu.py data=ricu
+#   3. Processed data (processed_dir) -> pretrain.py / finetune.py / supervised.py
+#
+# Override via command line:
+#   uv run python scripts/preprocessing/extract_ricu.py \
+#       data=ricu data.ricu_output_dir=data/ricu_output/eicu
+
+name: ricu
+
+# =============================================================================
+# DATA PATHS
+# =============================================================================
+
+# Path to RICU parquet output (produced by extract_with_ricu.R)
+# Expected structure:
+#   ${ricu_output_dir}/ricu_timeseries.parquet
+#   ${ricu_output_dir}/ricu_stays.parquet
+#   ${ricu_output_dir}/ricu_mortality.parquet
+#   ${ricu_output_dir}/ricu_diagnoses.parquet
+#   ${ricu_output_dir}/ricu_metadata.yaml
+ricu_output_dir: data/ricu_output/miiv
+
+# Path to processed/extracted features (output of extraction, input for training)
+# Contains: timeseries.parquet, static.parquet, labels.parquet, metadata.yaml
+processed_dir: data/processed/miiv
+
+# Parquet root is set to ricu_output_dir (used by ExtractorConfig)
+parquet_root: ${ricu_output_dir}
+
+# =============================================================================
+# EXTRACTION SETTINGS
+# =============================================================================
+
+# Feature set label (stored in metadata; actual features come from RICU)
+feature_set: core
+
+# Feature categories (not used by RICU extractor, kept for config compatibility)
+categories: null
+
+# Tasks to extract labels for
+tasks:
+  - mortality_24h
+  - mortality_48h
+  - mortality_hospital
+
+# =============================================================================
+# TRAINING DATA LOADING
+# =============================================================================
+
+# DataLoader settings
+num_workers: 4
