@@ -15,7 +15,16 @@
 #'   Rscript scripts/preprocessing/extract_with_ricu.R \
 #'     --dataset miiv \
 #'     --output_dir data/ricu_output/miiv \
-#'     --seq_length_hours 72
+#'     --seq_length_hours 48
+
+# Auto-install missing packages
+required_packages <- c("ricu", "arrow", "yaml", "data.table", "optparse", "units")
+missing <- required_packages[!vapply(required_packages, requireNamespace,
+                                      logical(1), quietly = TRUE)]
+if (length(missing) > 0) {
+  message("Installing missing R packages: ", paste(missing, collapse = ", "))
+  install.packages(missing, repos = "https://cloud.r-project.org")
+}
 
 suppressPackageStartupMessages({
   library(ricu)
@@ -34,14 +43,19 @@ option_list <- list(
               help = "RICU source name (miiv, eicu, hirid, aumc, mimic, sic)"),
   make_option("--output_dir", type = "character", default = NULL,
               help = "Output directory for parquet files"),
-  make_option("--seq_length_hours", type = "integer", default = 72L,
-              help = "Max hours per stay [default: %default]")
+  make_option("--seq_length_hours", type = "integer", default = 48L,
+              help = "Max hours per stay [default: %default]"),
+  make_option("--raw_data_dir", type = "character", default = NULL,
+              help = "Path to raw CSV files for ricu import (auto-detected if not set)")
 )
 
 opts <- parse_args(OptionParser(option_list = option_list))
 
 VALID_DATASETS <- c("miiv", "eicu", "hirid", "aumc", "mimic", "sic",
                      "mimic_demo", "eicu_demo")
+
+# Batch size for concept loading — controls peak memory during extraction.
+CONCEPT_BATCH_SIZE <- 8L
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -79,13 +93,20 @@ empty_frame <- function(cols) {
   df
 }
 
+#' Parse the RICU concept dictionary for a dataset, bypassing the availability
+#' gate.  RICU considers a source "available" only when its internal checks
+#' pass, which can fail even after a successful import_src().  This helper
+#' reads the raw dictionary and parses it directly.
+parse_ricu_dictionary <- function(dataset) {
+  raw <- ricu:::read_dictionary(name = "concept-dict")
+  ricu:::parse_dictionary(raw, dataset, NULL)
+}
+
 # ---------------------------------------------------------------------------
 # 1. Discover available time-series concepts
 # ---------------------------------------------------------------------------
 
-discover_ts_concepts <- function(dataset) {
-  # load_dictionary(src=...) returns only concepts with items for this dataset
-  dict <- load_dictionary(src = dataset)
+discover_ts_concepts <- function(dataset, dict) {
   all_concepts <- names(dict)
 
   # Exclude static / outcome concepts (not time-series)
@@ -101,63 +122,97 @@ discover_ts_concepts <- function(dataset) {
 # 2. Extract time-series
 # ---------------------------------------------------------------------------
 
-extract_timeseries <- function(dataset, concepts, seq_length_hours) {
-  message("[2/6] Extracting time-series data (this may take a while)...")
+extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
+  message("[2/6] Extracting time-series data in batches...")
 
-  # RICU handles unit conversion, hourly binning, and aggregation (median)
-  ts_data <- load_concepts(
-    concepts,
-    src        = dataset,
-    interval   = hours(1L),
-    merge_data = TRUE,
-    verbose    = TRUE
-  )
-
-  # Fill gaps to create a dense hourly grid bounded by stay windows.
-  # Cap the windows at seq_length_hours to limit memory usage.
-  message("  Filling gaps to create dense hourly grid...")
+  # Pre-compute stay windows (shared across all batches)
   wins <- stay_windows(dataset, interval = hours(1L))
   end_col <- "end"
   set(wins, j = end_col, value = pmin(wins[[end_col]], hours(seq_length_hours)))
-  ts_dense <- fill_gaps(ts_data, limits = wins)
 
-  # Cap at seq_length_hours (belt-and-suspenders after limiting wins)
-  idx_name <- index_var(ts_dense)
-  ts_capped <- ts_dense[get(idx_name) < hours(seq_length_hours)]
+  # Split concepts into batches to control peak memory
+  n_concepts <- length(concepts)
+  batch_indices <- split(
+    seq_len(n_concepts),
+    ceiling(seq_len(n_concepts) / CONCEPT_BATCH_SIZE)
+  )
+  n_batches <- length(batch_indices)
+  batch_results <- vector("list", n_batches)
 
-  # Data columns (the actual concept values)
-  concept_cols <- data_vars(ts_capped)
+  for (b in seq_len(n_batches)) {
+    batch_concepts <- concepts[batch_indices[[b]]]
+    message(sprintf("  Batch %d/%d (%d concepts): %s",
+                    b, n_batches, length(batch_concepts),
+                    paste(batch_concepts, collapse = ", ")))
 
-  # Derive boolean observation masks
-  for (col in concept_cols) {
-    mask_name <- paste0(col, "_mask")
-    set(ts_capped, j = mask_name, value = !is.na(ts_capped[[col]]))
+    # Load this batch — RICU handles unit conversion, hourly binning, median agg
+    ts_data <- load_concepts(
+      batch_concepts,
+      src        = dataset,
+      concepts   = dict,
+      interval   = hours(1L),
+      merge_data = TRUE,
+      verbose    = FALSE
+    )
+
+    # Fill gaps to create a dense hourly grid (capped at seq_length_hours)
+    ts_dense <- fill_gaps(ts_data, limits = wins)
+
+    # Cap at seq_length_hours (belt-and-suspenders)
+    idx_name <- index_var(ts_dense)
+    ts_capped <- ts_dense[get(idx_name) < hours(seq_length_hours)]
+
+    # Derive boolean observation masks for this batch's concepts
+    batch_concept_cols <- data_vars(ts_capped)
+    for (col in batch_concept_cols) {
+      mask_name <- paste0(col, "_mask")
+      set(ts_capped, j = mask_name, value = !is.na(ts_capped[[col]]))
+    }
+
+    # Convert to data.table for efficient merging
+    dt <- as.data.table(ts_capped)
+
+    # Integer hour column from the difftime index
+    id_name <- id_var(ts_capped)
+    dt[, hour := as.integer(as.numeric(get(idx_name), units = "hours"))]
+    setnames(dt, id_name, "stay_id")
+    dt[, (idx_name) := NULL]
+
+    batch_results[[b]] <- dt
+
+    # Free intermediate objects
+    rm(ts_data, ts_dense, ts_capped, dt)
+    gc()
   }
 
-  # Convert to plain data.frame
-  df <- as.data.frame(ts_capped)
+  # Merge all batches by (stay_id, hour)
+  message("  Merging batches...")
+  merged <- batch_results[[1]]
+  if (n_batches > 1) {
+    for (b in 2:n_batches) {
+      merged <- merge(merged, batch_results[[b]],
+                      by = c("stay_id", "hour"), all = TRUE)
+    }
+  }
+  rm(batch_results, wins)
+  gc()
 
-  # Integer hour column from the difftime index
-  df$hour <- as.integer(as.numeric(df[[idx_name]], units = "hours"))
-
-  # Standardise the ID column to "stay_id"
-  id_name <- id_var(ts_capped)
-  names(df)[names(df) == id_name] <- "stay_id"
-
-  # Drop the original difftime index column (replaced by 'hour')
-  df[[idx_name]] <- NULL
+  # Collect concept column names (value columns paired with _mask columns)
+  all_cols <- names(merged)
+  mask_cols <- all_cols[grepl("_mask$", all_cols)]
+  concept_cols <- sub("_mask$", "", mask_cols)
 
   message(sprintf("  Time-series: %d rows, %d concepts, %d stays.",
-                  nrow(df), length(concept_cols),
-                  length(unique(df$stay_id))))
-  list(df = df, concept_cols = concept_cols)
+                  nrow(merged), length(concept_cols),
+                  length(unique(merged$stay_id))))
+  list(df = merged, concept_cols = concept_cols)
 }
 
 # ---------------------------------------------------------------------------
 # 3. Extract stay metadata
 # ---------------------------------------------------------------------------
 
-extract_stays_data <- function(dataset) {
+extract_stays_data <- function(dataset, dict) {
   message("[3/6] Extracting stay metadata...")
 
   # --- Timing from stay_windows ---
@@ -172,11 +227,11 @@ extract_stays_data <- function(dataset) {
   wins_df <- wins_df[, c("stay_id", "los_days"), drop = FALSE]
 
   # --- Clinical demographics via RICU ---
-  avail <- names(load_dictionary(src = dataset))
+  avail <- names(dict)
   demo_concepts <- intersect(c("age", "sex", "height", "weight"), avail)
   clinical <- NULL
   if (length(demo_concepts) > 0) {
-    clin_raw <- load_concepts(demo_concepts, src = dataset)
+    clin_raw <- load_concepts(demo_concepts, src = dataset, concepts = dict)
     clinical <- as.data.frame(clin_raw)
     clin_id <- id_var(clin_raw)
     names(clinical)[names(clinical) == clin_id] <- "stay_id"
@@ -387,16 +442,16 @@ extract_admin_sic <- function(dataset) {
 # 4. Extract mortality info
 # ---------------------------------------------------------------------------
 
-extract_mortality_data <- function(dataset) {
+extract_mortality_data <- function(dataset, dict) {
   message("[4/6] Extracting mortality data...")
 
   fam <- dataset_family(dataset)
   result <- switch(fam,
-    miiv  = extract_mortality_miiv(dataset),
-    mimic = extract_mortality_mimic(dataset),
+    miiv  = extract_mortality_miiv(dataset, dict),
+    mimic = extract_mortality_mimic(dataset, dict),
     eicu  = extract_mortality_eicu(dataset),
     # For other datasets, fall back to RICU "death" concept
-    extract_mortality_generic(dataset)
+    extract_mortality_generic(dataset, dict)
   )
 
   # Ensure expected columns
@@ -411,12 +466,12 @@ extract_mortality_data <- function(dataset) {
   result
 }
 
-extract_mortality_miiv <- function(dataset) {
+extract_mortality_miiv <- function(dataset, dict) {
   icu <- load_table(dataset, "icustays")
   pat <- load_table(dataset, "patients")
   adm <- load_table(dataset, "admissions")
 
-  if (is.null(icu)) return(extract_mortality_generic(dataset))
+  if (is.null(icu)) return(extract_mortality_generic(dataset, dict))
 
   df <- data.frame(stay_id = icu$stay_id, stringsAsFactors = FALSE)
 
@@ -449,12 +504,12 @@ extract_mortality_miiv <- function(dataset) {
   df
 }
 
-extract_mortality_mimic <- function(dataset) {
+extract_mortality_mimic <- function(dataset, dict) {
   icu <- load_table(dataset, "icustays")
   pat <- load_table(dataset, "patients")
   adm <- load_table(dataset, "admissions")
 
-  if (is.null(icu)) return(extract_mortality_generic(dataset))
+  if (is.null(icu)) return(extract_mortality_generic(dataset, dict))
 
   id_col <- if ("stay_id" %in% names(icu)) "stay_id" else "icustay_id"
   df <- data.frame(stay_id = icu[[id_col]], stringsAsFactors = FALSE)
@@ -523,8 +578,8 @@ extract_mortality_eicu <- function(dataset) {
 }
 
 #' Fallback: use RICU "death" concept for datasets without detailed tables.
-extract_mortality_generic <- function(dataset) {
-  avail <- names(load_dictionary(src = dataset))
+extract_mortality_generic <- function(dataset, dict) {
+  avail <- names(dict)
   if (!"death" %in% avail) {
     message("  Warning: 'death' concept not available; returning empty mortality.")
     wins <- stay_windows(dataset, interval = hours(1L))
@@ -538,7 +593,7 @@ extract_mortality_generic <- function(dataset) {
     ))
   }
 
-  death_raw <- load_concepts("death", src = dataset)
+  death_raw <- load_concepts("death", src = dataset, concepts = dict)
   death_df <- as.data.frame(death_raw)
   id_name <- id_var(death_raw)
 
@@ -705,53 +760,130 @@ main <- function(opts) {
                  dataset, paste(VALID_DATASETS, collapse = ", ")))
   }
 
-  # Check data availability
-  if (!is_data_avail(dataset)) {
-    stop(sprintf(
-      paste0("Dataset '%s' data is not available in ricu. ",
-             "Run ricu::setup_src_data('%s') first, or ensure ",
-             "data files are in the expected location."),
-      dataset, dataset
-    ))
+  # Default paths for local raw CSV files
+  DEFAULT_RAW_PATHS <- c(
+    miiv  = "data/raw/mimiciv",
+    eicu  = "data/raw/eicu-crd"
+  )
+
+  # Check data availability; auto-import from local CSVs if needed.
+  # is_data_avail() does not exist in current ricu versions.
+  # as_src_env() creates an environment even without data, so we test with
+  # load_dictionary() which actually validates that source data is loaded.
+  data_available <- tryCatch({
+    dict <- load_dictionary(src = dataset)
+    length(dict) > 0
+  }, error = function(e) FALSE)
+
+  if (!data_available) {
+    raw_dir <- opts$raw_data_dir
+    if (is.null(raw_dir) && dataset %in% names(DEFAULT_RAW_PATHS)) {
+      raw_dir <- DEFAULT_RAW_PATHS[[dataset]]
+    }
+
+    if (!is.null(raw_dir) && dir.exists(raw_dir)) {
+      message(sprintf("Dataset '%s' not set up in ricu. Importing from %s ...",
+                      dataset, raw_dir))
+      # Symlink the raw data into ricu's expected data directory so that
+      # setup_src_data() finds CSVs and writes fst files in one place.
+      ricu_dir <- src_data_dir(dataset)
+      # Remove stale/broken symlinks before creating a new one
+      link_target <- Sys.readlink(ricu_dir)
+      if (!is.na(link_target) && nchar(link_target) > 0 && !dir.exists(ricu_dir)) {
+        file.remove(ricu_dir)
+      }
+      if (!dir.exists(ricu_dir) && !file.exists(ricu_dir)) {
+        dir.create(dirname(ricu_dir), recursive = TRUE, showWarnings = FALSE)
+        file.symlink(normalizePath(raw_dir), ricu_dir)
+        message(sprintf("  Symlinked %s -> %s", ricu_dir,
+                        normalizePath(raw_dir)))
+      }
+      # Import tables one at a time to keep memory usage low.
+      # import_src() with all tables at once can OOM on machines with <=18GB RAM.
+      cfg <- load_src_cfg(dataset)
+
+      # Safer table name discovery with fallback
+      all_tables <- tryCatch(
+        names(as_tbl_cfg(cfg[[dataset]])),
+        error = function(e) tryCatch(
+          names(as_tbl_cfg(cfg[[1]])),
+          error = function(e2) names(cfg[[1]])
+        )
+      )
+
+      # ricu requires ALL tables to be present before it considers a source
+      # "available" (e.g. load_dictionary(src=...) will fail otherwise).
+      # Import every table, but one at a time to control peak memory.
+      message(sprintf("  Importing %d tables one at a time...", length(all_tables)))
+      for (tbl_name in all_tables) {
+        message(sprintf("  Importing: %s", tbl_name))
+        tryCatch({
+          import_src(dataset, tables = tbl_name)
+        }, error = function(e) {
+          warning(sprintf("  Failed to import '%s': %s", tbl_name,
+                          conditionMessage(e)))
+        })
+        gc()
+      }
+    } else {
+      stop(sprintf(
+        paste0("Dataset '%s' data is not available in ricu and no raw CSV ",
+               "files found. Either:\n",
+               "  1. Place raw CSVs in %s\n",
+               "  2. Pass --raw_data_dir /path/to/csvs\n",
+               "  3. Run ricu::setup_src_data('%s') manually in R"),
+        dataset,
+        if (dataset %in% names(DEFAULT_RAW_PATHS)) DEFAULT_RAW_PATHS[[dataset]]
+        else paste0("data/raw/", dataset),
+        dataset
+      ))
+    }
   }
 
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   message(sprintf("=== RICU extraction: dataset=%s, output=%s, hours=%d ===",
                   dataset, output_dir, seq_length_hours))
 
+  # Parse the concept dictionary once, bypassing RICU's availability gate
+  # which can fail even after successful import_src().
+  dict <- parse_ricu_dictionary(dataset)
+
   # 1. Discover concepts
-  concepts <- discover_ts_concepts(dataset)
+  concepts <- discover_ts_concepts(dataset, dict)
   if (length(concepts) == 0) {
     stop("No time-series concepts found. Check ricu setup.")
   }
 
   # 2. Extract timeseries
-  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours)
-  write_parquet(
-    as.data.frame(ts_result$df),
-    file.path(output_dir, "ricu_timeseries.parquet")
-  )
+  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours, dict)
+  concept_cols <- ts_result$concept_cols
+  n_stays <- length(unique(ts_result$df$stay_id))
+  # arrow::write_parquet writes data.table directly — no as.data.frame() needed
+  write_parquet(ts_result$df, file.path(output_dir, "ricu_timeseries.parquet"))
+  rm(ts_result); gc()
 
   # 3. Extract stays
-  stays <- extract_stays_data(dataset)
+  stays <- extract_stays_data(dataset, dict)
   write_parquet(stays, file.path(output_dir, "ricu_stays.parquet"))
+  rm(stays); gc()
 
   # 4. Extract mortality
-  mortality <- extract_mortality_data(dataset)
+  mortality <- extract_mortality_data(dataset, dict)
   write_parquet(mortality, file.path(output_dir, "ricu_mortality.parquet"))
+  rm(mortality); gc()
 
   # 5. Extract diagnoses
   diagnoses <- extract_diagnoses_data(dataset)
   write_parquet(diagnoses, file.path(output_dir, "ricu_diagnoses.parquet"))
+  rm(diagnoses); gc()
 
   # 6. Write metadata
-  n_stays <- length(unique(ts_result$df$stay_id))
-  write_metadata(output_dir, dataset, ts_result$concept_cols,
+  write_metadata(output_dir, dataset, concept_cols,
                  seq_length_hours, n_stays)
 
   message("=== Extraction complete. ===")
   message(sprintf("  Output: %s", output_dir))
-  message(sprintf("  Concepts: %d", length(ts_result$concept_cols)))
+  message(sprintf("  Concepts: %d", length(concept_cols)))
   message(sprintf("  Stays (with data): %d", n_stays))
 }
 
