@@ -11,7 +11,7 @@
 #   uv run python scripts/training/pretrain.py model=smart ssl=smart
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - model: smart
   - ssl: smart
   - _self_

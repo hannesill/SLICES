@@ -1,35 +1,27 @@
 """Abstract base class for ICU data extractors.
 
-Reads from local Parquet files using DuckDB for efficient SQL queries.
-Users specify parquet_root pointing to their local Parquet files.
+Provides shared infrastructure for extraction pipelines: configuration,
+validation, label extraction, dense timeseries conversion, atomic file I/O,
+and file locking.  Concrete subclasses (e.g. ``RicuExtractor``) implement
+dataset-specific loading and the ``run()`` entry point.
 """
 
 import os
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, Generator, List, Optional
 
-import duckdb
 import polars as pl
 import portalocker
 import yaml
 from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeRemainingColumn,
-)
 
 from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS
-from slices.data.config_loader import load_timeseries_concepts
-from slices.data.config_schemas import AggregationType, TimeSeriesConceptConfig
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+from slices.data.utils import get_package_data_dir
 
 console = Console()
 
@@ -44,8 +36,6 @@ class ExtractorConfig(BaseModel):
         output_dir: Directory to write extracted data to.
         seq_length_hours: Length of time-series sequences in hours (must be > 0).
         feature_set: Feature set to extract ('core' or 'extended').
-        concepts_dir: Path to concepts directory (auto-detected if None).
-        datasets_dir: Path to dataset configs directory (auto-detected if None).
         tasks_dir: Path to task config directory (auto-detected if None).
         tasks: List of task names to extract labels for.
         min_stay_hours: Minimum ICU stay length to include (must be >= 0).
@@ -56,8 +46,6 @@ class ExtractorConfig(BaseModel):
     output_dir: str = "data/processed"
     seq_length_hours: int = Field(default=SEQ_LENGTH_HOURS, gt=0)
     feature_set: str = "core"  # core | extended
-    concepts_dir: Optional[str] = None
-    datasets_dir: Optional[str] = None  # Path to dataset configs (auto-detected if None)
     tasks_dir: Optional[str] = None
     tasks: List[str] = Field(
         default_factory=lambda: ["mortality_24h", "mortality_48h", "mortality_hospital"]
@@ -89,8 +77,9 @@ class ExtractorConfig(BaseModel):
 class BaseExtractor(ABC):
     """Abstract base class for ICU data extractors.
 
-    Reads from local Parquet files using DuckDB for efficient SQL queries.
-    Users specify parquet_root pointing to their local Parquet files.
+    Provides shared utilities for validation, label extraction, dense
+    timeseries conversion, resume logic, atomic file I/O, and file locking.
+    Subclasses implement dataset-specific data loading and ``run()``.
     """
 
     def __init__(self, config: ExtractorConfig) -> None:
@@ -105,100 +94,10 @@ class BaseExtractor(ABC):
         self.config = config
         self.parquet_root = Path(config.parquet_root)
         self.output_dir = Path(config.output_dir)
-        self.conn = duckdb.connect()  # In-memory DuckDB for queries
-
-        # Caches to avoid repeated expensive queries during batch processing
-        self._stays_cache: Optional[pl.DataFrame] = None
-        self._feature_mapping_cache: Optional[Dict[str, TimeSeriesConceptConfig]] = None
 
         # Validate parquet directory exists
         if not self.parquet_root.exists():
             raise ValueError(f"Parquet directory not found: {self.parquet_root}")
-
-    def __del__(self) -> None:
-        """Cleanup DuckDB connection on deletion."""
-        if hasattr(self, "conn"):
-            try:
-                self.conn.close()
-            except Exception:
-                pass  # Ignore errors during cleanup
-
-    def _get_stays_cached(self) -> pl.DataFrame:
-        """Get stays DataFrame with caching to avoid repeated queries.
-
-        This is used internally during batch processing to avoid re-querying
-        the database for each batch.
-
-        Returns:
-            Cached stays DataFrame.
-        """
-        if self._stays_cache is None:
-            self._stays_cache = self.extract_stays()
-        return self._stays_cache
-
-    def _get_feature_mapping_cached(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
-        """Get feature mapping with caching to avoid repeated YAML loading.
-
-        Args:
-            feature_set: Name of feature set to load (e.g., 'core').
-
-        Returns:
-            Cached feature mapping dictionary.
-        """
-        if self._feature_mapping_cache is None:
-            self._feature_mapping_cache = self._load_feature_mapping(feature_set)
-        return self._feature_mapping_cache
-
-    def _query(self, sql: str) -> pl.DataFrame:
-        """Execute SQL query on local Parquet files and return Polars DataFrame.
-
-        Args:
-            sql: SQL query string.
-
-        Returns:
-            Polars DataFrame with query results.
-        """
-        return self.conn.execute(sql).pl()
-
-    def _parquet_path(self, schema: str, table: str) -> Path:
-        """Get path to a Parquet file: {parquet_root}/{schema}/{table}.parquet.
-
-        Args:
-            schema: Schema/directory name (e.g., 'hosp', 'icu').
-            table: Table name (e.g., 'patients', 'chartevents').
-
-        Returns:
-            Path to the Parquet file.
-        """
-        return self.parquet_root / schema / f"{table}.parquet"
-
-    @staticmethod
-    def _get_package_data_dir() -> Path:
-        """Get the package data directory (``src/slices/data/``).
-
-        Returns:
-            Path to the directory containing benchmark YAML configs.
-        """
-        return Path(__file__).parent.parent
-
-    def _get_concepts_path(self) -> Path:
-        """Get path to concepts directory.
-
-        Returns:
-            Path to concepts directory containing feature YAML files.
-
-        Raises:
-            FileNotFoundError: If concepts directory cannot be found.
-        """
-        if self.config.concepts_dir is not None:
-            concepts_path = Path(self.config.concepts_dir)
-            if concepts_path.exists():
-                return concepts_path
-            raise FileNotFoundError(
-                f"Concepts directory specified in config not found: {concepts_path}"
-            )
-
-        return self._get_package_data_dir() / "concepts"
 
     def _get_tasks_path(self) -> Path:
         """Get path to tasks directory.
@@ -215,26 +114,7 @@ class BaseExtractor(ABC):
                 return tasks_path
             raise FileNotFoundError(f"Tasks directory specified in config not found: {tasks_path}")
 
-        return self._get_package_data_dir() / "tasks"
-
-    def _get_datasets_path(self) -> Path:
-        """Get path to datasets directory.
-
-        Returns:
-            Path to datasets directory containing dataset config YAML files.
-
-        Raises:
-            FileNotFoundError: If datasets directory cannot be found.
-        """
-        if self.config.datasets_dir is not None:
-            datasets_path = Path(self.config.datasets_dir)
-            if datasets_path.exists():
-                return datasets_path
-            raise FileNotFoundError(
-                f"Datasets directory specified in config not found: {datasets_path}"
-            )
-
-        return self._get_package_data_dir() / "datasets"
+        return get_package_data_dir() / "tasks"
 
     def _load_task_configs(self, task_names: List[str]) -> List[LabelConfig]:
         """Load task configurations from YAML files.
@@ -299,194 +179,12 @@ class BaseExtractor(ABC):
                 f"or change seq_length_hours in your extraction config to {obs_window}."
             )
 
-    def _load_feature_mapping(self, feature_set: str) -> Dict[str, TimeSeriesConceptConfig]:
-        """Load feature mapping from YAML config files.
-
-        Uses the new config_loader to load validated Pydantic models from
-        split concept files (vitals.yaml, labs.yaml, outputs.yaml, etc.).
-
-        Args:
-            feature_set: Name of feature set to load (e.g., 'core').
-
-        Returns:
-            Dictionary mapping feature names to validated TimeSeriesConceptConfig.
-
-        Raises:
-            FileNotFoundError: If concepts directory cannot be found.
-            ValueError: If no features found for this dataset.
-        """
-        concepts_dir = self._get_concepts_path()
-        dataset_name = self._get_dataset_name()
-
-        # Use new config loader to load validated Pydantic models
-        feature_mapping = load_timeseries_concepts(
-            concepts_dir=concepts_dir,
-            dataset_name=dataset_name,
-            feature_set=feature_set,
-            categories=self.config.categories,
-        )
-
-        return feature_mapping
-
-    def _bin_to_hourly_grid(
-        self,
-        raw_events: pl.DataFrame,
-        stay_ids: List[int],
-        feature_mapping: Dict[str, TimeSeriesConceptConfig],
-    ) -> pl.DataFrame:
-        """Bin raw events to hourly grid and create observation masks (generic).
-
-        This method is completely dataset-agnostic. It expects raw_events to have:
-        - stay_id, charttime, feature_name, valuenum columns
-
-        Args:
-            raw_events: Raw events DataFrame with standardized schema.
-            stay_ids: List of ICU stay IDs.
-            feature_mapping: Feature mapping with TimeSeriesConceptConfig values.
-
-        Returns:
-            Wide-format DataFrame with hourly bins and observation masks.
-        """
-        # Get stay info for intime calculation (use cache to avoid repeated queries)
-        stays = self._get_stays_cached().filter(pl.col("stay_id").is_in(stay_ids))
-
-        # Join with stays to get intime and calculate hour offset
-        events_with_hours = (
-            raw_events.join(
-                stays.select(["stay_id", "intime"]), on="stay_id", how="left"
-            ).with_columns(
-                [
-                    # Calculate hour offset from ICU admission (floor to get hour bins)
-                    ((pl.col("charttime") - pl.col("intime")).dt.total_seconds() / 3600)
-                    .floor()
-                    .cast(pl.Int32)
-                    .alias("hour")
-                ]
-            )
-            # Filter out events before admission (hour < 0)
-            .filter(pl.col("hour") >= 0)
-        )
-
-        # Group features by aggregation type
-        agg_groups: Dict[AggregationType, List[str]] = {}
-        for feature_name, config in feature_mapping.items():
-            agg_type = config.aggregation
-            agg_groups.setdefault(agg_type, []).append(feature_name)
-
-        aggregated_parts: List[pl.DataFrame] = []
-
-        # Process each aggregation type
-        for agg_type, features in agg_groups.items():
-            filtered = events_with_hours.filter(pl.col("feature_name").is_in(features))
-            if filtered.is_empty():
-                continue
-
-            grouped = filtered.group_by(["stay_id", "hour", "feature_name"])
-
-            if agg_type == AggregationType.MEAN:
-                agg_df = grouped.agg(
-                    [pl.col("valuenum").mean().alias("value"), pl.lit(True).alias("observed")]
-                )
-            elif agg_type == AggregationType.SUM:
-                agg_df = grouped.agg(
-                    [pl.col("valuenum").sum().alias("value"), pl.lit(True).alias("observed")]
-                )
-            elif agg_type == AggregationType.MAX:
-                agg_df = grouped.agg(
-                    [pl.col("valuenum").max().alias("value"), pl.lit(True).alias("observed")]
-                )
-            elif agg_type == AggregationType.MIN:
-                agg_df = grouped.agg(
-                    [pl.col("valuenum").min().alias("value"), pl.lit(True).alias("observed")]
-                )
-            elif agg_type == AggregationType.LAST:
-                # Sort by charttime to ensure chronological ordering before taking last
-                agg_df = grouped.agg(
-                    [
-                        pl.col("valuenum").sort_by("charttime").last().alias("value"),
-                        pl.lit(True).alias("observed"),
-                    ]
-                )
-            elif agg_type == AggregationType.FIRST:
-                # Sort by charttime to ensure chronological ordering before taking first
-                agg_df = grouped.agg(
-                    [
-                        pl.col("valuenum").sort_by("charttime").first().alias("value"),
-                        pl.lit(True).alias("observed"),
-                    ]
-                )
-            elif agg_type == AggregationType.ANY:
-                agg_df = grouped.agg([pl.lit(True).alias("value"), pl.lit(True).alias("observed")])
-            else:
-                # Fallback to mean
-                agg_df = grouped.agg(
-                    [pl.col("valuenum").mean().alias("value"), pl.lit(True).alias("observed")]
-                )
-
-            aggregated_parts.append(agg_df)
-
-        aggregated = (
-            pl.concat(aggregated_parts)
-            if aggregated_parts
-            else pl.DataFrame(
-                schema={
-                    "stay_id": pl.Int64,
-                    "hour": pl.Int64,
-                    "feature_name": pl.Utf8,
-                    "value": pl.Float64,
-                    "observed": pl.Boolean,
-                }
-            )
-        )
-
-        # Pivot to wide format: one column per feature
-        # First pivot the values
-        pivoted_values = aggregated.pivot(
-            values="value", index=["stay_id", "hour"], columns="feature_name"
-        )
-
-        # Pivot the observation masks
-        pivoted_masks = aggregated.pivot(
-            values="observed", index=["stay_id", "hour"], columns="feature_name"
-        )
-
-        # Rename mask columns to have _mask suffix (exclude index columns)
-        mask_columns = {
-            col: f"{col}_mask" for col in pivoted_masks.columns if col not in ["stay_id", "hour"]
-        }
-        pivoted_masks = pivoted_masks.rename(mask_columns)
-
-        # Join values and masks
-        result = pivoted_values.join(pivoted_masks, on=["stay_id", "hour"], how="left")
-
-        # Ensure all expected feature columns exist (even if no data)
-        expected_features = list(feature_mapping.keys())
-        for feature in expected_features:
-            # Add value column if missing
-            if feature not in result.columns:
-                result = result.with_columns([pl.lit(None, dtype=pl.Float64).alias(feature)])
-            # Add mask column if missing
-            mask_col = f"{feature}_mask"
-            if mask_col not in result.columns:
-                result = result.with_columns([pl.lit(False).alias(mask_col)])
-
-        # Fill missing mask values with False (not observed)
-        for col in result.columns:
-            if col.endswith("_mask"):
-                result = result.with_columns([pl.col(col).fill_null(False)])
-
-        # Sort by stay_id and hour for cleaner output
-        result = result.sort(["stay_id", "hour"])
-
-        return result
-
     @abstractmethod
     def _get_dataset_name(self) -> str:
         """Get the name of the dataset for this extractor.
 
         Returns:
             Dataset name (e.g., 'mimic_iv', 'eicu', 'hirid').
-            Used to parse dataset-specific configs from concept YAML files.
         """
         pass
 
@@ -496,40 +194,13 @@ class BaseExtractor(ABC):
 
         Returns:
             DataFrame with columns: stay_id, patient_id, intime, outtime,
-            length_of_stay_days, age, gender, admission_type, first_careunit,
-            last_careunit.
+            los_days, age, gender, etc.
         """
         pass
 
     @abstractmethod
-    def _extract_raw_events(
-        self, stay_ids: List[int], feature_mapping: Dict[str, TimeSeriesConceptConfig]
-    ) -> pl.DataFrame:
-        """Extract raw time-series events for specified features (dataset-specific).
-
-        This is the dataset-specific method that queries the appropriate tables
-        and returns raw events. Each dataset implements this differently.
-
-        Args:
-            stay_ids: List of ICU stay IDs to extract.
-            feature_mapping: Dictionary mapping feature names to TimeSeriesConceptConfig.
-
-        Returns:
-            DataFrame with columns:
-                - stay_id: ICU stay identifier
-                - charttime: Timestamp of observation (or similar time column)
-                - feature_name: Name of feature (canonical name from config)
-                - valuenum: Numeric value
-        """
-        pass
-
     def extract_timeseries(self, stay_ids: List[int]) -> pl.DataFrame:
-        """Extract time-series features for given stays (generic orchestration).
-
-        This method provides generic orchestration for time-series extraction:
-        1. Load feature mapping from concept configs
-        2. Extract raw events (dataset-specific via _extract_raw_events)
-        3. Bin to hourly grid and create observation masks
+        """Extract time-series features for given stays.
 
         Args:
             stay_ids: List of ICU stay IDs to extract.
@@ -538,30 +209,10 @@ class BaseExtractor(ABC):
             DataFrame with columns:
                 - stay_id: ICU stay identifier
                 - hour: Hour offset from ICU admission (0, 1, 2, ...)
-                - {feature_name}: Value for each feature (mean aggregated)
+                - {feature_name}: Value for each feature
                 - {feature_name}_mask: Boolean indicating if value was observed
         """
-        # Use feature_set from config (or default to 'core')
-        feature_set = self.config.feature_set
-
-        # Load feature mapping for this dataset (use cache for batch processing)
-        feature_mapping = self._get_feature_mapping_cached(feature_set)
-
-        # Validate feature mapping is non-empty
-        if not feature_mapping:
-            raise ValueError(
-                f"No features loaded from concept set '{feature_set}' for dataset "
-                f"'{self._get_dataset_name()}'. Check that your YAML config has "
-                f"entries for this dataset under each feature."
-            )
-
-        # Extract raw events (dataset-specific implementation)
-        raw_events = self._extract_raw_events(stay_ids, feature_mapping)
-
-        # Bin to hourly grid (generic)
-        hourly_binned = self._bin_to_hourly_grid(raw_events, stay_ids, feature_mapping)
-
-        return hourly_binned
+        pass
 
     @abstractmethod
     def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
@@ -973,276 +624,14 @@ class BaseExtractor(ABC):
                 pass
             raise
 
+    @abstractmethod
     def run(self) -> None:
-        """Execute full extraction pipeline.
+        """Execute the full extraction pipeline.
 
-        Extracts and saves:
+        Subclasses implement this to extract and save:
         - static.parquet: Stay-level metadata (demographics, admission info)
         - timeseries.parquet: Dense hourly features with observation masks
         - labels.parquet: Task labels for downstream prediction
         - metadata.yaml: Extraction metadata (feature names, task names, etc.)
-
-        If output files already exist with matching configuration, will resume
-        extraction by skipping already-extracted stays and merging results.
         """
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Check for existing extraction
-        existing_data = self._check_existing_extraction()
-        existing_stay_ids = set()
-        if existing_data is not None:
-            existing_stay_ids = set(existing_data["stays"]["stay_id"].to_list())
-
-        console.print("\n[bold blue]SLICES Data Extraction[/bold blue]")
-        console.print(f"Output directory: {self.output_dir}")
-        console.print(f"Feature set: {self.config.feature_set}")
-        console.print(f"Sequence length: {self.config.seq_length_hours} hours")
-        console.print(f"Min stay length: {self.config.min_stay_hours} hours")
-        if existing_stay_ids:
-            console.print(f"Resuming: {len(existing_stay_ids)} stays already extracted\n")
-        else:
-            console.print("")
-
-        # -------------------------------------------------------------------------
-        # Step 1: Extract stays (static features)
-        # -------------------------------------------------------------------------
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Extracting ICU stays...", total=None)
-            stays = self.extract_stays()
-            progress.update(task, completed=True)
-
-        # Filter by minimum stay length
-        min_los_days = self.config.min_stay_hours / 24.0
-        stays_filtered = stays.filter(pl.col("los_days") >= min_los_days)
-
-        console.print(f"Found {len(stays)} ICU stays")
-        console.print(
-            f"After filtering (>={self.config.min_stay_hours}h): {len(stays_filtered)} stays"
-        )
-
-        # Filter out already-extracted stays if resuming
-        if existing_stay_ids:
-            stays_filtered = stays_filtered.filter(
-                ~pl.col("stay_id").is_in(list(existing_stay_ids))
-            )
-            console.print(
-                f"After excluding already-extracted: {len(stays_filtered)} stays to process"
-            )
-
-        stay_ids = stays_filtered["stay_id"].to_list()
-
-        if len(stay_ids) == 0:
-            if existing_stay_ids:
-                console.print("[green]All stays already extracted. Nothing to do![/green]")
-                return
-            else:
-                console.print("[red]Error: No stays remaining after filtering![/red]")
-                return
-
-        # Validate stays have required fields
-        self._validate_stays(stays_filtered)
-
-        # -------------------------------------------------------------------------
-        # Step 2: Extract time-series features (batched for memory efficiency)
-        # -------------------------------------------------------------------------
-        batch_size = self.config.batch_size
-        n_batches = (len(stay_ids) + batch_size - 1) // batch_size
-        console.print(
-            f"\n[bold]Extracting timeseries for {len(stay_ids)} stays "
-            f"in {n_batches} batches (batch_size={batch_size})...[/bold]"
-        )
-
-        # Load feature mapping once (cached for reuse)
-        feature_set = self.config.feature_set
-        feature_mapping = self._get_feature_mapping_cached(feature_set)
-
-        if not feature_mapping:
-            raise ValueError(
-                f"No features loaded from concept set '{feature_set}' for dataset "
-                f"'{self._get_dataset_name()}'. Check that your YAML config has "
-                f"entries for this dataset under each feature."
-            )
-
-        # Process stays in batches to avoid OOM
-        sparse_batches: List[pl.DataFrame] = []
-        feature_names: List[str] = []
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Processing batches...", total=n_batches)
-
-            for batch_idx in range(n_batches):
-                start_idx = batch_idx * batch_size
-                end_idx = min((batch_idx + 1) * batch_size, len(stay_ids))
-                batch_stay_ids = stay_ids[start_idx:end_idx]
-
-                # Step 2a: Extract raw events for this batch
-                raw_events = self._extract_raw_events(batch_stay_ids, feature_mapping)
-
-                # Step 2b: Bin to hourly grid for this batch
-                sparse_batch = self._bin_to_hourly_grid(raw_events, batch_stay_ids, feature_mapping)
-                sparse_batches.append(sparse_batch)
-
-                # Extract feature names from first non-empty batch
-                if not feature_names and not sparse_batch.is_empty():
-                    feature_names = [
-                        col
-                        for col in sparse_batch.columns
-                        if col not in ["stay_id", "hour"] and not col.endswith("_mask")
-                    ]
-
-                progress.update(task, advance=1)
-
-        # Concatenate all batches (use how="diagonal" to handle schema differences)
-        # Different batches may have different columns present depending on data
-        if sparse_batches:
-            sparse_timeseries = pl.concat(sparse_batches, how="diagonal")
-        else:
-            # Empty result with expected schema
-            sparse_timeseries = pl.DataFrame(
-                schema={
-                    "stay_id": pl.Int64,
-                    "hour": pl.Int32,
-                }
-            )
-
-        # If no feature names were found, get them from feature mapping
-        if not feature_names:
-            feature_names = list(feature_mapping.keys())
-
-        console.print(f"Extracted {len(feature_names)} features: {feature_names}")
-
-        # Validate timeseries data
-        self._validate_timeseries(sparse_timeseries, stay_ids, feature_names)
-
-        # Convert to dense representation (also in batches)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Converting to dense timeseries...", total=None)
-            dense_timeseries = self._create_dense_timeseries(
-                sparse_timeseries, stays_filtered, feature_names
-            )
-            progress.update(task, completed=True)
-
-        # -------------------------------------------------------------------------
-        # Step 3: Extract labels
-        # -------------------------------------------------------------------------
-        task_configs = self._load_task_configs(self.config.tasks)
-        task_names = [tc.task_name for tc in task_configs]
-
-        if task_configs:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task(
-                    f"Extracting labels for {len(task_configs)} tasks...", total=None
-                )
-                labels = self.extract_labels(stay_ids, task_configs)
-                progress.update(task, completed=True)
-
-            console.print(f"Extracted labels for tasks: {task_names}")
-        else:
-            # No tasks configured - create DataFrame with just stay_ids
-            labels = pl.DataFrame({"stay_id": stay_ids})
-            console.print("[yellow]No task configs found - labels will be empty[/yellow]")
-
-        # -------------------------------------------------------------------------
-        # Step 4-5: Merge with existing data and save (with file locking)
-        # -------------------------------------------------------------------------
-        # Use file locking to prevent race conditions when merging and saving.
-        # This protects against TOCTOU (time-of-check-to-time-of-use) race conditions
-        # where two concurrent processes might both try to merge and write.
-        static_path = self.output_dir / "static.parquet"
-        timeseries_path = self.output_dir / "timeseries.parquet"
-        labels_path = self.output_dir / "labels.parquet"
-
-        with self._with_file_lock(static_path):
-            # Re-check for existing data inside the lock to handle race conditions
-            # Another process might have written new data while we were extracting
-            existing_data_locked = self._check_existing_extraction()
-
-            if existing_data_locked is not None:
-                console.print("\n[bold]Merging with existing data...[/bold]")
-
-                # Merge stays
-                stays_filtered = pl.concat([existing_data_locked["stays"], stays_filtered])
-                console.print(f"  ✓ Merged stays: {len(stays_filtered)} total")
-
-                # Merge timeseries
-                dense_timeseries = pl.concat([existing_data_locked["timeseries"], dense_timeseries])
-                console.print(f"  ✓ Merged timeseries: {len(dense_timeseries)} total")
-
-                # Merge labels
-                labels = pl.concat([existing_data_locked["labels"], labels])
-                console.print(f"  ✓ Merged labels: {len(labels)} total")
-
-            # -------------------------------------------------------------------------
-            # Step 5: Save to Parquet (atomic writes inside lock)
-            # -------------------------------------------------------------------------
-            console.print("\n[bold]Saving to Parquet...[/bold]")
-
-            # Static features (demographics, admission info)
-            self._atomic_write(static_path, lambda tmp: stays_filtered.write_parquet(tmp))
-            console.print(f"  ✓ Static features: {static_path} ({len(stays_filtered)} stays)")
-
-            # Time-series (dense format with masks)
-            self._atomic_write(timeseries_path, lambda tmp: dense_timeseries.write_parquet(tmp))
-            console.print(f"  ✓ Timeseries: {timeseries_path} ({len(dense_timeseries)} stays)")
-
-            # Labels
-            self._atomic_write(labels_path, lambda tmp: labels.write_parquet(tmp))
-            console.print(f"  ✓ Labels: {labels_path} ({len(labels)} stays)")
-
-            # Validate labels consistency
-            self._validate_labels(labels, stay_ids)
-
-            # Metadata (for ICUDataset to know feature names, etc.)
-            # Written inside lock to ensure consistency with data files
-            metadata = {
-                "dataset": self._get_dataset_name(),
-                "feature_set": self.config.feature_set,
-                "categories": self.config.categories,
-                "feature_names": feature_names,
-                "n_features": len(feature_names),
-                "seq_length_hours": self.config.seq_length_hours,
-                "min_stay_hours": self.config.min_stay_hours,
-                "task_names": task_names,
-                "n_stays": len(stays_filtered),
-                # Extraction configuration for reproducibility
-                "extraction_config": {
-                    "parquet_root": str(self.parquet_root),
-                    "output_dir": str(self.output_dir),
-                    "feature_set": self.config.feature_set,
-                    "categories": self.config.categories,
-                    "seq_length_hours": self.config.seq_length_hours,
-                    "min_stay_hours": self.config.min_stay_hours,
-                    "tasks": self.config.tasks,
-                    "extraction_timestamp": datetime.now().isoformat(),
-                },
-            }
-
-            metadata_path = self.output_dir / "metadata.yaml"
-
-            def write_metadata(tmp: str) -> None:
-                with open(tmp, "w") as f:
-                    yaml.dump(metadata, f, default_flow_style=False)
-
-            self._atomic_write(metadata_path, write_metadata, suffix=".yaml")
-            console.print(f"  ✓ Metadata: {metadata_path}")
-
-        console.print("\n[bold green]Extraction complete![/bold green]")
+        pass

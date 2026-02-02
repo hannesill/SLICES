@@ -514,7 +514,7 @@ class SnapshotMixin:
     capture hooks to the extraction pipeline without modifying base.py.
 
     Usage:
-        class DebuggableExtractor(SnapshotMixin, MIMICIVExtractor):
+        class DebuggableExtractor(SnapshotMixin, RicuExtractor):
             pass
 
         extractor = DebuggableExtractor(config)

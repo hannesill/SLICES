@@ -26,7 +26,6 @@ class TestExtractorConfigBasic:
         assert config.output_dir == "data/processed"
         assert config.seq_length_hours == 48
         assert config.feature_set == "core"
-        assert config.concepts_dir is None
         assert config.tasks_dir is None
         assert config.min_stay_hours == 48
         assert "mortality_24h" in config.tasks
@@ -38,7 +37,6 @@ class TestExtractorConfigBasic:
             output_dir="/custom/output",
             seq_length_hours=72,
             feature_set="extended",
-            concepts_dir="/custom/concepts",
             tasks_dir="/custom/tasks",
             tasks=["mortality_24h"],
             min_stay_hours=12,
@@ -48,7 +46,6 @@ class TestExtractorConfigBasic:
         assert config.output_dir == "/custom/output"
         assert config.seq_length_hours == 72
         assert config.feature_set == "extended"
-        assert config.concepts_dir == "/custom/concepts"
         assert config.tasks_dir == "/custom/tasks"
         assert config.tasks == ["mortality_24h"]
         assert config.min_stay_hours == 12
@@ -209,20 +206,10 @@ class TestExtractorConfigTasksParameter:
 class TestExtractorConfigOptionalPaths:
     """Test optional path parameters."""
 
-    def test_concepts_dir_none_by_default(self):
-        """Test concepts_dir is None by default (auto-detected)."""
-        config = ExtractorConfig(parquet_root="/path")
-        assert config.concepts_dir is None
-
     def test_tasks_dir_none_by_default(self):
         """Test tasks_dir is None by default (auto-detected)."""
         config = ExtractorConfig(parquet_root="/path")
         assert config.tasks_dir is None
-
-    def test_custom_concepts_dir(self):
-        """Test custom concepts_dir path."""
-        config = ExtractorConfig(parquet_root="/path", concepts_dir="/custom/concepts")
-        assert config.concepts_dir == "/custom/concepts"
 
     def test_custom_tasks_dir(self):
         """Test custom tasks_dir path."""

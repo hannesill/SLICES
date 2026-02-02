@@ -4,11 +4,11 @@
 # It provides common settings and includes shared sub-configs.
 #
 # Included sub-configs:
-#   - data: Data paths, extraction settings, and loading settings (configs/data/mimic_iv.yaml)
+#   - data: Data paths, extraction settings, and loading settings (configs/data/ricu.yaml)
 #   - model: Model architecture (configs/model/transformer.yaml)
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - model: transformer
   - _self_
 

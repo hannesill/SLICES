@@ -14,7 +14,6 @@ Usage:
 """
 
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import polars as pl
@@ -47,15 +46,9 @@ class RicuExtractor(BaseExtractor):
     """
 
     def __init__(self, config: ExtractorConfig) -> None:
-        # Skip BaseExtractor.__init__() — it creates a DuckDB connection
-        # and validates parquet_root as a raw data directory.
-        self.config = config
-        self.parquet_root = Path(config.parquet_root)
-        self.output_dir = Path(config.output_dir)
-        self.conn = None  # No DuckDB needed
+        super().__init__(config)
 
         self._stays_cache: Optional[pl.DataFrame] = None
-        self._feature_mapping_cache: Optional[Dict[str, TimeSeriesConceptConfig]] = None
         self._metadata: Optional[dict] = None
 
         if not self.parquet_root.exists():
