@@ -73,7 +73,7 @@ class RicuExtractor(BaseExtractor):
 
     def extract_stays(self) -> pl.DataFrame:
         path = self.parquet_root / "ricu_stays.parquet"
-        return pl.read_parquet(path)
+        return pl.scan_parquet(path).collect()
 
     def extract_timeseries(self, stay_ids: List[int]) -> pl.DataFrame:
         """Read pre-binned hourly timeseries from RICU output.
@@ -83,8 +83,7 @@ class RicuExtractor(BaseExtractor):
           stay_id, hour, {feature}, {feature}_mask, ...
         """
         path = self.parquet_root / "ricu_timeseries.parquet"
-        df = pl.read_parquet(path)
-        return df.filter(pl.col("stay_id").is_in(stay_ids))
+        return pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
 
     def _extract_raw_events(
         self,
@@ -106,8 +105,7 @@ class RicuExtractor(BaseExtractor):
                 f"Unknown data source '{source_name}'. " f"Available: {list(dispatch.keys())}"
             )
         path = self.parquet_root / dispatch[source_name]
-        df = pl.read_parquet(path)
-        return df.filter(pl.col("stay_id").is_in(stay_ids))
+        return pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
 
     def run(self) -> None:
         """Execute extraction pipeline for RICU data.
