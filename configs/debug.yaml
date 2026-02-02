@@ -7,9 +7,9 @@
 #   # Override data paths:
 #   uv run python scripts/debug/export_snapshots.py data.processed_dir=data/processed/mimic-iv
 #
-#   # Capture data at each pipeline stage (re-runs extraction for sentinel patients):
-#   uv run python scripts/debug/capture_pipeline_stages.py \
-#       data.parquet_root=/path/to/mimic-iv-parquet
+#   # Override RICU data paths:
+#   uv run python scripts/debug/export_snapshots.py \
+#       data.parquet_root=/path/to/ricu-output
 #
 #   # Explore missingness patterns:
 #   uv run python scripts/debug/explore_missingness.py
@@ -18,7 +18,7 @@
 #   uv run python scripts/debug/inspect_embeddings.py checkpoint=outputs/encoder.pt
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - _self_
 
 # Output directory for debug artifacts (defaults to processed_dir/debug_snapshots)

@@ -17,7 +17,7 @@
 #   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_48h
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - model: transformer
   - _self_
 

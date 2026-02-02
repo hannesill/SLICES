@@ -148,7 +148,8 @@ class ICUDataset(Dataset):
         if not metadata_path.exists():
             raise FileNotFoundError(
                 f"Metadata file not found: {metadata_path}\n"
-                "Run the extraction pipeline first: uv run python scripts/extract_mimic_iv.py"
+                "Run the extraction pipeline first: "
+                "uv run python scripts/preprocessing/extract_ricu.py"
             )
 
         with open(metadata_path) as f:

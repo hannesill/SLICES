@@ -21,7 +21,7 @@
 # encoder.pooling=none (required for MAE) instead of pooling=mean (for tasks).
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - model: transformer
   - ssl: mae
   - _self_
@@ -38,7 +38,7 @@ output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
 # Data configuration overrides
-# Base settings inherited from configs/data/mimic_iv.yaml
+# Base settings inherited from configs/data/ricu.yaml
 # Override processed_dir here if needed:
 #   data.processed_dir: data/processed/mimic-iv-custom
 data:
@@ -47,7 +47,7 @@ data:
 
   # Sliding window configuration for longer sequences
   # Enable after re-extracting with longer seq_length_hours (e.g., 168h)
-  # Example: uv run python scripts/preprocessing/extract_mimic_iv.py data.seq_length_hours=168
+  # Example: uv run python scripts/preprocessing/extract_ricu.py data.seq_length_hours=168
   enable_sliding_windows: false  # Set true after re-extraction
   window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
   window_stride: 24              # Stride for overlapping windows (50% overlap)

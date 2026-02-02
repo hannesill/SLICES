@@ -43,14 +43,14 @@ class TestPackageStructure:
         from slices.data.datamodule import ICUDataModule, icu_collate_fn
         from slices.data.dataset import ICUDataset
         from slices.data.extractors.base import BaseExtractor, ExtractorConfig
-        from slices.data.extractors.mimic_iv import MIMICIVExtractor
+        from slices.data.extractors.ricu import RicuExtractor
         from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
         from slices.data.labels.mortality import MortalityLabelBuilder
 
         # Verify classes exist and are the right type
         assert isinstance(BaseExtractor, type)
         assert isinstance(ExtractorConfig, type)
-        assert isinstance(MIMICIVExtractor, type)
+        assert isinstance(RicuExtractor, type)
         assert isinstance(ICUDataset, type)
         assert isinstance(ICUDataModule, type)
         assert callable(icu_collate_fn)
@@ -59,18 +59,12 @@ class TestPackageStructure:
         assert isinstance(LabelBuilderFactory, type)
         assert isinstance(MortalityLabelBuilder, type)
 
-    def test_data_io_importable(self) -> None:
-        """Test that data_io module imports successfully."""
-        from slices.data.data_io import convert_csv_to_parquet
-
-        assert callable(convert_csv_to_parquet)
-
-    def test_mimic_extractor_inherits_base(self) -> None:
-        """Test that MIMICIVExtractor properly inherits from BaseExtractor."""
+    def test_ricu_extractor_inherits_base(self) -> None:
+        """Test that RicuExtractor properly inherits from BaseExtractor."""
         from slices.data.extractors.base import BaseExtractor
-        from slices.data.extractors.mimic_iv import MIMICIVExtractor
+        from slices.data.extractors.ricu import RicuExtractor
 
-        assert issubclass(MIMICIVExtractor, BaseExtractor)
+        assert issubclass(RicuExtractor, BaseExtractor)
 
     def test_mortality_builder_inherits_base(self) -> None:
         """Test that MortalityLabelBuilder properly inherits from LabelBuilder."""
@@ -99,7 +93,6 @@ class TestPackageDependencies:
 
     def test_core_dependencies_available(self) -> None:
         """Test that core dependencies can be imported."""
-        import duckdb
         import lightning.pytorch
         import polars
         import torch
@@ -107,7 +100,6 @@ class TestPackageDependencies:
 
         assert torch is not None
         assert polars is not None
-        assert duckdb is not None
         assert yaml is not None
         assert lightning.pytorch is not None
 

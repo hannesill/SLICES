@@ -27,9 +27,9 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
-from slices.data.config_loader import _get_package_data_dir
+from slices.data.utils import get_package_data_dir
 
-_PHENOTYPES_DIR = _get_package_data_dir() / "phenotypes"
+_PHENOTYPES_DIR = get_package_data_dir() / "phenotypes"
 
 
 def parse_args() -> argparse.Namespace:

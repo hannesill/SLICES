@@ -19,10 +19,6 @@ Example:
     >>> print(report.warnings)
 """
 
-from .debug_extractor import (
-    DebugMIMICIVExtractor,
-    run_staged_extraction,
-)
 from .embeddings import (
     CollapseMetrics,
     DimensionalityMetrics,
@@ -139,9 +135,6 @@ __all__ = [
     "filter_to_stay_ids",
     "flatten_binned_to_long",
     "generate_html_report",
-    # Debug Extractor
-    "DebugMIMICIVExtractor",
-    "run_staged_extraction",
     # Embeddings
     "CollapseMetrics",
     "DimensionalityMetrics",

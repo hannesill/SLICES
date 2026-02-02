@@ -70,9 +70,9 @@ def _find_phenotype_config() -> Optional[Path]:
     Returns:
         Path to the config if found, else None.
     """
-    from slices.data.config_loader import _get_package_data_dir
+    from slices.data.utils import get_package_data_dir
 
-    candidate = _get_package_data_dir() / "phenotypes" / "ccs_phenotypes.yaml"
+    candidate = get_package_data_dir() / "phenotypes" / "ccs_phenotypes.yaml"
     if candidate.exists():
         return candidate
 

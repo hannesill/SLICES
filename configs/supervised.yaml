@@ -15,7 +15,7 @@
 #   uv run python scripts/training/supervised.py ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - model: transformer
   - _self_
 

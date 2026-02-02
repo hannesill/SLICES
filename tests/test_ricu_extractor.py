@@ -139,7 +139,6 @@ class TestRicuExtractorInit:
         extractor = RicuExtractor(config)
 
         assert extractor.parquet_root == ricu_output_dir
-        assert extractor.conn is None
         assert extractor._metadata is not None
         assert extractor._metadata["dataset"] == "miiv"
 
@@ -148,7 +147,7 @@ class TestRicuExtractorInit:
             parquet_root=str(tmp_path / "nonexistent"),
             output_dir=str(tmp_path / "processed"),
         )
-        with pytest.raises(ValueError, match="RICU output directory not found"):
+        with pytest.raises(ValueError, match="Parquet directory not found"):
             RicuExtractor(config)
 
     def test_init_missing_metadata(self, tmp_path: Path) -> None:
@@ -162,7 +161,8 @@ class TestRicuExtractorInit:
             RicuExtractor(config)
 
     def test_no_duckdb_connection(self, ricu_extractor: RicuExtractor) -> None:
-        assert ricu_extractor.conn is None
+        """Verify that RicuExtractor does not have a DuckDB connection."""
+        assert not hasattr(ricu_extractor, "conn")
 
 
 # ---------------------------------------------------------------------------

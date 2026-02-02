@@ -11,7 +11,7 @@
 #       data.processed_dir=data/processed/mimic-iv-custom
 
 defaults:
-  - data: mimic_iv
+  - data: ricu
   - _self_
 
 # Random seed for reproducible splits
