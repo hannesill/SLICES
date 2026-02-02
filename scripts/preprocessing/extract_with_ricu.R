@@ -784,8 +784,8 @@ main <- function(opts) {
     if (!is.null(raw_dir) && dir.exists(raw_dir)) {
       message(sprintf("Dataset '%s' not set up in ricu. Importing from %s ...",
                       dataset, raw_dir))
-      # Symlink the raw data into ricu's expected data directory so that
-      # setup_src_data() finds CSVs and writes fst files in one place.
+      # Point ricu's data directory at a fst/ subdirectory inside the raw
+      # CSV directory. CSV contents are symlinked in so ricu can import them.
       ricu_dir <- src_data_dir(dataset)
       # Remove stale/broken symlinks before creating a new one
       link_target <- Sys.readlink(ricu_dir)
@@ -793,10 +793,26 @@ main <- function(opts) {
         file.remove(ricu_dir)
       }
       if (!dir.exists(ricu_dir) && !file.exists(ricu_dir)) {
+        # Put RICU's FST cache into a fst/ subdirectory to keep the raw
+        # CSV directory clean.
+        fst_dir <- file.path(raw_dir, "fst")
+        dir.create(fst_dir, recursive = TRUE, showWarnings = FALSE)
+
+        # Symlink raw CSV contents into fst/ so RICU can find them
+        raw_abs <- normalizePath(raw_dir)
+        for (item in list.files(raw_abs, full.names = FALSE)) {
+          if (item != "fst") {
+            dst <- file.path(fst_dir, item)
+            if (!file.exists(dst)) {
+              file.symlink(file.path(raw_abs, item), dst)
+            }
+          }
+        }
+
         dir.create(dirname(ricu_dir), recursive = TRUE, showWarnings = FALSE)
-        file.symlink(normalizePath(raw_dir), ricu_dir)
-        message(sprintf("  Symlinked %s -> %s", ricu_dir,
-                        normalizePath(raw_dir)))
+        fst_abs <- normalizePath(fst_dir)
+        file.symlink(fst_abs, ricu_dir)
+        message(sprintf("  Symlinked %s -> %s", ricu_dir, fst_abs))
       }
       # Import tables one at a time to keep memory usage low.
       # import_src() with all tables at once can OOM on machines with <=18GB RAM.

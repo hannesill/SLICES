@@ -45,6 +45,12 @@ class RicuExtractor(BaseExtractor):
     simply reads the results and converts them to SLICES format.
     """
 
+    # RICU returns some concepts as categorical strings. Map to ordinal floats.
+    CATEGORICAL_ENCODINGS: Dict[str, Dict[str, float]] = {
+        "avpu": {"A": 0.0, "V": 1.0, "P": 2.0, "U": 3.0},
+        "mech_vent": {"noninvasive": 1.0, "invasive": 2.0},
+    }
+
     def __init__(self, config: ExtractorConfig) -> None:
         super().__init__(config)
 
@@ -74,9 +80,36 @@ class RicuExtractor(BaseExtractor):
         Bypasses _extract_raw_events() and _bin_to_hourly_grid() entirely.
         Returns same schema as _bin_to_hourly_grid() output:
           stay_id, hour, {feature}, {feature}_mask, ...
+
+        Categorical string columns (e.g. avpu, mech_vent) are mapped to
+        ordinal floats using CATEGORICAL_ENCODINGS.
         """
         path = self.parquet_root / "ricu_timeseries.parquet"
-        return pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
+        df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
+        return self._encode_categorical_columns(df)
+
+    def _encode_categorical_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Convert non-numeric RICU columns to floats.
+
+        - Categorical strings (avpu, mech_vent) → ordinal floats
+        - Duration columns (dobu_dur, etc.) → hours as Float64
+        """
+        for col_name, mapping in self.CATEGORICAL_ENCODINGS.items():
+            if col_name not in df.columns:
+                continue
+            if df[col_name].dtype in (pl.Utf8, pl.String):
+                df = df.with_columns(
+                    pl.col(col_name).replace_strict(mapping, default=None, return_dtype=pl.Float64)
+                )
+
+        # Convert Duration columns to hours (float)
+        for col_name in df.columns:
+            if df[col_name].dtype == pl.Duration or str(df[col_name].dtype).startswith("Duration"):
+                df = df.with_columns(
+                    (pl.col(col_name).dt.total_milliseconds() / 3_600_000.0).alias(col_name)
+                )
+
+        return df
 
     def _extract_raw_events(
         self,
