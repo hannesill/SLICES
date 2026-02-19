@@ -167,7 +167,7 @@ Extracted ICU stays are stored as **separate Parquet files** in the output direc
 - `timeseries.parquet` - Dense hourly-binned time-series with masks
   - Columns: `stay_id`, `timeseries` (nested array<float32>, shape T×D), `mask` (nested array<bool>, shape T×D)
 - `labels.parquet` - Task labels
-  - Columns: `stay_id`, plus one column per task (e.g., `mortality_24h`, `mortality_48h`)
+  - Columns: `stay_id`, plus one column per task (e.g., `mortality_24h`, `mortality_hospital`)
 - `metadata.yaml` - Feature names, sequence length, task names, etc.
 
 The `ICUDataset` loads these files and returns dictionaries with:

@@ -14,7 +14,7 @@
 #   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
 #
 #   # Different task
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_48h
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_hospital
 
 defaults:
   - data: ricu

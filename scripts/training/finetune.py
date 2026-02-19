@@ -18,7 +18,8 @@ Example usage:
     uv run python scripts/finetune.py checkpoint=outputs/encoder.pt training.freeze_encoder=false
 
     # Different task
-    uv run python scripts/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_48h
+    uv run python scripts/finetune.py checkpoint=outputs/encoder.pt \
+        task.task_name=mortality_hospital
 
     # Gradual unfreezing
     uv run python scripts/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5

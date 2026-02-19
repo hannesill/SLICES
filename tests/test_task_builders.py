@@ -164,12 +164,13 @@ class TestMortalityLabelBuilder:
         assert labels_dict[3] == 0  # Died after 24h (50h)
         assert labels_dict[4] == 0  # Died after 24h (48h)
 
-    def test_48h_mortality(self, sample_stays, sample_mortality_info):
-        """Test 48-hour mortality prediction."""
+    def test_hospital_mortality_with_obs_window(self, sample_stays, sample_mortality_info):
+        """Test hospital mortality with observation window excludes obs-window deaths."""
         config = LabelConfig(
-            task_name="mortality_48h",
+            task_name="mortality_hospital",
             task_type="binary_classification",
-            prediction_window_hours=48,
+            prediction_window_hours=None,
+            observation_window_hours=48,
             label_sources=["stays", "mortality_info"],
         )
 
@@ -182,10 +183,12 @@ class TestMortalityLabelBuilder:
         labels = builder.build_labels(raw_data)
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
-        assert labels_dict[1] == 1  # Died within 48h (10h)
+        # Stay 1: died at 10h (during 48h obs window), outtime=48h (still in ICU at obs end)
+        # outtime (Jan 3 10:00) >= obs_end (Jan 3 10:00), so NOT left_icu_during_obs -> label=1
+        assert labels_dict[1] == 1  # hospital_expire_flag=1
         assert labels_dict[2] == 0  # Survived
-        assert labels_dict[3] == 0  # Died after 48h (50h)
-        assert labels_dict[4] == 1  # Died within 48h (exactly 48h)
+        assert labels_dict[3] == 1  # Died in hospital (hospital_expire_flag=1)
+        assert labels_dict[4] == 1  # Died in hospital (hospital_expire_flag=1)
 
     def test_icu_mortality(self, sample_stays):
         """Test ICU mortality prediction (death during ICU stay, window_hours=-1)."""
@@ -328,8 +331,8 @@ class TestMortalityBoundaryConditions:
         assert labels_dict[4] == 0  # Survived
         assert labels_dict[5] == 1  # Well within 24h - included
 
-    def test_death_exactly_at_48h_boundary(self, boundary_stays):
-        """Test death exactly at 48-hour boundary."""
+    def test_legacy_time_bounded_boundary(self, boundary_stays):
+        """Test death exactly at time boundary for legacy time-bounded mortality."""
         mortality_info = pl.DataFrame(
             {
                 "stay_id": [1, 2, 3],
@@ -345,7 +348,7 @@ class TestMortalityBoundaryConditions:
         )
 
         config = LabelConfig(
-            task_name="mortality_48h",
+            task_name="mortality_custom",
             task_type="binary_classification",
             prediction_window_hours=48,
             label_sources=["stays", "mortality_info"],
@@ -968,7 +971,7 @@ class TestLabelBuilderFactory:
     def test_factory_handles_underscores(self):
         """Test factory extracts category from task names with underscores."""
         # All of these should create MortalityLabelBuilder
-        for task_name in ["mortality_24h", "mortality_48h", "mortality_hospital"]:
+        for task_name in ["mortality_24h", "mortality_hospital"]:
             config = LabelConfig(
                 task_name=task_name,
                 task_type="binary_classification",

@@ -68,12 +68,45 @@ class MortalityLabelBuilder(LabelBuilder):
         obs_hours = self.config.observation_window_hours
         gap_hours = self.config.gap_hours
 
-        if window_hours is None:
-            # Hospital mortality (default)
+        if window_hours is None and obs_hours is None:
+            # Hospital mortality, no observation window (legacy)
             labels = merged.select(
                 [
                     "stay_id",
                     pl.col("hospital_expire_flag").fill_null(0).cast(pl.Int32).alias("label"),
+                ]
+            )
+
+        elif window_hours is None and obs_hours is not None:
+            # Hospital mortality with observation window exclusion
+            # Patients who died during observation are excluded (label=null)
+            obs_end_datetime = pl.col("intime") + pl.duration(hours=obs_hours)
+            left_icu_during_obs = pl.col("outtime") < obs_end_datetime
+
+            if is_date_type:
+                obs_end = obs_end_datetime.cast(pl.Date)
+                died_during_obs = (
+                    pl.col("date_of_death").is_not_null()
+                    & (pl.col("date_of_death") <= obs_end)
+                    & left_icu_during_obs
+                )
+            else:
+                died_during_obs = (
+                    pl.col("date_of_death").is_not_null()
+                    & (pl.col("date_of_death") <= obs_end_datetime)
+                    & left_icu_during_obs
+                )
+
+            labels = merged.select(
+                [
+                    "stay_id",
+                    pl.when(died_during_obs)
+                    .then(None)
+                    .when(pl.col("hospital_expire_flag") == 1)
+                    .then(1)
+                    .otherwise(0)
+                    .cast(pl.Int32)
+                    .alias("label"),
                 ]
             )
 

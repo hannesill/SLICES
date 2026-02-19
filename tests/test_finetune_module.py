@@ -35,7 +35,7 @@ class TestTaskHeadConfig:
         """Test custom configuration."""
         config = TaskHeadConfig(
             name="linear",
-            task_name="mortality_48h",
+            task_name="mortality_hospital",
             task_type="multiclass",
             n_classes=5,
             input_dim=256,
@@ -45,7 +45,7 @@ class TestTaskHeadConfig:
         )
 
         assert config.name == "linear"
-        assert config.task_name == "mortality_48h"
+        assert config.task_name == "mortality_hospital"
         assert config.task_type == "multiclass"
         assert config.n_classes == 5
         assert config.input_dim == 256
