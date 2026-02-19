@@ -714,6 +714,52 @@ class TestTransformerIntegration:
         assert loss.item() > 0
 
 
+class TestPoolingModes:
+    """Verify pooling modes return correct output shapes."""
+
+    def test_pooling_none_returns_full_sequence(self):
+        """pooling='none' should return full sequence output (B, T, d_model)."""
+        config = TransformerConfig(
+            d_input=5,
+            d_model=16,
+            n_layers=1,
+            n_heads=2,
+            d_ff=32,
+            dropout=0.0,
+            max_seq_length=10,
+            pooling="none",
+        )
+        encoder = TransformerEncoder(config)
+
+        x = torch.randn(2, 10, 5)
+        mask = torch.ones(2, 10, 5, dtype=torch.bool)
+        out = encoder(x, mask=mask)
+
+        assert out.dim() == 3
+        assert out.shape == (2, 10, 16)
+
+    def test_pooling_mean_returns_single_vector(self):
+        """pooling='mean' should return (B, d_model)."""
+        config = TransformerConfig(
+            d_input=5,
+            d_model=16,
+            n_layers=1,
+            n_heads=2,
+            d_ff=32,
+            dropout=0.0,
+            max_seq_length=10,
+            pooling="mean",
+        )
+        encoder = TransformerEncoder(config)
+
+        x = torch.randn(2, 10, 5)
+        mask = torch.ones(2, 10, 5, dtype=torch.bool)
+        out = encoder(x, mask=mask)
+
+        assert out.dim() == 2
+        assert out.shape == (2, 16)
+
+
 class TestEncoderSimplified:
     """Tests verifying encoder works without mask handling."""
 

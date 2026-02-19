@@ -206,12 +206,12 @@ class TestOptimizerConfiguration:
         assert isinstance(optimizer, torch.optim.SGD)
 
     def test_invalid_optimizer(self, minimal_config):
-        """Test that invalid optimizer raises error."""
-        minimal_config.optimizer.name = "invalid"
-        module = SSLPretrainModule(minimal_config)
+        """Test that invalid optimizer raises error at init."""
+        from pydantic import ValidationError
 
-        with pytest.raises(ValueError, match="Unknown optimizer"):
-            module.configure_optimizers()
+        minimal_config.optimizer.name = "invalid"
+        with pytest.raises(ValidationError, match="optimizer name"):
+            SSLPretrainModule(minimal_config)
 
 
 class TestSchedulerConfiguration:
@@ -272,12 +272,12 @@ class TestSchedulerConfiguration:
         assert isinstance(result, torch.optim.Optimizer)
 
     def test_invalid_scheduler(self, minimal_config):
-        """Test that invalid scheduler raises error."""
-        minimal_config.scheduler = {"name": "invalid"}
-        module = SSLPretrainModule(minimal_config)
+        """Test that invalid scheduler raises error at init."""
+        from pydantic import ValidationError
 
-        with pytest.raises(ValueError, match="Unknown scheduler"):
-            module.configure_optimizers()
+        minimal_config.scheduler = {"name": "invalid"}
+        with pytest.raises(ValidationError, match="scheduler name"):
+            SSLPretrainModule(minimal_config)
 
 
 class TestEncoderAccess:
@@ -514,6 +514,31 @@ class TestLRWarmup:
         assert actual_lr == pytest.approx(
             0.001, rel=1e-6
         ), f"After warmup: expected LR 0.001, got {actual_lr}"
+
+
+class TestPretrainModuleConfigValidation:
+    """Test that SSLPretrainModule rejects invalid optimizer/scheduler configs."""
+
+    def test_typo_in_optimizer_config_rejected(self, minimal_config):
+        from pydantic import ValidationError
+
+        cfg = OmegaConf.to_container(minimal_config, resolve=True)
+        cfg["optimizer"]["lerning_rate"] = 1e-3
+        with pytest.raises(ValidationError, match="lerning_rate"):
+            SSLPretrainModule(OmegaConf.create(cfg))
+
+    def test_typo_in_scheduler_config_rejected(self, minimal_config):
+        from pydantic import ValidationError
+
+        cfg = OmegaConf.to_container(minimal_config, resolve=True)
+        cfg["scheduler"] = {"name": "cosine", "t_max": 100}
+        with pytest.raises(ValidationError, match="t_max"):
+            SSLPretrainModule(OmegaConf.create(cfg))
+
+    def test_no_scheduler_passes(self, minimal_config):
+        """Module without scheduler should still pass validation."""
+        module = SSLPretrainModule(minimal_config)
+        assert module is not None
 
 
 if __name__ == "__main__":

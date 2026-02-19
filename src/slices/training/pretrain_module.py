@@ -9,10 +9,12 @@ from typing import Any, Dict, Tuple
 import lightning.pytorch as pl
 import torch
 import torch.nn as nn
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective, get_ssl_config_class
+from slices.training.config_schemas import OptimizerConfig as OptimizerConfigSchema
+from slices.training.config_schemas import SchedulerConfig as SchedulerConfigSchema
 from slices.training.utils import build_optimizer, build_scheduler, save_encoder_checkpoint
 
 
@@ -73,7 +75,14 @@ class SSLPretrainModule(pl.LightningModule):
         ssl_config = ssl_config_cls(name=ssl_name, **ssl_config_dict)
         self.ssl_objective = build_ssl_objective(self.encoder, ssl_config)
 
-        # Store config for optimizer
+        # Validate and store config for optimizer
+        optimizer_dict = OmegaConf.to_container(config.optimizer, resolve=True)
+        OptimizerConfigSchema(**optimizer_dict)
+
+        if config.get("scheduler") is not None:
+            scheduler_dict = OmegaConf.to_container(config.scheduler, resolve=True)
+            SchedulerConfigSchema(**scheduler_dict)
+
         self.optimizer_config = config.optimizer
         self.scheduler_config = config.get("scheduler", None)
 

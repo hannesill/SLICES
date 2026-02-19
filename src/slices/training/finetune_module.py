@@ -22,6 +22,8 @@ from omegaconf import DictConfig, OmegaConf
 from slices.eval import MetricConfig, build_metrics
 from slices.models.encoders import EncoderWithMissingToken, build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
+from slices.training.config_schemas import OptimizerConfig as OptimizerConfigSchema
+from slices.training.config_schemas import SchedulerConfig as SchedulerConfigSchema
 from slices.training.config_schemas import TaskConfig as TaskConfigSchema
 from slices.training.config_schemas import TrainingConfig as TrainingConfigSchema
 from slices.training.utils import build_optimizer, build_scheduler
@@ -75,6 +77,13 @@ class FineTuneModule(pl.LightningModule):
 
         training_dict = OmegaConf.to_container(config.training, resolve=True)
         TrainingConfigSchema(**training_dict)
+
+        optimizer_dict = OmegaConf.to_container(config.optimizer, resolve=True)
+        OptimizerConfigSchema(**optimizer_dict)
+
+        if config.get("scheduler") is not None:
+            scheduler_dict = OmegaConf.to_container(config.scheduler, resolve=True)
+            SchedulerConfigSchema(**scheduler_dict)
 
         # Build encoder from config
         encoder_name = config.encoder.name

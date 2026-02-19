@@ -1,5 +1,6 @@
 """Tests for BaseExtractor functionality."""
 
+import math
 from datetime import datetime
 from typing import List
 
@@ -925,3 +926,290 @@ class TestAtomicWriteAndFileLocking:
         assert (output_dir / "timeseries.parquet").exists()
         timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
         assert len(timeseries) > 0
+
+
+# ============================================================================
+# Vectorized dense timeseries tests
+# ============================================================================
+
+
+class MinimalExtractor(BaseExtractor):
+    """Minimal extractor for testing _create_dense_timeseries without path validation."""
+
+    def __init__(self, config: ExtractorConfig):
+        self.config = config
+
+    def _get_dataset_name(self) -> str:
+        return "test"
+
+    def extract_stays(self) -> pl.DataFrame:
+        return pl.DataFrame()
+
+    def extract_timeseries(self, stay_ids: List[int]) -> pl.DataFrame:
+        return pl.DataFrame()
+
+    def extract_data_source(self, source_name: str, stay_ids: List[int]) -> pl.DataFrame:
+        return pl.DataFrame()
+
+    def run(self) -> None:
+        pass
+
+
+def _make_minimal_extractor(seq_length: int = 48) -> MinimalExtractor:
+    cfg = ExtractorConfig(
+        parquet_root="/tmp/fake",
+        output_dir="/tmp/fake_out",
+        seq_length_hours=seq_length,
+        feature_set="core",
+        tasks=[],
+        min_stay_hours=0,
+        batch_size=100,
+    )
+    return MinimalExtractor(cfg)
+
+
+class TestVectorizedDenseTimeseries:
+    """Tests for the vectorized dense timeseries conversion."""
+
+    def test_basic_conversion(self):
+        """Test basic sparse-to-dense conversion with known values."""
+        ext = _make_minimal_extractor(seq_length=4)
+        features = ["hr", "sbp"]
+
+        stays = pl.DataFrame({"stay_id": [1, 2]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1, 1, 2],
+                "hour": [0, 2, 1],
+                "hr": [70.0, 72.0, 80.0],
+                "hr_mask": [True, True, True],
+                "sbp": [120.0, None, 130.0],
+                "sbp_mask": [True, False, True],
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+
+        assert len(result) == 2
+        assert set(result.columns) == {"stay_id", "timeseries", "mask"}
+
+        row1 = result.filter(pl.col("stay_id") == 1)
+        ts1 = row1["timeseries"][0]
+        mask1 = row1["mask"][0]
+
+        assert ts1[0][0] == 70.0
+        assert mask1[0][0] is True
+        assert ts1[0][1] == 120.0
+        assert mask1[0][1] is True
+        assert math.isnan(ts1[1][0])
+        assert mask1[1][0] is False
+        assert ts1[2][0] == 72.0
+        assert mask1[2][0] is True
+
+    def test_stays_without_data_produce_nan_arrays(self):
+        """Stays with no observations get all-NaN timeseries."""
+        ext = _make_minimal_extractor(seq_length=3)
+        features = ["hr"]
+        stays = pl.DataFrame({"stay_id": [1, 2]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "hour": [0],
+                "hr": [70.0],
+                "hr_mask": [True],
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+        assert len(result) == 2
+
+        row2 = result.filter(pl.col("stay_id") == 2)
+        ts2 = row2["timeseries"][0]
+        mask2 = row2["mask"][0]
+
+        for h in range(3):
+            assert math.isnan(ts2[h][0])
+            assert mask2[h][0] is False
+
+    def test_overflow_hours_discarded(self):
+        """Hours beyond seq_length are discarded."""
+        ext = _make_minimal_extractor(seq_length=2)
+        features = ["hr"]
+        stays = pl.DataFrame({"stay_id": [1]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1, 1, 1],
+                "hour": [0, 1, 5],
+                "hr": [70.0, 71.0, 99.0],
+                "hr_mask": [True, True, True],
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+        ts = result["timeseries"][0]
+
+        assert len(ts) == 2
+        assert ts[0][0] == 70.0
+        assert ts[1][0] == 71.0
+
+    def test_mask_false_produces_nan(self):
+        """When mask is False, value should be NaN even if a value is present."""
+        ext = _make_minimal_extractor(seq_length=2)
+        features = ["hr"]
+        stays = pl.DataFrame({"stay_id": [1]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "hour": [0],
+                "hr": [70.0],
+                "hr_mask": [False],
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+        ts = result["timeseries"][0]
+        mask = result["mask"][0]
+
+        assert math.isnan(ts[0][0])
+        assert mask[0][0] is False
+
+    def test_output_shape_consistency(self):
+        """Verify output dimensions: seq_length x n_features."""
+        ext = _make_minimal_extractor(seq_length=10)
+        features = ["a", "b", "c"]
+        stays = pl.DataFrame({"stay_id": [1, 2, 3]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "hour": [0],
+                "a": [1.0],
+                "a_mask": [True],
+                "b": [2.0],
+                "b_mask": [True],
+                "c": [3.0],
+                "c_mask": [True],
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+        assert len(result) == 3
+
+        for row in result.iter_rows(named=True):
+            ts = row["timeseries"]
+            mask = row["mask"]
+            assert len(ts) == 10
+            assert len(mask) == 10
+            for h in range(10):
+                assert len(ts[h]) == 3
+                assert len(mask[h]) == 3
+
+    def test_empty_sparse_timeseries(self):
+        """Handle completely empty sparse timeseries."""
+        ext = _make_minimal_extractor(seq_length=3)
+        features = ["hr"]
+        stays = pl.DataFrame({"stay_id": [1]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": pl.Series([], dtype=pl.Int64),
+                "hour": pl.Series([], dtype=pl.Int64),
+                "hr": pl.Series([], dtype=pl.Float64),
+                "hr_mask": pl.Series([], dtype=pl.Boolean),
+            }
+        )
+
+        result = ext._create_dense_timeseries(sparse, stays, features)
+        assert len(result) == 1
+
+        ts = result["timeseries"][0]
+        for h in range(3):
+            assert math.isnan(ts[h][0])
+
+    def test_vectorized_matches_reference_loop(self):
+        """Regression test: vectorized output must match a reference loop-based implementation."""
+        seq_length = 6
+        ext = _make_minimal_extractor(seq_length=seq_length)
+        feature_names = ["hr", "sbp", "temp"]
+        mask_names = [f"{f}_mask" for f in feature_names]
+        n_features = len(feature_names)
+
+        # Synthetic data with varied patterns: full, partial, and missing hours
+        stays = pl.DataFrame({"stay_id": [10, 20, 30]})
+        sparse = pl.DataFrame(
+            {
+                "stay_id": [10, 10, 10, 20, 20, 30],
+                "hour": [0, 2, 5, 1, 3, 0],
+                "hr": [72.0, 80.0, 65.0, 90.0, 88.0, 70.0],
+                "hr_mask": [True, True, True, True, False, True],
+                "sbp": [120.0, None, 130.0, 140.0, 135.0, None],
+                "sbp_mask": [True, False, True, True, True, False],
+                "temp": [36.5, 37.0, 38.2, 36.8, None, 37.1],
+                "temp_mask": [True, True, True, True, False, True],
+            }
+        )
+
+        # --- Reference loop-based implementation ---
+        ref_rows = []
+        for sid in stays["stay_id"].to_list():
+            stay_data = sparse.filter(pl.col("stay_id") == sid)
+            ts = []
+            mask = []
+            for h in range(seq_length):
+                hour_data = stay_data.filter(pl.col("hour") == h)
+                feat_vals = []
+                mask_vals = []
+                for fi, f in enumerate(feature_names):
+                    m = mask_names[fi]
+                    if len(hour_data) == 0:
+                        feat_vals.append(float("nan"))
+                        mask_vals.append(False)
+                    else:
+                        raw_val = hour_data[f][0]
+                        raw_mask = hour_data[m][0]
+                        if raw_mask and raw_val is not None:
+                            feat_vals.append(float(raw_val))
+                        else:
+                            feat_vals.append(float("nan"))
+                        mask_vals.append(bool(raw_mask))
+                ts.append(feat_vals)
+                mask.append(mask_vals)
+            ref_rows.append({"stay_id": sid, "timeseries": ts, "mask": mask})
+
+        # --- Vectorized implementation ---
+        result = ext._create_dense_timeseries(sparse, stays, feature_names)
+
+        # Compare row by row
+        for ref in ref_rows:
+            sid = ref["stay_id"]
+            row = result.filter(pl.col("stay_id") == sid)
+            assert len(row) == 1, f"Missing stay_id={sid} in vectorized output"
+
+            vec_ts = row["timeseries"][0]
+            vec_mask = row["mask"][0]
+            ref_ts = ref["timeseries"]
+            ref_mask = ref["mask"]
+
+            assert len(vec_ts) == seq_length
+            assert len(vec_mask) == seq_length
+
+            for h in range(seq_length):
+                assert len(vec_ts[h]) == n_features
+                assert len(vec_mask[h]) == n_features
+                for fi in range(n_features):
+                    # Compare masks
+                    assert vec_mask[h][fi] == ref_mask[h][fi], (
+                        f"Mask mismatch at stay={sid}, hour={h}, feat={fi}: "
+                        f"vec={vec_mask[h][fi]}, ref={ref_mask[h][fi]}"
+                    )
+                    # Compare values (NaN == NaN for this comparison)
+                    v_vec = vec_ts[h][fi]
+                    v_ref = ref_ts[h][fi]
+                    if math.isnan(v_ref):
+                        assert math.isnan(v_vec), (
+                            f"Value mismatch at stay={sid}, hour={h}, feat={fi}: "
+                            f"expected NaN, got {v_vec}"
+                        )
+                    else:
+                        assert v_vec == pytest.approx(v_ref), (
+                            f"Value mismatch at stay={sid}, hour={h}, feat={fi}: "
+                            f"vec={v_vec}, ref={v_ref}"
+                        )
