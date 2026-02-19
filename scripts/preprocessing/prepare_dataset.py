@@ -151,7 +151,7 @@ def compute_normalization_stats(
     for f in range(n_features):
         if counts[f] > 0:
             mean = sums[f] / counts[f]
-            variance = (sq_sums[f] / counts[f]) - (mean * mean)
+            variance = (sq_sums[f] - counts[f] * mean * mean) / max(counts[f] - 1, 1)
             std = np.sqrt(max(variance, 0))
             means[f] = mean
             stds[f] = std if std > 1e-6 else 1.0
