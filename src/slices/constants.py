@@ -30,5 +30,4 @@ TEST_RATIO: float = 0.15
 # Preprocessing
 # =============================================================================
 NORMALIZE: bool = True
-IMPUTE_STRATEGY: str = "forward_fill"
 PIN_MEMORY: bool = True

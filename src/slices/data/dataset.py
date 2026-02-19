@@ -99,7 +99,6 @@ class ICUDataset(Dataset):
         task_name: Optional[str] = None,  # TODO: Add support for multiple tasks
         seq_length: Optional[int] = None,  # TODO: Add support for different sequence lengths
         normalize: bool = True,  # TODO: Add support for different normalization strategies
-        impute_strategy: str = "forward_fill",
         train_indices: Optional[List[int]] = None,
         handle_missing_labels: str = "filter",
         _excluded_stay_ids: Optional[Set[int]] = None,
@@ -112,8 +111,6 @@ class ICUDataset(Dataset):
                       If None, no labels are returned.
             seq_length: Override sequence length (uses metadata default if None).
             normalize: Whether to normalize features (z-score per feature).
-            impute_strategy: Strategy for imputing missing values.
-                           Options: 'forward_fill', 'zero', 'mean', 'none'
             train_indices: Optional list of indices for training set. If provided,
                           normalization statistics are computed only on these samples.
                           This prevents data leakage from val/test sets.
@@ -128,7 +125,6 @@ class ICUDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.task_name = task_name
         self.normalize = normalize
-        self.impute_strategy = impute_strategy
         self.train_indices = train_indices
         self.handle_missing_labels = handle_missing_labels
         self._excluded_stay_ids = _excluded_stay_ids or set()
@@ -400,17 +396,18 @@ class ICUDataset(Dataset):
             logger.debug(f"Computed normalization stats for {self.n_features} features")
 
         # =====================================================================
-        # Step 3: Apply imputation and normalization (vectorized)
+        # Step 3: Normalize then zero-fill (vectorized)
         # =====================================================================
-        logger.debug("[3/3] Applying imputation and normalization...")
+        logger.debug("[3/3] Applying normalization and zero-fill...")
 
-        # Vectorized imputation
-        timeseries_tensor = self._impute_tensor_batch(timeseries_tensor, masks_tensor)
-
-        # Vectorized normalization
+        # Normalize first (NaN positions stay NaN through arithmetic)
         if self.normalize:
-            # Broadcasting: (n_samples, seq_len, n_features) - (n_features,) / (n_features,)
             timeseries_tensor = (timeseries_tensor - self.feature_means) / self.feature_stds
+
+        # Zero-fill: replace NaN with 0 in normalized space
+        # After z-score normalization, 0 = feature mean in original space.
+        # This is the most neutral default: "no information, assume population average."
+        timeseries_tensor = torch.nan_to_num(timeseries_tensor, nan=0.0)
 
         # Keep tensors stacked for memory efficiency and faster access
         # __getitem__ will index directly into these tensors
@@ -418,139 +415,6 @@ class ICUDataset(Dataset):
         self._mask_tensor = masks_tensor  # (n_samples, seq_len, n_features)
 
         logger.info("Preprocessing complete")
-
-    def _impute_tensor_batch(self, timeseries: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
-        """Vectorized imputation for a batch of timeseries tensors.
-
-        Args:
-            timeseries: FloatTensor of shape (n_samples, seq_length, n_features)
-                with NaN for missing.
-            masks: BoolTensor of shape (n_samples, seq_length, n_features).
-
-        Returns:
-            Imputed timeseries tensor of shape (n_samples, seq_length, n_features).
-        """
-        if self.impute_strategy == "none":
-            return timeseries
-
-        if self.impute_strategy == "zero":
-            return torch.nan_to_num(timeseries, nan=0.0)
-
-        if self.impute_strategy == "mean":
-            # Replace NaN with feature means (vectorized)
-            imputed = timeseries.clone()
-            nan_mask = torch.isnan(imputed)
-            # Expand feature_means to match tensor shape for broadcasting
-            means_expanded = self.feature_means.view(1, 1, -1).expand_as(imputed)
-            imputed[nan_mask] = means_expanded[nan_mask]
-            return imputed
-
-        if self.impute_strategy == "forward_fill":
-            return self._vectorized_forward_fill(timeseries)
-
-        raise ValueError(f"Unknown imputation strategy: {self.impute_strategy}")
-
-    def _vectorized_forward_fill(self, timeseries: torch.Tensor) -> torch.Tensor:
-        """Highly optimized vectorized forward fill.
-
-        Uses a cumulative max index trick to avoid O(T) sequential operations.
-        The algorithm:
-        1. Create an indicator of where values are valid (not NaN)
-        2. Use cummax to find the index of the last valid value at each position
-        3. Gather values from those indices
-
-        For remaining NaN values (at the start of sequences where no prior valid
-        value exists), fill with feature means.
-
-        Args:
-            timeseries: FloatTensor of shape (n_samples, seq_length, n_features) with NaN.
-
-        Returns:
-            Forward-filled tensor with no NaN values.
-        """
-        n_samples, seq_len, n_features = timeseries.shape
-        logger.debug(f"Forward filling {n_samples:,} samples...")
-
-        # Work on each feature independently for memory efficiency
-        # This is still vectorized over samples and time
-        imputed = timeseries.clone()
-
-        for f in range(n_features):
-            # Extract single feature: (n_samples, seq_len)
-            feature_data = imputed[:, :, f]
-
-            # Create valid mask (not NaN)
-            valid = ~torch.isnan(feature_data)
-
-            # Create indices: (n_samples, seq_len) where each row is [0, 1, 2, ..., seq_len-1]
-            indices = (
-                torch.arange(seq_len, device=timeseries.device).unsqueeze(0).expand(n_samples, -1)
-            )
-
-            # Where invalid, set index to -1 so cummax will ignore it
-            # (cummax will propagate the last valid index forward)
-            masked_indices = torch.where(valid, indices, torch.full_like(indices, -1))
-
-            # Cummax along time dimension gives us the index of last valid value
-            last_valid_idx, _ = masked_indices.cummax(dim=1)  # (n_samples, seq_len)
-
-            # Handle case where no valid value exists yet (last_valid_idx == -1)
-            # These will be filled with feature mean later
-            has_valid = last_valid_idx >= 0
-
-            # Clamp indices to valid range for gather (will be overwritten for invalid positions)
-            gather_idx = last_valid_idx.clamp(min=0)
-
-            # Gather values from the last valid indices
-            filled = torch.gather(feature_data, dim=1, index=gather_idx)
-
-            # Where we had a valid reference, use the filled value
-            # Where no valid reference exists, we'll fill with mean below
-            imputed[:, :, f] = torch.where(has_valid, filled, feature_data)
-
-        # Fill any remaining NaN (at start of sequences) with feature means
-        still_nan = torch.isnan(imputed)
-        if still_nan.any():
-            means_expanded = self.feature_means.view(1, 1, -1).expand_as(imputed)
-            imputed = torch.where(still_nan, means_expanded, imputed)
-
-        return imputed
-
-    def _impute_tensor(self, timeseries: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """Impute missing values in a single timeseries tensor.
-
-        Args:
-            timeseries: FloatTensor of shape (seq_length, n_features) with NaN for missing.
-            mask: BoolTensor of shape (seq_length, n_features).
-
-        Returns:
-            Imputed timeseries tensor.
-        """
-        if self.impute_strategy == "none":
-            return timeseries
-
-        if self.impute_strategy == "zero":
-            return torch.nan_to_num(timeseries, nan=0.0)
-
-        if self.impute_strategy == "mean":
-            imputed = timeseries.clone()
-            for f in range(self.n_features):
-                nan_mask = torch.isnan(imputed[:, f])
-                imputed[nan_mask, f] = self.feature_means[f]
-            return imputed
-
-        if self.impute_strategy == "forward_fill":
-            imputed = timeseries.clone()
-            for f in range(self.n_features):
-                last_valid = self.feature_means[f].item()  # Default to mean if no prior
-                for t in range(self.seq_length):
-                    if mask[t, f] and not torch.isnan(imputed[t, f]):
-                        last_valid = imputed[t, f].item()
-                    elif torch.isnan(imputed[t, f]):
-                        imputed[t, f] = last_valid
-            return imputed
-
-        raise ValueError(f"Unknown imputation strategy: {self.impute_strategy}")
 
     def _load_normalization_stats(
         self, current_train_indices: Optional[List[int]]
@@ -621,7 +485,6 @@ class ICUDataset(Dataset):
             "feature_names": self.feature_names,
             "train_indices": train_indices,
             "normalize": self.normalize,
-            "impute_strategy": self.impute_strategy,
         }
 
         try:
@@ -640,7 +503,6 @@ class ICUDataset(Dataset):
 
         The cache key includes:
         - normalize flag
-        - impute_strategy
         - seq_length
         - hash of train_indices (for normalization stats consistency)
         - hash of _excluded_stay_ids (for filtering consistency)
@@ -654,7 +516,6 @@ class ICUDataset(Dataset):
         # Create a deterministic string representation of parameters
         params = {
             "normalize": self.normalize,
-            "impute_strategy": self.impute_strategy,
             "seq_length": self.seq_length,
             "n_features": self.n_features,
         }
@@ -719,9 +580,6 @@ class ICUDataset(Dataset):
             if cached.get("normalize") != self.normalize:
                 logger.debug("Cached tensors have different normalize flag, recomputing")
                 return None
-            if cached.get("impute_strategy") != self.impute_strategy:
-                logger.debug("Cached tensors have different impute strategy, recomputing")
-                return None
 
             # Validate tensor shapes (support both old list and new stacked format)
             timeseries = cached.get("timeseries_tensor") or cached.get("timeseries_tensors")
@@ -764,7 +622,6 @@ class ICUDataset(Dataset):
             "n_features": self.n_features,
             "seq_length": self.seq_length,
             "normalize": self.normalize,
-            "impute_strategy": self.impute_strategy,
         }
 
         try:
@@ -1033,14 +890,13 @@ class ICUDataset(Dataset):
 
         The stages are:
             - grid: Raw 2D tensor (seq_length, n_features) with NaN for missing
-            - imputed: After imputation (no NaN, original scale)
-            - normalized: After z-score normalization (what model sees)
+            - normalized: After z-score normalization + zero-fill (what model sees)
 
         Args:
             idx: Sample index in the dataset.
 
         Returns:
-            Dict with keys 'grid', 'imputed', 'normalized', each containing:
+            Dict with keys 'grid', 'normalized', each containing:
                 - 'timeseries': The tensor at that stage
                 - 'mask': The observation mask (same for all stages)
 
@@ -1051,8 +907,8 @@ class ICUDataset(Dataset):
             torch.Size([48, 9])
             >>> torch.isnan(stages['grid']['timeseries']).any()
             True  # Grid has NaN
-            >>> torch.isnan(stages['imputed']['timeseries']).any()
-            False  # Imputed has no NaN
+            >>> torch.isnan(stages['normalized']['timeseries']).any()
+            False  # Normalized has no NaN
         """
         stay_id = self.stay_ids[idx]
 
@@ -1063,15 +919,12 @@ class ICUDataset(Dataset):
 
         # =====================================================================
         # Stage 1: GRID - Convert to tensor with padding/truncation
-        # (Same logic as _precompute_tensors Step 1)
         # =====================================================================
         actual_len = len(raw_ts)
         if actual_len >= self.seq_length:
-            # Truncate
             grid_ts = np.array(raw_ts[: self.seq_length], dtype=np.float32)
             mask_arr = np.array(raw_mask[: self.seq_length], dtype=bool)
         else:
-            # Pad with NaN / False
             grid_ts = np.full((self.seq_length, self.n_features), np.nan, dtype=np.float32)
             mask_arr = np.zeros((self.seq_length, self.n_features), dtype=bool)
             grid_ts[:actual_len] = np.array(raw_ts, dtype=np.float32)
@@ -1081,32 +934,17 @@ class ICUDataset(Dataset):
         mask_tensor = torch.from_numpy(mask_arr)
 
         # =====================================================================
-        # Stage 2: IMPUTED - Apply imputation
-        # (Same logic as _precompute_tensors Step 3a, using _impute_tensor_batch)
-        # =====================================================================
-        # Add batch dimension for _impute_tensor_batch
-        grid_batched = grid_tensor.unsqueeze(0)
-        mask_batched = mask_tensor.unsqueeze(0)
-
-        imputed_batched = self._impute_tensor_batch(grid_batched, mask_batched)
-        imputed_tensor = imputed_batched.squeeze(0)
-
-        # =====================================================================
-        # Stage 3: NORMALIZED - Apply z-score normalization
-        # (Same logic as _precompute_tensors Step 3b)
+        # Stage 2: NORMALIZED - z-score normalize then zero-fill
         # =====================================================================
         if self.normalize:
-            normalized_tensor = (imputed_tensor - self.feature_means) / self.feature_stds
+            normalized_tensor = (grid_tensor - self.feature_means) / self.feature_stds
         else:
-            normalized_tensor = imputed_tensor.clone()
+            normalized_tensor = grid_tensor.clone()
+        normalized_tensor = torch.nan_to_num(normalized_tensor, nan=0.0)
 
         return {
             "grid": {
                 "timeseries": grid_tensor,
-                "mask": mask_tensor,
-            },
-            "imputed": {
-                "timeseries": imputed_tensor,
                 "mask": mask_tensor,
             },
             "normalized": {
