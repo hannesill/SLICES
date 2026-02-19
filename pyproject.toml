@@ -78,4 +78,6 @@ disable_error_code = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",
+    "python-pptx>=1.0.2",
+    "ruff>=0.14.8",
 ]

@@ -70,7 +70,7 @@ def find_phenotype_config(explicit: Path | None) -> Path:
     current = Path.cwd()
     for parent in [current, *current.parents]:
         if (parent / "pyproject.toml").exists():
-            candidate = parent / "configs" / "phenotypes" / "ccs_phenotypes.yaml"
+            candidate = parent / "src" / "slices" / "data" / "phenotypes" / "ccs_phenotypes.yaml"
             if candidate.exists():
                 return candidate
             break
