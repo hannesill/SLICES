@@ -17,7 +17,6 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from slices.constants import (
-    IMPUTE_STRATEGY,
     NORMALIZE,
     PIN_MEMORY,
     TEST_RATIO,
@@ -99,7 +98,6 @@ class ICUDataModule(L.LightningDataModule):
         test_ratio: float = TEST_RATIO,
         seed: int = 42,
         normalize: bool = NORMALIZE,
-        impute_strategy: str = IMPUTE_STRATEGY,
         pin_memory: bool = PIN_MEMORY,
         # Sliding window parameters for SSL pretraining
         enable_sliding_windows: bool = False,
@@ -119,7 +117,6 @@ class ICUDataModule(L.LightningDataModule):
             test_ratio: Fraction of patients for testing.
             seed: Random seed for reproducible splits.
             normalize: Whether to normalize features.
-            impute_strategy: Imputation strategy ('forward_fill', 'zero', 'mean', 'none').
             pin_memory: Whether to pin memory for faster GPU transfer.
             enable_sliding_windows: Whether to use sliding windows for training.
                 Useful for SSL pretraining with longer sequences (e.g., 168h).
@@ -142,7 +139,6 @@ class ICUDataModule(L.LightningDataModule):
         self.test_ratio = test_ratio
         self.seed = seed
         self.normalize = normalize
-        self.impute_strategy = impute_strategy
         self.pin_memory = pin_memory
 
         # Sliding window parameters
@@ -527,7 +523,6 @@ class ICUDataModule(L.LightningDataModule):
             task_name=self.task_name,
             seq_length=self.seq_length,
             normalize=self.normalize,
-            impute_strategy=self.impute_strategy,
             train_indices=self.train_indices,
             # Use 'raise' since we pre-filtered - any missing labels now is a bug
             handle_missing_labels="raise" if self.task_name else "filter",

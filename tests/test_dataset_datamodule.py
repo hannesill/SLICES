@@ -156,49 +156,24 @@ class TestICUDataset:
         assert isinstance(sample["stay_id"], int)
         assert sample["label"].dtype == torch.float32
 
-    def test_imputation_forward_fill(self, mock_extracted_data):
-        """Test forward fill imputation strategy."""
+    def test_zero_fill_after_preprocessing(self, mock_extracted_data):
+        """Test that zero-fill removes all NaN values."""
         dataset = ICUDataset(
             mock_extracted_data,
             task_name="mortality_24h",
-            impute_strategy="forward_fill",
             normalize=False,
         )
 
         sample = dataset[0]
 
-        # After imputation, there should be no NaN values
+        # After zero-fill, there should be no NaN values
         assert not torch.isnan(sample["timeseries"]).any()
 
-    def test_imputation_zero(self, mock_extracted_data):
-        """Test zero imputation strategy."""
-        dataset = ICUDataset(
-            mock_extracted_data,
-            task_name="mortality_24h",
-            impute_strategy="zero",
-            normalize=False,  # Disable to check raw zeros
-        )
-
-        sample = dataset[0]
-
-        # After imputation, no NaN values
-        assert not torch.isnan(sample["timeseries"]).any()
-
-    def test_imputation_none(self, mock_extracted_data):
-        """Test no imputation keeps NaN values."""
-        dataset = ICUDataset(
-            mock_extracted_data,
-            task_name="mortality_24h",
-            impute_strategy="none",
-            normalize=False,
-        )
-
-        # Some samples might have NaN values
-        sample = dataset[0]
-        # With ~30% missing, there should be some NaN
+        # Missing positions (mask=False) should be zero
         mask = sample["mask"]
-        missing_count = (~mask).sum()
-        assert missing_count > 0  # Should have some missing values
+        missing_values = sample["timeseries"][~mask]
+        if len(missing_values) > 0:
+            assert (missing_values == 0.0).all()
 
     def test_normalization(self, mock_extracted_data):
         """Test that normalization is applied correctly."""
@@ -281,28 +256,6 @@ class TestICUDataset:
         assert "age" in sample["static"]
         assert "gender" in sample["static"]
         assert "los_days" in sample["static"]
-
-    def test_imputation_mean(self, mock_extracted_data):
-        """Test mean imputation strategy."""
-        dataset = ICUDataset(
-            mock_extracted_data, task_name="mortality_24h", impute_strategy="mean", normalize=False
-        )
-
-        sample = dataset[0]
-
-        # After imputation, there should be no NaN values
-        assert not torch.isnan(sample["timeseries"]).any()
-
-    def test_invalid_impute_strategy_raises_error(self, mock_extracted_data):
-        """Test that invalid imputation strategy raises ValueError."""
-        # Error happens during initialization because dataset pre-computes tensors
-        with pytest.raises(ValueError, match="Unknown imputation strategy"):
-            ICUDataset(
-                mock_extracted_data,
-                task_name="mortality_24h",
-                impute_strategy="invalid_strategy",
-                normalize=False,
-            )
 
     def test_normalize_without_train_indices_raises_error(self, mock_extracted_data):
         """Test that normalize=True without train_indices raises ValueError (Issue #4 fix).

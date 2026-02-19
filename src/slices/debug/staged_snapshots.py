@@ -10,8 +10,7 @@ full data pipeline, enabling visual inspection of how data is transformed:
         Stage 3: DENSE       - Dense grid format (seq_length × n_features) with NaN
 
     Dataset stages (ICUDataset):
-        Stage 4: IMPUTED     - After imputation (no NaN, original scale)
-        Stage 5: NORMALIZED  - After z-score normalization (model input)
+        Stage 4: NORMALIZED  - After z-score normalization + zero-fill (model input)
 
 Example:
     >>> from slices.debug.staged_snapshots import StagedExtractor, generate_html_report
@@ -40,7 +39,7 @@ class PipelineStage(str, Enum):
     This is the single source of truth for pipeline stage definitions.
     All debug tools should use this enum.
 
-    The pipeline has 6 stages organized into two groups:
+    The pipeline has 5 stages organized into two groups:
 
     Extraction stages (0-3) - Data transformation in the extractor:
         RAW (0):         Direct from DuckDB query, raw source values
@@ -48,9 +47,8 @@ class PipelineStage(str, Enum):
         BINNED (2):      After hourly aggregation (sparse grid format)
         DENSE (3):       Dense grid format (seq_length × n_features) with NaN
 
-    Dataset stages (4-5) - Preprocessing in ICUDataset:
-        IMPUTED (4):     After imputation (no NaN, original scale)
-        NORMALIZED (5):  After z-score normalization (model input)
+    Dataset stages (4) - Preprocessing in ICUDataset:
+        NORMALIZED (4):  After z-score normalization + zero-fill (model input)
 
     Example:
         >>> from slices.debug import PipelineStage
@@ -65,9 +63,8 @@ class PipelineStage(str, Enum):
     BINNED = "binned"  # Stage 2: After hourly aggregation
     DENSE = "dense"  # Stage 3: Dense grid format (seq_length × n_features) with NaN
 
-    # Dataset stages (4-5): Preprocessing in ICUDataset
-    IMPUTED = "imputed"  # Stage 4: After imputation (no NaN, original scale)
-    NORMALIZED = "normalized"  # Stage 5: After z-score normalization (model input)
+    # Dataset stage (4): Preprocessing in ICUDataset
+    NORMALIZED = "normalized"  # Stage 4: After z-score normalization + zero-fill (model input)
 
     @property
     def order(self) -> int:
@@ -77,8 +74,7 @@ class PipelineStage(str, Enum):
             PipelineStage.TRANSFORMED: 1,
             PipelineStage.BINNED: 2,
             PipelineStage.DENSE: 3,
-            PipelineStage.IMPUTED: 4,
-            PipelineStage.NORMALIZED: 5,
+            PipelineStage.NORMALIZED: 4,
         }[self]
 
     @property
@@ -93,8 +89,8 @@ class PipelineStage(str, Enum):
 
     @classmethod
     def dataset_stages(cls) -> List["PipelineStage"]:
-        """Return only dataset preprocessing stages (4-5)."""
-        return [cls.IMPUTED, cls.NORMALIZED]
+        """Return only dataset preprocessing stages (4)."""
+        return [cls.NORMALIZED]
 
 
 @dataclass
@@ -128,8 +124,7 @@ class PatientStageCapture:
             dense: Stage 3 data (dense grid format with NaN for missing).
 
         Dataset stages:
-            imputed: Stage 4 data (after imputation).
-            normalized: Stage 5 data (after z-score normalization, model input).
+            normalized: Stage 4 data (after z-score normalization + zero-fill, model input).
     """
 
     stay_id: int
@@ -138,8 +133,7 @@ class PatientStageCapture:
     transformed: Optional[StageData] = None
     binned: Optional[StageData] = None
     dense: Optional[StageData] = None
-    # Dataset stages (4-5)
-    imputed: Optional[StageData] = None
+    # Dataset stage (4)
     normalized: Optional[StageData] = None
 
     def get_stage(self, stage: PipelineStage) -> Optional[StageData]:
@@ -154,7 +148,7 @@ class PatientStageCapture:
         """Export all stages to CSV files in a patient-specific directory.
 
         Files are prefixed with stage numbers to show pipeline order:
-        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_imputed.csv, 5_normalized.csv
+        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_normalized.csv
 
         Args:
             output_dir: Base output directory.
@@ -315,7 +309,7 @@ class MultiStageCapture:
         """Export all patient stage data to CSVs.
 
         Files are prefixed with stage numbers to show pipeline order:
-        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_imputed.csv, 5_normalized.csv
+        0_raw.csv, 1_transformed.csv, 2_binned.csv, 3_dense.csv, 4_normalized.csv
 
         Args:
             output_dir: Base output directory.

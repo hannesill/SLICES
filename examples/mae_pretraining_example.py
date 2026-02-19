@@ -160,7 +160,6 @@ def main():
     dataset = ICUDataset(
         data_dir=data_dir,
         task_name=None,  # No task labels needed for pretraining
-        impute_strategy="forward_fill",
         normalize=True,
     )
 

@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from slices.constants import (
     EXTRACTION_BATCH_SIZE,
-    IMPUTE_STRATEGY,
     MIN_STAY_HOURS,
     NORMALIZE,
     PIN_MEMORY,
@@ -210,7 +209,6 @@ class DataConfig(BaseModel):
 
     # Preprocessing applied during training
     normalize: bool = NORMALIZE
-    impute_strategy: Literal["forward_fill", "zero", "mean", "none"] = IMPUTE_STRATEGY
 
     model_config = {"extra": "allow"}  # Allow additional fields from Hydra
 

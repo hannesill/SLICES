@@ -34,7 +34,6 @@ def basic_integration():
         "data/processed/mimic-iv-demo",
         task_name="mortality_24h",
         normalize=True,
-        impute_strategy="forward_fill",
     )
 
     print(f"Dataset loaded: {len(dataset)} samples")
