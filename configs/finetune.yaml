@@ -81,6 +81,9 @@ training:
   # Set to null to keep encoder frozen throughout training
   unfreeze_epoch: null
 
+  # Use learned missing token from pretraining
+  use_missing_token: true
+
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto  # auto | 1 | [0,1] | etc.
