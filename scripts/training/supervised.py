@@ -38,6 +38,7 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 from slices.data.datamodule import ICUDataModule
 from slices.training import FineTuneModule
+from slices.training.utils import save_encoder_checkpoint
 
 
 def setup_callbacks(cfg: DictConfig) -> list:
@@ -169,8 +170,8 @@ def compute_baseline_metrics(datamodule: ICUDataModule, task_name: str) -> dict:
 def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str) -> Path:
     """Save encoder weights to a .pt file in v3 checkpoint format.
 
-    Saves encoder_state_dict, encoder_config, and version metadata
-    matching the format used by SSLPretrainModule.save_encoder().
+    Uses the shared save_encoder_checkpoint helper to ensure consistent
+    checkpoint format across all training scripts.
 
     Args:
         model: Trained model with encoder.
@@ -180,6 +181,8 @@ def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str
     Returns:
         Path to saved encoder weights.
     """
+    from slices.models.encoders import EncoderWithMissingToken
+
     encoder_path = Path(output_dir) / "encoder.pt"
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -188,19 +191,21 @@ def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str
         **{k: v for k, v in cfg.encoder.items() if k != "name"},
     }
 
-    # Get the inner encoder state dict (unwrap EncoderWithMissingToken if present)
-    from slices.models.encoders import EncoderWithMissingToken
-
     encoder = model.encoder
-    checkpoint = {"encoder_config": encoder_config, "version": 3}
+    missing_token = None
 
     if isinstance(encoder, EncoderWithMissingToken):
-        checkpoint["encoder_state_dict"] = encoder.encoder.state_dict()
-        checkpoint["missing_token"] = encoder.missing_token.data.clone()
+        missing_token = encoder.missing_token
+        inner_encoder = encoder.encoder
     else:
-        checkpoint["encoder_state_dict"] = encoder.state_dict()
+        inner_encoder = encoder
 
-    torch.save(checkpoint, encoder_path)
+    save_encoder_checkpoint(
+        encoder=inner_encoder,
+        encoder_config=encoder_config,
+        path=encoder_path,
+        missing_token=missing_token,
+    )
 
     return encoder_path
 

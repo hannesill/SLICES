@@ -399,6 +399,8 @@ class BaseExtractor(ABC):
         Creates a dense representation where each stay has exactly seq_length_hours
         timesteps, with missing hours filled with NaN and masks set to False.
 
+        Uses vectorized Polars operations instead of Python loops for performance.
+
         Args:
             sparse_timeseries: Sparse timeseries with stay_id, hour, features, masks.
             stays: Stay metadata with stay_id, los_days for length calculation.
@@ -412,10 +414,10 @@ class BaseExtractor(ABC):
         """
         seq_length = self.config.seq_length_hours
         n_features = len(feature_names)
+        mask_names = [f"{f}_mask" for f in feature_names]
 
         # Use stay_ids from stays DataFrame (not sparse_timeseries) to ensure
         # ALL requested stays are included, even those with no observations.
-        # This prevents dimension mismatch between timeseries.parquet and labels.parquet.
         stay_ids = stays["stay_id"].unique().to_list()
 
         # Track which stays have data for logging
@@ -427,58 +429,90 @@ class BaseExtractor(ABC):
                 f"observations. They will have all-NaN/all-False arrays.[/yellow]"
             )
 
-        results = []
-        global_overflow_count = 0
-        global_overflow_max_hour = 0
-
-        for stay_id in stay_ids:
-            # Get data for this stay (may be empty)
-            stay_data = sparse_timeseries.filter(pl.col("stay_id") == stay_id)
-
-            # Initialize dense arrays with NaN/False
-            dense_values = [[float("nan")] * n_features for _ in range(seq_length)]
-            dense_mask = [[False] * n_features for _ in range(seq_length)]
-
-            # Track overflow for this stay
-            stay_overflow_count = 0
-            stay_overflow_max_hour = 0
-
-            # Fill in observed values
-            for row in stay_data.iter_rows(named=True):
-                hour = row["hour"]
-                if 0 <= hour < seq_length:
-                    for feat_idx, feat_name in enumerate(feature_names):
-                        value = row.get(feat_name)
-                        mask_val = row.get(f"{feat_name}_mask", False)
-
-                        if value is not None and mask_val:
-                            dense_values[hour][feat_idx] = float(value)
-                            dense_mask[hour][feat_idx] = True
-                elif hour >= seq_length:
-                    stay_overflow_count += 1
-                    stay_overflow_max_hour = max(stay_overflow_max_hour, hour)
-
-            # Accumulate global overflow stats
-            global_overflow_count += stay_overflow_count
-            global_overflow_max_hour = max(global_overflow_max_hour, stay_overflow_max_hour)
-
-            results.append(
-                {
-                    "stay_id": stay_id,
-                    "timeseries": dense_values,
-                    "mask": dense_mask,
-                }
-            )
-
-        # Warn if data was truncated
-        if global_overflow_count > 0:
+        # Log overflow stats
+        overflow = sparse_timeseries.filter(pl.col("hour") >= seq_length)
+        if len(overflow) > 0:
+            max_hour = int(overflow["hour"].max())  # type: ignore[arg-type]
             console.print(
-                f"[yellow]Warning: Discarded {global_overflow_count} data points beyond "
-                f"seq_length={seq_length} (max hour observed: {global_overflow_max_hour}). "
+                f"[yellow]Warning: Discarded {len(overflow)} data points beyond "
+                f"seq_length={seq_length} (max hour observed: {max_hour}). "
                 f"Consider increasing seq_length_hours if late observations are important.[/yellow]"
             )
 
-        return pl.DataFrame(results)
+        # Filter to valid hours only
+        valid = sparse_timeseries.filter((pl.col("hour") >= 0) & (pl.col("hour") < seq_length))
+
+        # Build the full grid: every (stay_id, hour) combination
+        all_stays = pl.DataFrame({"stay_id": stay_ids})
+        all_hours = pl.DataFrame({"hour": list(range(seq_length))})
+        grid = all_stays.join(all_hours, how="cross")
+
+        # Ensure mask columns exist in valid (default False), cast feature cols to Float64
+        for f in feature_names:
+            if f not in valid.columns:
+                valid = valid.with_columns(pl.lit(None).cast(pl.Float64).alias(f))
+            else:
+                valid = valid.with_columns(pl.col(f).cast(pl.Float64))
+            m = f"{f}_mask"
+            if m not in valid.columns:
+                valid = valid.with_columns(pl.lit(False).alias(m))
+
+        # Select only the columns we need for the join
+        valid = valid.select(["stay_id", "hour"] + feature_names + mask_names)
+
+        # Left join grid with valid data
+        dense = grid.join(valid, on=["stay_id", "hour"], how="left")
+
+        # Fill nulls: NaN for value columns, False for mask columns
+        dense = dense.with_columns(
+            [pl.col(f).fill_null(float("nan")).cast(pl.Float64) for f in feature_names]
+            + [pl.col(m).fill_null(False).cast(pl.Boolean) for m in mask_names]
+        )
+
+        # Apply mask: where mask is False, set value to NaN
+        dense = dense.with_columns(
+            [
+                pl.when(pl.col(mask_names[i]))
+                .then(pl.col(feature_names[i]))
+                .otherwise(float("nan"))
+                .alias(feature_names[i])
+                for i in range(n_features)
+            ]
+        )
+
+        # Sort to guarantee consistent ordering
+        dense = dense.sort(["stay_id", "hour"])
+
+        # Aggregate into nested lists per stay
+        # For each stay, build a list-of-lists: [[feat0_h0, feat1_h0, ...], [feat0_h1, ...], ...]
+        result = dense.group_by("stay_id", maintain_order=True).agg(
+            [pl.col(f) for f in feature_names] + [pl.col(m) for m in mask_names]
+        )
+
+        # Build timeseries and mask columns as list-of-lists
+        # Each row's timeseries column should be a list of length seq_length,
+        # where each element is a list of n_features values.
+        # We construct this by zipping the per-feature lists per hour.
+        result = result.with_columns(
+            pl.struct(feature_names)
+            .map_elements(
+                lambda s: [[s[f][h] for f in feature_names] for h in range(seq_length)],
+                return_dtype=pl.List(pl.List(pl.Float64)),
+            )
+            .alias("timeseries"),
+            pl.struct(mask_names)
+            .map_elements(
+                lambda s: [[s[m][h] for m in mask_names] for h in range(seq_length)],
+                return_dtype=pl.List(pl.List(pl.Boolean)),
+            )
+            .alias("mask"),
+        )
+
+        # Ensure all requested stays are present (even those with no data)
+        # and in the original order
+        result = result.select(["stay_id", "timeseries", "mask"])
+
+        return result
 
     def _check_existing_extraction(self) -> Optional[Dict[str, pl.DataFrame]]:
         """Check if extraction output files already exist.

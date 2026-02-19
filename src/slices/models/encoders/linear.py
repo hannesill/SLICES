@@ -11,6 +11,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from slices.models.common import apply_pooling
+
 from .base import BaseEncoder, EncoderConfig
 
 
@@ -102,38 +104,7 @@ class LinearEncoder(BaseEncoder):
         Returns:
             Pooled tensor of shape (B, d_model) or (B, T, d_model) if no pooling.
         """
-        if self.config.pooling == "none":
-            return x
-
-        elif self.config.pooling == "last":
-            if padding_mask is not None:
-                lengths = padding_mask.sum(dim=1)
-                batch_idx = torch.arange(x.size(0), device=x.device)
-                last_idx = (lengths - 1).clamp(min=0)
-                return x[batch_idx, last_idx, :]
-            else:
-                return x[:, -1, :]
-
-        elif self.config.pooling == "mean":
-            if padding_mask is not None:
-                mask_expanded = padding_mask.unsqueeze(-1)
-                x_masked = x * mask_expanded
-                sum_valid = x_masked.sum(dim=1)
-                count_valid = padding_mask.sum(dim=1, keepdim=True).clamp(min=1)
-                return sum_valid / count_valid
-            else:
-                return x.mean(dim=1)
-
-        elif self.config.pooling == "max":
-            if padding_mask is not None:
-                mask_expanded = padding_mask.unsqueeze(-1)
-                x_masked = x.masked_fill(~mask_expanded, float("-inf"))
-                return x_masked.max(dim=1)[0]
-            else:
-                return x.max(dim=1)[0]
-
-        else:
-            raise ValueError(f"Unknown pooling strategy: {self.config.pooling}")
+        return apply_pooling(x, self.config.pooling, padding_mask)
 
     def get_output_dim(self) -> int:
         """Return the output dimension of the encoder."""

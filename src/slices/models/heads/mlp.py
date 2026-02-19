@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from slices.models.common import get_activation
+
 from .base import BaseTaskHead, TaskHeadConfig
 
 
@@ -55,7 +57,7 @@ class MLPTaskHead(BaseTaskHead):
             # Optionally add LayerNorm (SMART paper: "MLP with layer normalizations")
             if config.use_layer_norm:
                 layers.append(nn.LayerNorm(hidden_dim))
-            layers.append(self._get_activation(config.activation))
+            layers.append(get_activation(config.activation))
             layers.append(nn.Dropout(config.dropout))
             in_dim = hidden_dim
 
@@ -64,27 +66,6 @@ class MLPTaskHead(BaseTaskHead):
         layers.append(nn.Linear(in_dim, output_dim))
 
         self.mlp = nn.Sequential(*layers)
-
-    def _get_activation(self, name: str) -> nn.Module:
-        """Get activation function by name.
-
-        Args:
-            name: Activation function name.
-
-        Returns:
-            Activation module.
-        """
-        activations = {
-            "relu": nn.ReLU(),
-            "gelu": nn.GELU(),
-            "silu": nn.SiLU(),
-            "tanh": nn.Tanh(),
-        }
-        if name not in activations:
-            raise ValueError(
-                f"Unknown activation '{name}'. Choose from: {list(activations.keys())}"
-            )
-        return activations[name]
 
     def forward(self, encoder_output: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Forward pass through MLP head.

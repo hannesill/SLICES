@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective, get_ssl_config_class
+from slices.training.utils import build_optimizer, build_scheduler, save_encoder_checkpoint
 
 
 class SSLPretrainModule(pl.LightningModule):
@@ -208,112 +209,12 @@ class SSLPretrainModule(pl.LightningModule):
         Returns:
             Dictionary with optimizer and optional scheduler.
         """
-        # Build optimizer
-        optimizer_name = self.optimizer_config.name.lower()
-        lr = self.optimizer_config.lr
-        weight_decay = self.optimizer_config.get("weight_decay", 0.0)
+        optimizer = build_optimizer(self.parameters(), self.optimizer_config)
 
-        if optimizer_name == "adam":
-            optimizer = torch.optim.Adam(
-                self.parameters(),
-                lr=lr,
-                weight_decay=weight_decay,
-            )
-        elif optimizer_name == "adamw":
-            optimizer = torch.optim.AdamW(
-                self.parameters(),
-                lr=lr,
-                weight_decay=weight_decay,
-            )
-        elif optimizer_name == "sgd":
-            momentum = self.optimizer_config.get("momentum", 0.9)
-            optimizer = torch.optim.SGD(
-                self.parameters(),
-                lr=lr,
-                weight_decay=weight_decay,
-                momentum=momentum,
-            )
-        else:
-            raise ValueError(
-                f"Unknown optimizer '{optimizer_name}'. " f"Supported: adam, adamw, sgd"
-            )
-
-        # Return optimizer only if no scheduler
-        if self.scheduler_config is None:
+        result = build_scheduler(optimizer, self.scheduler_config)
+        if result is None:
             return optimizer
-
-        # Build scheduler
-        scheduler_name = self.scheduler_config.name.lower()
-
-        if scheduler_name == "cosine":
-            T_max = self.scheduler_config.get("T_max", 100)
-            eta_min = self.scheduler_config.get("eta_min", 0.0)
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=T_max,
-                eta_min=eta_min,
-            )
-        elif scheduler_name == "step":
-            step_size = self.scheduler_config.get("step_size", 30)
-            gamma = self.scheduler_config.get("gamma", 0.1)
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=step_size,
-                gamma=gamma,
-            )
-        elif scheduler_name == "plateau":
-            mode = self.scheduler_config.get("mode", "min")
-            factor = self.scheduler_config.get("factor", 0.1)
-            patience = self.scheduler_config.get("patience", 10)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=mode,
-                factor=factor,
-                patience=patience,
-            )
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                },
-            }
-        elif scheduler_name == "warmup_cosine":
-            # Warmup + cosine decay
-            warmup_epochs = self.scheduler_config.get("warmup_epochs", 10)
-            max_epochs = self.scheduler_config.get("max_epochs", 100)
-            eta_min = self.scheduler_config.get("eta_min", 0.0)
-
-            def lr_lambda(epoch: int) -> float:
-                if epoch < warmup_epochs:
-                    # Linear warmup: start at lr/warmup_epochs, reach lr at end
-                    return float(epoch + 1) / float(max(1, warmup_epochs))
-                else:
-                    # Cosine decay
-                    progress = float(epoch - warmup_epochs) / float(
-                        max(1, max_epochs - warmup_epochs)
-                    )
-                    return (
-                        eta_min
-                        + (1 - eta_min)
-                        * 0.5
-                        * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))).item()
-                    )
-
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-        else:
-            raise ValueError(
-                f"Unknown scheduler '{scheduler_name}'. "
-                f"Supported: cosine, step, plateau, warmup_cosine"
-            )
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-            },
-        }
+        return result
 
     def get_encoder(self) -> nn.Module:
         """Get the encoder module for downstream tasks.
@@ -326,7 +227,7 @@ class SSLPretrainModule(pl.LightningModule):
     def save_encoder(self, path: str) -> None:
         """Save encoder weights and missing token for downstream fine-tuning.
 
-        Saves a checkpoint dictionary containing:
+        Saves a v3 checkpoint dictionary containing:
         - encoder_state_dict: Encoder model weights
         - encoder_config: Encoder configuration dict (name + params)
         - missing_token: Learned MISSING_TOKEN from SSL objective (if available)
@@ -341,21 +242,21 @@ class SSLPretrainModule(pl.LightningModule):
         Args:
             path: Path to save encoder checkpoint.
         """
-        # Build encoder config dict from the Hydra config
         encoder_config = {
             "name": self.config.encoder.name,
             **{k: v for k, v in self.config.encoder.items() if k != "name"},
         }
 
-        checkpoint = {
-            "encoder_state_dict": self.encoder.state_dict(),
-            "encoder_config": encoder_config,
-            "version": 3,
-        }
-
-        # Save missing_token if the SSL objective has one
+        missing_token = None
+        d_input = None
         if hasattr(self.ssl_objective, "missing_token"):
-            checkpoint["missing_token"] = self.ssl_objective.missing_token.data.clone()
-            checkpoint["d_input"] = self.encoder.config.d_input
+            missing_token = self.ssl_objective.missing_token
+            d_input = self.encoder.config.d_input
 
-        torch.save(checkpoint, path)
+        save_encoder_checkpoint(
+            encoder=self.encoder,
+            encoder_config=encoder_config,
+            path=path,
+            missing_token=missing_token,
+            d_input=d_input,
+        )

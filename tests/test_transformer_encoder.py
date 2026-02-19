@@ -13,8 +13,9 @@ Tests cover:
 import pytest
 import torch
 import torch.nn as nn
+from slices.models.common import PositionalEncoding
 from slices.models.encoders import TransformerConfig, TransformerEncoder
-from slices.models.encoders.transformer import PositionalEncoding, TransformerEncoderLayer
+from slices.models.encoders.transformer import TransformerEncoderLayer
 
 
 class TestPositionalEncoding:
