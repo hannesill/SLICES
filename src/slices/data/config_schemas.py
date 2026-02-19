@@ -192,7 +192,7 @@ class DataConfig(BaseModel):
     feature_set: Literal["core", "extended"] = "core"  # Feature set to extract
     categories: Optional[List[str]] = None  # Feature categories (null = all)
     extraction_batch_size: int = EXTRACTION_BATCH_SIZE
-    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h"])
+    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h", "mortality_hospital"])
 
     # Config directory paths (auto-detected if null)
     tasks_dir: Optional[str] = None

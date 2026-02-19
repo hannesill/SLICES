@@ -48,7 +48,6 @@ categories: null
 # Tasks to extract labels for
 tasks:
   - mortality_24h
-  - mortality_48h
   - mortality_hospital
 
 # =============================================================================

@@ -10,11 +10,6 @@ reproducible training runs and prevent data leakage from val/test sets.
 Usage:
     uv run python scripts/preprocessing/prepare_dataset.py \
         data.processed_dir=data/processed/mimic-iv
-
-    # Custom split ratios
-    uv run python scripts/preprocessing/prepare_dataset.py \
-        data.processed_dir=data/processed/mimic-iv \
-        split.train_ratio=0.8 split.val_ratio=0.1 split.test_ratio=0.1
 """
 
 from pathlib import Path
@@ -24,6 +19,7 @@ import numpy as np
 import polars as pl
 import yaml
 from omegaconf import DictConfig
+from slices.constants import TEST_RATIO, TRAIN_RATIO, VAL_RATIO
 
 
 def compute_patient_splits(
@@ -196,14 +192,14 @@ def main(cfg: DictConfig) -> None:
     timeseries_df = pl.read_parquet(processed_dir / "timeseries.parquet")
     print(f"  Loaded {len(timeseries_df):,} stays")
 
-    # Compute splits
+    # Compute splits (ratios are benchmark invariants from constants.py)
     print("\n3. Computing patient-level splits...")
     splits = compute_patient_splits(
         static_df=static_df,
         timeseries_df=timeseries_df,
-        train_ratio=cfg.split.train_ratio,
-        val_ratio=cfg.split.val_ratio,
-        test_ratio=cfg.split.test_ratio,
+        train_ratio=TRAIN_RATIO,
+        val_ratio=VAL_RATIO,
+        test_ratio=TEST_RATIO,
         seed=cfg.seed,
     )
 

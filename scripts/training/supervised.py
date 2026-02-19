@@ -14,7 +14,7 @@ Example usage:
     uv run python scripts/training/supervised.py
 
     # Different task
-    uv run python scripts/training/supervised.py task.task_name=mortality_48h
+    uv run python scripts/training/supervised.py task.task_name=mortality_hospital
 
     # Resume interrupted training
     uv run python scripts/training/supervised.py ckpt_path=outputs/.../checkpoints/last.ckpt

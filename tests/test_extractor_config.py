@@ -179,7 +179,6 @@ class TestExtractorConfigTasksParameter:
         config = ExtractorConfig(parquet_root="/path")
 
         assert "mortality_24h" in config.tasks
-        assert "mortality_48h" in config.tasks
         assert "mortality_hospital" in config.tasks
 
     def test_custom_tasks_list(self):

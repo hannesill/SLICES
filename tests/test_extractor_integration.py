@@ -117,7 +117,7 @@ class TestExtractorIntegration:
                 "stay_id": [1, 2, 3],
                 "date_of_death": [
                     datetime(2020, 1, 1, 20, 0),  # 10h after admission (within 24h)
-                    datetime(2020, 1, 4, 13, 0),  # 49h after admission (outside 24h, within 48h)
+                    datetime(2020, 1, 4, 13, 0),  # 49h after admission (outside 24h)
                     None,  # Survived
                 ],
                 "hospital_expire_flag": [1, 1, 0],
@@ -139,12 +139,6 @@ class TestExtractorIntegration:
                 label_sources=["stays", "mortality_info"],
             ),
             LabelConfig(
-                task_name="mortality_48h",
-                task_type="binary_classification",
-                prediction_window_hours=48,
-                label_sources=["stays", "mortality_info"],
-            ),
-            LabelConfig(
                 task_name="mortality_hospital",
                 task_type="binary_classification",
                 prediction_window_hours=None,
@@ -157,7 +151,6 @@ class TestExtractorIntegration:
         # Verify all columns exist and are unique
         assert "stay_id" in labels.columns
         assert "mortality_24h" in labels.columns
-        assert "mortality_48h" in labels.columns
         assert "mortality_hospital" in labels.columns
 
         # Verify no duplicate columns
@@ -166,24 +159,21 @@ class TestExtractorIntegration:
         ), f"Duplicate columns found: {labels.columns}"
 
         # Verify shape
-        assert labels.shape == (3, 4), f"Expected (3, 4), got {labels.shape}"
+        assert labels.shape == (3, 3), f"Expected (3, 3), got {labels.shape}"
 
         # Verify label values for stay 1 (died at 10h)
         row1 = labels.filter(pl.col("stay_id") == 1)
         assert row1["mortality_24h"][0] == 1  # Within 24h
-        assert row1["mortality_48h"][0] == 1  # Within 48h
         assert row1["mortality_hospital"][0] == 1  # Died in hospital
 
         # Verify label values for stay 2 (died at 49h)
         row2 = labels.filter(pl.col("stay_id") == 2)
         assert row2["mortality_24h"][0] == 0  # Not within 24h (died at 49h)
-        assert row2["mortality_48h"][0] == 0  # Outside 48h window (died at 49h)
         assert row2["mortality_hospital"][0] == 1  # Died in hospital
 
         # Verify label values for stay 3 (survived)
         row3 = labels.filter(pl.col("stay_id") == 3)
         assert row3["mortality_24h"][0] == 0
-        assert row3["mortality_48h"][0] == 0
         assert row3["mortality_hospital"][0] == 0
 
 

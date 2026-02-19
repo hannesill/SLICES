@@ -9,7 +9,7 @@
 #   uv run python scripts/training/supervised.py
 #
 #   # Different task
-#   uv run python scripts/training/supervised.py task.task_name=mortality_48h
+#   uv run python scripts/training/supervised.py task.task_name=mortality_hospital
 #
 #   # Resume from checkpoint
 #   uv run python scripts/training/supervised.py ckpt_path=outputs/supervised/.../checkpoints/last.ckpt

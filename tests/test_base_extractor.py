@@ -660,7 +660,7 @@ class TestLoadTaskConfigs:
         parquet_root.mkdir(parents=True)
         tasks_dir.mkdir(parents=True)
 
-        for task_name, window in [("mortality_24h", 24), ("mortality_48h", 48)]:
+        for task_name, window in [("mortality_24h", 24), ("mortality_hospital", None)]:
             config_dict = {
                 "task_name": task_name,
                 "task_type": "binary_classification",
@@ -676,12 +676,12 @@ class TestLoadTaskConfigs:
         )
         extractor = MockExtractor(config)
 
-        loaded = extractor._load_task_configs(["mortality_24h", "mortality_48h"])
+        loaded = extractor._load_task_configs(["mortality_24h", "mortality_hospital"])
 
         assert len(loaded) == 2
         task_names = {tc.task_name for tc in loaded}
         assert "mortality_24h" in task_names
-        assert "mortality_48h" in task_names
+        assert "mortality_hospital" in task_names
 
     def test_observation_window_validation_raises_on_mismatch(self, tmp_path):
         """Test that loading task with mismatched observation_window_hours raises error."""

@@ -1,0 +1,41 @@
+# Hospital mortality prediction task
+# Predict if patient will die before hospital discharge
+#
+# Timeline (with default settings):
+#   |---- observation (48h) ----|---- prediction (until hospital discharge) ----|
+#   intime                    +48h                                        dischtime
+#
+# - Model sees: hours 0-48 of ICU stay
+# - Model predicts: will patient die before hospital discharge?
+# - Patients who die during observation (hours 0-48) are excluded (label=null)
+#
+# Unlike mortality.yaml (ICU mortality using outtime), this uses
+# hospital_expire_flag which covers the full hospitalization.
+
+task_name: mortality_hospital
+task_type: binary
+
+# Prediction parameters
+prediction_window_hours: null  # null means hospital mortality (uses hospital_expire_flag)
+observation_window_hours: 48  # Must match seq_length_hours in data config
+gap_hours: 0
+
+# Data requirements
+label_sources:
+  - stays
+  - mortality_info
+
+label_params: {}
+
+# Evaluation metrics
+primary_metric: auprc  # AUPRC preferred for imbalanced mortality prediction
+additional_metrics:
+  - auroc
+  - accuracy
+  - sensitivity
+  - specificity
+
+# Class information
+n_classes: 2
+class_names: [survived, died]
+positive_class: died
