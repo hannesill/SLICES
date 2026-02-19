@@ -10,17 +10,22 @@ Key features:
 - Comprehensive metrics (AUROC, AUPRC, accuracy, etc.)
 """
 
+import logging
 import warnings
 from typing import Any, Dict, Literal, Optional
 
 import lightning.pytorch as pl
 import torch
 import torch.nn as nn
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from slices.eval import MetricConfig, build_metrics
 from slices.models.encoders import EncoderWithMissingToken, build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
+from slices.training.config_schemas import TaskConfig as TaskConfigSchema
+from slices.training.config_schemas import TrainingConfig as TrainingConfigSchema
+
+logger = logging.getLogger(__name__)
 
 
 class FineTuneModule(pl.LightningModule):
@@ -62,6 +67,13 @@ class FineTuneModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.config = config
+
+        # Validate task and training configs (catches typos via extra="forbid")
+        task_dict = OmegaConf.to_container(config.task, resolve=True)
+        TaskConfigSchema(**task_dict)
+
+        training_dict = OmegaConf.to_container(config.training, resolve=True)
+        TrainingConfigSchema(**training_dict)
 
         # Build encoder from config
         encoder_name = config.encoder.name
@@ -170,14 +182,16 @@ class FineTuneModule(pl.LightningModule):
                 ckpt_pooling = encoder_config.get("pooling", "none")
                 if ckpt_pooling != finetune_pooling:
                     encoder_config["pooling"] = finetune_pooling
-                    print(
-                        f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
-                        f"(finetuning requires aggregated output)"
+                    logger.info(
+                        "Overriding pooling: %s -> %s (finetuning requires aggregated output)",
+                        ckpt_pooling,
+                        finetune_pooling,
                     )
                 self.encoder = build_encoder(encoder_name, encoder_config)
-                print(
-                    f"✓ Rebuilt encoder from checkpoint config: "
-                    f"{encoder_name} (d_model={encoder_config.get('d_model', 'N/A')})"
+                logger.info(
+                    "Rebuilt encoder from checkpoint config: %s (d_model=%s)",
+                    encoder_name,
+                    encoder_config.get("d_model", "N/A"),
                 )
             elif version == 2:
                 # v2 checkpoint: try to infer encoder type from state_dict keys
@@ -198,7 +212,7 @@ class FineTuneModule(pl.LightningModule):
                     )
 
             self.encoder.load_state_dict(state_dict)
-            print(f"✓ Loaded encoder weights from: {path} (format v{version})")
+            logger.info("Loaded encoder weights from: %s (format v%d)", path, version)
 
             # Wrap encoder with missing token if available and enabled
             if self.use_missing_token:
@@ -213,7 +227,7 @@ class FineTuneModule(pl.LightningModule):
                 UserWarning,
             )
             self.encoder.load_state_dict(checkpoint)
-            print(f"✓ Loaded encoder weights from: {path} (legacy format)")
+            logger.info("Loaded encoder weights from: %s (legacy format)", path)
 
             # Wrap encoder with random missing token if enabled
             if self.use_missing_token:
@@ -278,14 +292,16 @@ class FineTuneModule(pl.LightningModule):
                 ckpt_pooling = encoder_config_dict.get("pooling", "none")
                 if ckpt_pooling != finetune_pooling:
                     encoder_config_dict["pooling"] = finetune_pooling
-                    print(
-                        f"✓ Overriding pooling: {ckpt_pooling} → {finetune_pooling} "
-                        f"(finetuning requires aggregated output)"
+                    logger.info(
+                        "Overriding pooling: %s -> %s (finetuning requires aggregated output)",
+                        ckpt_pooling,
+                        finetune_pooling,
                     )
                 self.encoder = build_encoder(ckpt_encoder_name, encoder_config_dict)
-                print(
-                    f"✓ Rebuilt encoder from checkpoint config: "
-                    f"{ckpt_encoder_name} (d_model={encoder_config_dict.get('d_model', 'N/A')})"
+                logger.info(
+                    "Rebuilt encoder from checkpoint config: %s (d_model=%s)",
+                    ckpt_encoder_name,
+                    encoder_config_dict.get("d_model", "N/A"),
                 )
         else:
             # No hyper_parameters - infer encoder type from state_dict keys
@@ -305,7 +321,7 @@ class FineTuneModule(pl.LightningModule):
                 )
 
         self.encoder.load_state_dict(encoder_state_dict)
-        print(f"✓ Loaded encoder from pretrain checkpoint: {path}")
+        logger.info("Loaded encoder from pretrain checkpoint: %s", path)
 
         # Extract missing_token from SSL objective if present
         missing_token = None
@@ -355,7 +371,7 @@ class FineTuneModule(pl.LightningModule):
                 missing_token=missing_token,
                 init_missing_token=False,
             )
-            print("✓ Wrapped encoder with pretrained missing token")
+            logger.info("Wrapped encoder with pretrained missing token")
         else:
             self.encoder = EncoderWithMissingToken(
                 encoder=self.encoder,
@@ -363,16 +379,16 @@ class FineTuneModule(pl.LightningModule):
                 missing_token=None,
                 init_missing_token=True,
             )
-            print("✓ Wrapped encoder with randomly initialized missing token")
+            logger.info("Wrapped encoder with randomly initialized missing token")
 
     def _apply_freeze_strategy(self) -> None:
         """Apply freezing strategy to encoder."""
         if self.freeze_strategy:
             self._freeze_encoder()
-            print("✓ Encoder frozen (training task head only)")
+            logger.info("Encoder frozen (training task head only)")
         else:
             self._unfreeze_encoder()
-            print("✓ Encoder unfrozen (full finetuning)")
+            logger.info("Encoder unfrozen (full finetuning)")
 
     def _freeze_encoder(self) -> None:
         """Freeze all encoder parameters."""
@@ -578,7 +594,7 @@ class FineTuneModule(pl.LightningModule):
             if self.freeze_strategy:  # Only if initially frozen
                 self._unfreeze_encoder()
                 self.freeze_strategy = False  # Don't unfreeze again
-                print(f"✓ Epoch {self.current_epoch}: Unfroze encoder for finetuning")
+                logger.info("Epoch %d: Unfroze encoder for finetuning", self.current_epoch)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Configure optimizer and optional learning rate scheduler.

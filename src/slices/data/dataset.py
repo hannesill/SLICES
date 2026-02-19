@@ -6,6 +6,7 @@ returns (timeseries, mask, labels, static_features) tuples for training.
 
 import hashlib
 import logging
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -449,8 +450,6 @@ class ICUDataset(Dataset):
             cached_train_set = set(cached_train_indices) if cached_train_indices else None
 
             if current_train_set != cached_train_set:
-                import warnings
-
                 warnings.warn(
                     f"Cached normalization stats were computed on a different training split. "
                     f"Cached: {len(cached_train_set) if cached_train_set else 0} samples, "
@@ -462,8 +461,6 @@ class ICUDataset(Dataset):
 
             return stats
         except Exception as e:
-            import warnings
-
             warnings.warn(
                 f"Failed to load normalization stats from {stats_path}: {e}. "
                 "Will recompute statistics.",
@@ -491,8 +488,6 @@ class ICUDataset(Dataset):
             with open(stats_path, "w") as f:
                 yaml.dump(stats, f, default_flow_style=False)
         except Exception as e:
-            import warnings
-
             warnings.warn(
                 f"Failed to save normalization stats to {stats_path}: {e}",
                 UserWarning,
@@ -656,8 +651,6 @@ class ICUDataset(Dataset):
             with open(metadata_path, "w") as f:
                 yaml.dump(metadata, f, default_flow_style=False)
         except Exception as e:
-            import warnings
-
             warnings.warn(
                 f"Failed to save dataset metadata to {metadata_path}: {e}",
                 UserWarning,
