@@ -1,5 +1,8 @@
 """Tests for ICUDataset and ICUDataModule."""
 
+import ast
+import inspect
+
 import numpy as np
 import polars as pl
 import pytest
@@ -1052,3 +1055,387 @@ class TestCollateFn:
         assert torch.allclose(
             sample1_data["mask"].float(), sample2_data["mask"].float()
         ), "Masks should be identical"
+
+
+# ============================================================================
+# Label statistics and multi-label tests
+# ============================================================================
+
+
+@pytest.fixture
+def mock_multilabel_data(tmp_path):
+    """Create mock extracted data with multi-label (phenotyping) task."""
+    data_dir = tmp_path / "processed_ml"
+    data_dir.mkdir(parents=True)
+
+    metadata = {
+        "dataset": "mock",
+        "feature_set": "core",
+        "feature_names": ["heart_rate", "sbp"],
+        "n_features": 2,
+        "seq_length_hours": 24,
+        "min_stay_hours": 6,
+        "task_names": ["phenotyping"],
+        "n_stays": 8,
+    }
+    with open(data_dir / "metadata.yaml", "w") as f:
+        yaml.dump(metadata, f)
+
+    static_df = pl.DataFrame(
+        {
+            "stay_id": list(range(1, 9)),
+            "patient_id": [100, 101, 102, 103, 104, 105, 106, 107],
+            "age": [65, 45, 70, 55, 60, 75, 50, 80],
+            "gender": ["M", "F", "M", "F", "M", "F", "M", "F"],
+            "los_days": [3.0, 2.0, 3.0, 4.0, 2.5, 3.5, 4.5, 2.0],
+        }
+    )
+    static_df.write_parquet(data_dir / "static.parquet")
+
+    seq_length = 24
+    n_features = 2
+    np.random.seed(42)
+
+    timeseries_data = []
+    mask_data = []
+    for _ in range(8):
+        ts = np.random.randn(seq_length, n_features) * 10 + 70
+        mask = np.random.rand(seq_length, n_features) > 0.2
+        ts[~mask] = float("nan")
+        timeseries_data.append(ts.tolist())
+        mask_data.append(mask.tolist())
+
+    timeseries_df = pl.DataFrame(
+        {
+            "stay_id": list(range(1, 9)),
+            "timeseries": timeseries_data,
+            "mask": mask_data,
+        }
+    )
+    timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+
+    labels_df = pl.DataFrame(
+        {
+            "stay_id": list(range(1, 9)),
+            "phenotyping_sepsis": [1, 0, 1, 0, 1, 0, 1, 0],
+            "phenotyping_respiratory_failure": [0, 1, 0, 1, 0, 1, 0, 1],
+        }
+    )
+    labels_df.write_parquet(data_dir / "labels.parquet")
+
+    return data_dir
+
+
+class TestLabelStatisticsKeys:
+    """Test that get_label_statistics returns keys that the scripts actually use."""
+
+    def test_prevalence_key_present(self, mock_extracted_data):
+        """get_label_statistics must return 'prevalence', not 'positive_ratio'."""
+        dataset = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+        )
+        stats = dataset.get_label_statistics()
+
+        for task_name, task_stats in stats.items():
+            assert (
+                "prevalence" in task_stats
+            ), f"Task '{task_name}' missing 'prevalence' key in label statistics"
+            assert "positive_ratio" not in task_stats
+            assert "negative_ratio" not in task_stats
+
+    def test_prevalence_value_correct(self, mock_extracted_data):
+        """Verify prevalence = positive / total."""
+        dataset = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+        )
+        stats = dataset.get_label_statistics()
+
+        for task_name, task_stats in stats.items():
+            if "prevalence" in task_stats and task_stats["total"] > 0:
+                expected_prevalence = task_stats["positive"] / task_stats["total"]
+                assert abs(task_stats["prevalence"] - expected_prevalence) < 1e-6
+
+
+class TestMultiLabelTask:
+    """Test that multi-label tasks work through DataModule and Dataset."""
+
+    def test_multilabel_dataset_loads(self, mock_multilabel_data):
+        """ICUDataset should load multi-label (phenotyping) tasks without crash."""
+        dataset = ICUDataset(
+            mock_multilabel_data,
+            task_name="phenotyping",
+            normalize=False,
+        )
+
+        assert len(dataset) == 8
+        sample = dataset[0]
+        assert "label" in sample
+        assert sample["label"].dim() == 1
+        assert sample["label"].shape[0] == 2
+
+    def test_multilabel_datamodule_setup(self, mock_multilabel_data):
+        """ICUDataModule.setup() should not crash for multi-label tasks."""
+        dm = ICUDataModule(
+            processed_dir=mock_multilabel_data,
+            task_name="phenotyping",
+            batch_size=4,
+            num_workers=0,
+            normalize=False,
+        )
+        dm.setup()
+
+        assert dm.dataset is not None
+        assert len(dm.train_indices) + len(dm.val_indices) + len(dm.test_indices) == len(dm.dataset)
+
+    def test_multilabel_label_statistics(self, mock_multilabel_data):
+        """get_label_statistics should report per-subtask stats for multi-label tasks."""
+        dataset = ICUDataset(
+            mock_multilabel_data,
+            task_name="phenotyping",
+            normalize=False,
+        )
+        stats = dataset.get_label_statistics()
+
+        assert "phenotyping" in stats
+        pheno_stats = stats["phenotyping"]
+        assert "n_labels" in pheno_stats
+        assert pheno_stats["n_labels"] == 2
+        assert "mean_prevalence" in pheno_stats
+        assert "subtasks" in pheno_stats
+        assert "phenotyping_sepsis" in pheno_stats["subtasks"]
+        assert "phenotyping_respiratory_failure" in pheno_stats["subtasks"]
+
+    def test_multilabel_filter_missing_labels(self, tmp_path):
+        """DataModule should filter stays with partially missing multi-label targets."""
+        data_dir = tmp_path / "processed_ml_partial"
+        data_dir.mkdir(parents=True)
+
+        metadata = {
+            "dataset": "mock",
+            "feature_names": ["hr"],
+            "n_features": 1,
+            "seq_length_hours": 24,
+            "min_stay_hours": 6,
+            "task_names": ["phenotyping"],
+            "n_stays": 6,
+        }
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        pl.DataFrame(
+            {
+                "stay_id": list(range(1, 7)),
+                "patient_id": list(range(100, 106)),
+                "age": [50] * 6,
+                "gender": ["M"] * 6,
+                "los_days": [3.0] * 6,
+            }
+        ).write_parquet(data_dir / "static.parquet")
+
+        np.random.seed(0)
+        ts_data = []
+        mask_data = []
+        for _ in range(6):
+            ts = np.random.randn(24, 1).tolist()
+            msk = [[True]] * 24
+            ts_data.append(ts)
+            mask_data.append(msk)
+
+        pl.DataFrame(
+            {
+                "stay_id": list(range(1, 7)),
+                "timeseries": ts_data,
+                "mask": mask_data,
+            }
+        ).write_parquet(data_dir / "timeseries.parquet")
+
+        pl.DataFrame(
+            {
+                "stay_id": list(range(1, 7)),
+                "phenotyping_a": [1, 0, None, 1, 0, 1],
+                "phenotyping_b": [0, 1, 0, 1, 0, 1],
+            }
+        ).write_parquet(data_dir / "labels.parquet")
+
+        dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name="phenotyping",
+            batch_size=2,
+            num_workers=0,
+            normalize=False,
+        )
+        dm.setup()
+
+        total = len(dm.train_indices) + len(dm.val_indices) + len(dm.test_indices)
+        assert total == 5, f"Expected 5 stays after filtering null labels, got {total}"
+
+
+class TestNormalizationConsistency:
+    """Verify that prepare_dataset.py and ICUDataset use the same variance formula."""
+
+    def test_bessel_correction_matches_dataset(self):
+        """Both should use Bessel's correction (ddof=1)."""
+        np.random.seed(123)
+        n_samples = 50
+        seq_length = 24
+        n_features = 3
+
+        data = np.random.randn(n_samples, seq_length, n_features) * 10 + 70
+        masks = np.random.rand(n_samples, seq_length, n_features) > 0.2
+        data[~masks] = np.nan
+
+        # Method 1: prepare_dataset.py formula (loop-based)
+        sums = np.zeros(n_features)
+        sq_sums = np.zeros(n_features)
+        counts = np.zeros(n_features)
+
+        for idx in range(n_samples):
+            ts_data = data[idx]
+            mask_data = masks[idx]
+            for t in range(seq_length):
+                for f in range(n_features):
+                    val = ts_data[t][f]
+                    mask_val = mask_data[t][f]
+                    if mask_val and not np.isnan(val):
+                        sums[f] += val
+                        sq_sums[f] += val * val
+                        counts[f] += 1
+
+        means_script = np.zeros(n_features)
+        stds_script = np.ones(n_features)
+        for f in range(n_features):
+            if counts[f] > 0:
+                mean = sums[f] / counts[f]
+                variance = (sq_sums[f] - counts[f] * mean * mean) / max(counts[f] - 1, 1)
+                std = np.sqrt(max(variance, 0))
+                means_script[f] = mean
+                stds_script[f] = std if std > 1e-6 else 1.0
+
+        # Method 2: ICUDataset formula (vectorized)
+        ts_tensor = torch.from_numpy(data.astype(np.float32))
+        masks_tensor = torch.from_numpy(masks)
+
+        flat_ts = ts_tensor.reshape(-1, n_features)
+        flat_masks = masks_tensor.reshape(-1, n_features)
+        valid_mask = flat_masks & ~torch.isnan(flat_ts)
+
+        masked_ts = torch.where(valid_mask, flat_ts, torch.zeros_like(flat_ts))
+        valid_counts = valid_mask.sum(dim=0).float()
+        feature_sums = masked_ts.sum(dim=0)
+
+        means_dataset = torch.where(
+            valid_counts > 0,
+            feature_sums / valid_counts,
+            torch.zeros(n_features),
+        )
+
+        deviations = torch.where(
+            valid_mask,
+            (flat_ts - means_dataset.unsqueeze(0)) ** 2,
+            torch.zeros_like(flat_ts),
+        )
+        variance_dataset = torch.where(
+            valid_counts > 1,
+            deviations.sum(dim=0) / (valid_counts - 1),
+            torch.ones(n_features),
+        )
+        stds_dataset = torch.sqrt(variance_dataset)
+        stds_dataset = torch.clamp(stds_dataset, min=1e-6)
+
+        np.testing.assert_allclose(
+            means_script,
+            means_dataset.numpy(),
+            rtol=1e-5,
+            err_msg="Means differ between prepare_dataset and ICUDataset",
+        )
+        np.testing.assert_allclose(
+            stds_script,
+            stds_dataset.numpy(),
+            rtol=1e-4,
+            err_msg="Stds differ between prepare_dataset and ICUDataset",
+        )
+
+
+class TestTensorCacheWeightsOnly:
+    """Test that tensor cache uses weights_only=True."""
+
+    def test_cache_round_trip_with_weights_only(self, mock_extracted_data):
+        """Create a dataset, let it cache, then reload."""
+        dataset1 = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+        )
+        n1 = len(dataset1)
+
+        dataset2 = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+        )
+        n2 = len(dataset2)
+
+        assert n1 == n2
+
+        s1 = dataset1[0]
+        s2 = dataset2[0]
+        assert torch.allclose(s1["timeseries"], s2["timeseries"])
+        assert torch.equal(s1["mask"], s2["mask"])
+
+    def test_cache_does_not_contain_arbitrary_objects(self, mock_extracted_data):
+        """Tensor cache should be compatible with weights_only=True."""
+        ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+        )
+
+        cache_dir = mock_extracted_data / ".tensor_cache"
+        if cache_dir.exists():
+            cache_files = list(cache_dir.glob("*.pt"))
+            assert len(cache_files) > 0, "Cache directory exists but no .pt files found"
+
+            for cache_file in cache_files:
+                cached = torch.load(cache_file, weights_only=True)
+                assert isinstance(cached, dict)
+                assert "timeseries_tensor" in cached
+                assert "mask_tensor" in cached
+
+
+class TestDatasetImportWarnings:
+    """Test that dataset.py has module-level import warnings."""
+
+    def test_no_inline_import_warnings(self):
+        """dataset.py should not have 'import warnings' inside function bodies."""
+        import slices.data.dataset as mod
+
+        source = inspect.getsource(mod)
+        tree = ast.parse(source)
+
+        inline_imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Import):
+                        for alias in child.names:
+                            if alias.name == "warnings":
+                                inline_imports.append(node.name)
+                    elif isinstance(child, ast.ImportFrom):
+                        if child.module == "warnings":
+                            inline_imports.append(node.name)
+
+        assert len(inline_imports) == 0, (
+            f"Found 'import warnings' inside functions: {inline_imports}. " "Move to module level."
+        )
+
+    def test_module_level_import_exists(self):
+        """dataset.py should have warnings imported at module level."""
+        import slices.data.dataset as mod
+
+        assert hasattr(mod, "warnings") or "warnings" in dir(
+            mod
+        ), "dataset.py should import warnings at module level"

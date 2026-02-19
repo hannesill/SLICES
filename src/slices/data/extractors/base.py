@@ -483,34 +483,19 @@ class BaseExtractor(ABC):
         # Sort to guarantee consistent ordering
         dense = dense.sort(["stay_id", "hour"])
 
-        # Aggregate into nested lists per stay
-        # For each stay, build a list-of-lists: [[feat0_h0, feat1_h0, ...], [feat0_h1, ...], ...]
+        # Build per-hour feature/mask vectors as lists, then group by stay_id.
+        # This avoids map_elements/Python lambdas for a fully vectorized path.
+        # For each (stay_id, hour) row, create a list [feat0, feat1, ...] and
+        # [mask0, mask1, ...], then group by stay_id to get list-of-lists.
+        dense = dense.with_columns(
+            pl.concat_list([pl.col(f) for f in feature_names]).alias("_ts_row"),
+            pl.concat_list([pl.col(m).cast(pl.Boolean) for m in mask_names]).alias("_mask_row"),
+        )
+
         result = dense.group_by("stay_id", maintain_order=True).agg(
-            [pl.col(f) for f in feature_names] + [pl.col(m) for m in mask_names]
+            pl.col("_ts_row").alias("timeseries"),
+            pl.col("_mask_row").alias("mask"),
         )
-
-        # Build timeseries and mask columns as list-of-lists
-        # Each row's timeseries column should be a list of length seq_length,
-        # where each element is a list of n_features values.
-        # We construct this by zipping the per-feature lists per hour.
-        result = result.with_columns(
-            pl.struct(feature_names)
-            .map_elements(
-                lambda s: [[s[f][h] for f in feature_names] for h in range(seq_length)],
-                return_dtype=pl.List(pl.List(pl.Float64)),
-            )
-            .alias("timeseries"),
-            pl.struct(mask_names)
-            .map_elements(
-                lambda s: [[s[m][h] for m in mask_names] for h in range(seq_length)],
-                return_dtype=pl.List(pl.List(pl.Boolean)),
-            )
-            .alias("mask"),
-        )
-
-        # Ensure all requested stays are present (even those with no data)
-        # and in the original order
-        result = result.select(["stay_id", "timeseries", "mask"])
 
         return result
 

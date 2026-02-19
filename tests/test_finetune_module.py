@@ -1,8 +1,13 @@
 """Tests for downstream task finetuning module and task heads."""
 
+import ast
+import inspect
+import logging
+
 import pytest
 import torch
 from omegaconf import OmegaConf
+from pydantic import ValidationError
 from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.heads import (
     LinearTaskHead,
@@ -678,6 +683,215 @@ class TestFineTuneModuleGradualUnfreeze:
         # Now encoder should be unfrozen
         for param in module.encoder.parameters():
             assert param.requires_grad
+
+
+class TestCheckpointConfigMutation:
+    """Test that loading a v3 checkpoint doesn't mutate the checkpoint dict."""
+
+    @pytest.fixture
+    def ckpt_finetune_config(self):
+        return OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.0,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+            }
+        )
+
+    def _make_v3_checkpoint(self, tmp_path):
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=2,
+            d_ff=64,
+            dropout=0.0,
+            max_seq_length=24,
+            pooling="none",
+            use_positional_encoding=True,
+            prenorm=True,
+            activation="gelu",
+            layer_norm_eps=1e-5,
+        )
+        encoder = TransformerEncoder(config)
+        encoder_config = {
+            "name": "transformer",
+            "d_input": 10,
+            "d_model": 32,
+            "n_layers": 1,
+            "n_heads": 2,
+            "d_ff": 64,
+            "dropout": 0.0,
+            "max_seq_length": 24,
+            "pooling": "none",
+            "use_positional_encoding": True,
+            "prenorm": True,
+            "activation": "gelu",
+            "layer_norm_eps": 1e-5,
+        }
+        checkpoint = {
+            "encoder_state_dict": encoder.state_dict(),
+            "encoder_config": encoder_config,
+            "version": 3,
+        }
+        ckpt_path = tmp_path / "encoder_v3.pt"
+        torch.save(checkpoint, ckpt_path)
+        return ckpt_path
+
+    def test_checkpoint_dict_unchanged_after_load(self, ckpt_finetune_config, tmp_path):
+        """Loading a v3 checkpoint should NOT mutate the 'encoder_config' dict."""
+        ckpt_path = self._make_v3_checkpoint(tmp_path)
+        FineTuneModule(ckpt_finetune_config, checkpoint_path=str(ckpt_path))
+
+        reloaded = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        assert (
+            "name" in reloaded["encoder_config"]
+        ), "Checkpoint 'encoder_config' was mutated: 'name' key is missing"
+
+    def test_in_memory_checkpoint_dict_preserved(self, ckpt_finetune_config, tmp_path):
+        """Verify that the in-memory checkpoint dict is not mutated during load."""
+        ckpt_path = self._make_v3_checkpoint(tmp_path)
+        in_memory_ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        original_config = dict(in_memory_ckpt["encoder_config"])
+
+        FineTuneModule(ckpt_finetune_config, checkpoint_path=str(ckpt_path))
+
+        disk_ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        assert disk_ckpt["encoder_config"] == original_config
+
+
+class TestFineTuneModuleConfigValidation:
+    """Test that FineTuneModule rejects invalid configs at init time."""
+
+    @pytest.fixture
+    def base_config(self):
+        return {
+            "encoder": {
+                "name": "transformer",
+                "d_input": 10,
+                "d_model": 32,
+                "n_layers": 1,
+                "n_heads": 2,
+                "d_ff": 64,
+                "dropout": 0.1,
+                "max_seq_length": 24,
+                "pooling": "mean",
+                "use_positional_encoding": True,
+                "prenorm": True,
+                "activation": "gelu",
+                "layer_norm_eps": 1e-5,
+            },
+            "task": {
+                "task_name": "mortality_24h",
+                "task_type": "binary",
+                "n_classes": None,
+                "head_type": "mlp",
+                "hidden_dims": [16],
+                "dropout": 0.1,
+                "activation": "relu",
+            },
+            "training": {
+                "freeze_encoder": True,
+                "unfreeze_epoch": None,
+            },
+            "optimizer": {
+                "name": "adam",
+                "lr": 1e-3,
+            },
+        }
+
+    def test_valid_config_creates_module(self, base_config):
+        cfg = OmegaConf.create(base_config)
+        module = FineTuneModule(cfg)
+        assert module is not None
+
+    def test_typo_in_task_config_rejected(self, base_config):
+        base_config["task"]["head_tpye"] = base_config["task"].pop("head_type")
+        cfg = OmegaConf.create(base_config)
+        with pytest.raises(ValidationError, match="head_tpye"):
+            FineTuneModule(cfg)
+
+    def test_typo_in_training_config_rejected(self, base_config):
+        base_config["training"]["freez_encoder"] = base_config["training"].pop("freeze_encoder")
+        cfg = OmegaConf.create(base_config)
+        with pytest.raises(ValidationError, match="freez_encoder"):
+            FineTuneModule(cfg)
+
+    def test_extra_task_key_rejected(self, base_config):
+        base_config["task"]["warmup_steps"] = 100
+        cfg = OmegaConf.create(base_config)
+        with pytest.raises(ValidationError):
+            FineTuneModule(cfg)
+
+    def test_typo_in_optimizer_config_rejected(self, base_config):
+        base_config["optimizer"]["lerning_rate"] = 1e-3
+        cfg = OmegaConf.create(base_config)
+        with pytest.raises(ValidationError, match="lerning_rate"):
+            FineTuneModule(cfg)
+
+    def test_typo_in_scheduler_config_rejected(self, base_config):
+        base_config["scheduler"] = {"name": "cosine", "t_max": 100}
+        cfg = OmegaConf.create(base_config)
+        with pytest.raises(ValidationError, match="t_max"):
+            FineTuneModule(cfg)
+
+
+class TestFineTuneModuleUsesLogger:
+    """Test that finetune_module uses logger instead of print."""
+
+    def test_no_print_calls_in_module(self):
+        """finetune_module.py should not contain bare print() calls."""
+        import slices.training.finetune_module as mod
+
+        source = inspect.getsource(mod)
+        tree = ast.parse(source)
+        print_calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "print":
+                    print_calls.append(node.lineno)
+
+        assert len(print_calls) == 0, (
+            f"Found print() calls at lines {print_calls} in finetune_module.py. "
+            "Use logger.info() instead."
+        )
+
+    def test_module_has_logger(self):
+        """finetune_module should define a module-level logger."""
+        import slices.training.finetune_module as mod
+
+        assert hasattr(mod, "logger"), "finetune_module should have a module-level logger"
+        assert isinstance(mod.logger, logging.Logger)
 
 
 class TestEndToEnd:

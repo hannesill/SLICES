@@ -563,7 +563,7 @@ class ICUDataset(Dataset):
 
         try:
             logger.debug(f"Loading cached tensors from {cache_path.name}")
-            cached = torch.load(cache_path, weights_only=False)
+            cached = torch.load(cache_path, weights_only=True)
 
             # Validate cache metadata
             if cached.get("n_features") != self.n_features:

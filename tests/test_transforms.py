@@ -265,6 +265,53 @@ class TestCreateSSLMask:
         assert torch.all(ssl_mask[0, :3, :] == True)  # noqa: E712
 
 
+class TestBlockMaskOverlapCounting:
+    """Test that block masking accurately counts masked positions with overlaps."""
+
+    def test_mask_ratio_more_accurate_with_overlap_fix(self):
+        """Actual mask ratio should be close to target despite overlapping blocks."""
+        B, T, D = 100, 20, 5
+        shape = (B, T, D)
+        mask_ratio = 0.5
+        generator = torch.Generator().manual_seed(42)
+
+        mask = create_block_mask(
+            shape,
+            mask_ratio=mask_ratio,
+            min_block_size=2,
+            max_block_size=5,
+            generator=generator,
+        )
+
+        masked_fraction = 1.0 - mask.float().mean().item()
+
+        assert masked_fraction >= mask_ratio * 0.8, (
+            f"Actual masked fraction {masked_fraction:.3f} is too far below "
+            f"target {mask_ratio:.3f}"
+        )
+
+    def test_no_double_counting_in_small_sequence(self):
+        """Verify mask count is correct even when blocks overlap."""
+        B, T, D = 50, 20, 3
+        shape = (B, T, D)
+        mask_ratio = 0.5
+        generator = torch.Generator().manual_seed(42)
+
+        mask = create_block_mask(
+            shape,
+            mask_ratio=mask_ratio,
+            min_block_size=3,
+            max_block_size=8,
+            generator=generator,
+        )
+
+        actual_masked = 1.0 - mask.float().mean().item()
+        assert actual_masked >= mask_ratio * 0.85, (
+            f"Average masked fraction {actual_masked:.3f} is too far below "
+            f"target {mask_ratio:.3f}"
+        )
+
+
 class TestGaussianNoise:
     """Tests for Gaussian noise augmentation."""
 
