@@ -975,10 +975,14 @@ class ICUDataset(Dataset):
     def get_label_statistics(self) -> Dict[str, Dict[str, Any]]:
         """Compute label statistics for each task.
 
+        For single-label tasks, returns {total, positive, negative, prevalence}.
+        For multi-label tasks (detected by prefixed columns like phenotyping_sepsis),
+        returns per-subtask prevalence and an aggregate mean prevalence.
+
         Returns:
-            Dict mapping task_name -> {count, positive, negative, prevalence}
+            Dict mapping task_name -> {count, positive, negative, prevalence, ...}
         """
-        stats = {}
+        stats: Dict[str, Dict[str, Any]] = {}
         for task_name in self.task_names:
             if task_name in self.labels_df.columns:
                 labels = self.labels_df[task_name].drop_nulls()
@@ -990,6 +994,34 @@ class ICUDataset(Dataset):
                     "negative": total - positive,
                     "prevalence": positive / total if total > 0 else 0.0,
                 }
+            else:
+                # Check for multi-label columns (e.g., phenotyping_sepsis, ...)
+                multilabel_cols = [
+                    c for c in self.labels_df.columns if c.startswith(f"{task_name}_")
+                ]
+                if multilabel_cols:
+                    subtask_stats = {}
+                    prevalences = []
+                    for col in multilabel_cols:
+                        col_labels = self.labels_df[col].drop_nulls()
+                        pos = (col_labels == 1).sum()
+                        tot = len(col_labels)
+                        prev = pos / tot if tot > 0 else 0.0
+                        subtask_stats[col] = {
+                            "total": tot,
+                            "positive": pos,
+                            "negative": tot - pos,
+                            "prevalence": prev,
+                        }
+                        prevalences.append(prev)
+                    stats[task_name] = {
+                        "total": len(self.labels_df),
+                        "n_labels": len(multilabel_cols),
+                        "mean_prevalence": (
+                            sum(prevalences) / len(prevalences) if prevalences else 0.0
+                        ),
+                        "subtasks": subtask_stats,
+                    }
         return stats
 
     def get_preprocessing_stages(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:

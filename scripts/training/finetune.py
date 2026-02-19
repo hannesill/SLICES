@@ -184,11 +184,11 @@ def main(cfg: DictConfig) -> None:
         print(f"  - Total samples: {stats['total']}")
         print(
             f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('positive_ratio', 0)*100:.1f}%)"
+            f"({stats.get('prevalence', 0)*100:.1f}%)"
         )
         print(
             f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({stats.get('negative_ratio', 0)*100:.1f}%)"
+            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
         )
 
     # =========================================================================

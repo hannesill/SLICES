@@ -371,10 +371,6 @@ class TransformerEncoder(BaseEncoder):
             Pooled tensor of shape (B, d_model) or (B, T, d_model) if no pooling.
         """
         if self.config.pooling == "none":
-            # Return per-timestep representations
-            if self.config.pooling == "cls":
-                # Remove CLS token if it was added
-                return x[:, 1:, :]  # (B, T, d_model)
             return x  # (B, T, d_model)
 
         elif self.config.pooling == "cls":

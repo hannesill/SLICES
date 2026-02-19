@@ -160,7 +160,7 @@ class FineTuneModule(pl.LightningModule):
 
             # Version 3+: Rebuild encoder from saved config
             if version >= 3 and "encoder_config" in checkpoint:
-                encoder_config = checkpoint["encoder_config"]
+                encoder_config = dict(checkpoint["encoder_config"])
                 encoder_name = encoder_config.pop("name")
                 # Override pooling with finetuning config's value.
                 # SSL pretraining uses pooling='none' but finetuning needs

@@ -277,14 +277,23 @@ class ICUDataModule(L.LightningDataModule):
 
         logger.debug(f"Checking labels for task '{self.task_name}'")
 
+        # Detect multi-label tasks: columns prefixed with "{task_name}_"
+        multilabel_cols = [c for c in labels_df.columns if c.startswith(f"{self.task_name}_")]
+        is_multilabel = len(multilabel_cols) > 0 and self.task_name not in labels_df.columns
+
         # Get stays with valid labels for this task
-        if self.task_name not in labels_df.columns:
+        if not is_multilabel and self.task_name not in labels_df.columns:
             raise ValueError(
                 f"Task '{self.task_name}' not found in labels. " f"Available: {labels_df.columns}"
             )
 
         # Find stays with non-null labels
-        valid_labels_df = labels_df.filter(pl.col(self.task_name).is_not_null())
+        if is_multilabel:
+            valid_labels_df = labels_df.filter(
+                pl.all_horizontal([pl.col(c).is_not_null() for c in multilabel_cols])
+            )
+        else:
+            valid_labels_df = labels_df.filter(pl.col(self.task_name).is_not_null())
         valid_stay_ids = set(valid_labels_df["stay_id"].to_list())
 
         # Filter stay_ids maintaining order

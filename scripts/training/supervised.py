@@ -166,11 +166,15 @@ def compute_baseline_metrics(datamodule: ICUDataModule, task_name: str) -> dict:
     return baselines
 
 
-def save_encoder_weights(model: FineTuneModule, output_dir: str) -> Path:
-    """Save encoder weights to a .pt file.
+def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str) -> Path:
+    """Save encoder weights to a .pt file in v3 checkpoint format.
+
+    Saves encoder_state_dict, encoder_config, and version metadata
+    matching the format used by SSLPretrainModule.save_encoder().
 
     Args:
         model: Trained model with encoder.
+        cfg: Hydra configuration with encoder settings.
         output_dir: Directory to save the weights.
 
     Returns:
@@ -179,8 +183,24 @@ def save_encoder_weights(model: FineTuneModule, output_dir: str) -> Path:
     encoder_path = Path(output_dir) / "encoder.pt"
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save encoder state dict
-    torch.save(model.encoder.state_dict(), encoder_path)
+    encoder_config = {
+        "name": cfg.encoder.name,
+        **{k: v for k, v in cfg.encoder.items() if k != "name"},
+    }
+
+    # Get the inner encoder state dict (unwrap EncoderWithMissingToken if present)
+    from slices.models.encoders import EncoderWithMissingToken
+
+    encoder = model.encoder
+    checkpoint = {"encoder_config": encoder_config, "version": 3}
+
+    if isinstance(encoder, EncoderWithMissingToken):
+        checkpoint["encoder_state_dict"] = encoder.encoder.state_dict()
+        checkpoint["missing_token"] = encoder.missing_token.data.clone()
+    else:
+        checkpoint["encoder_state_dict"] = encoder.state_dict()
+
+    torch.save(checkpoint, encoder_path)
 
     return encoder_path
 
@@ -256,11 +276,11 @@ def main(cfg: DictConfig) -> None:
         print(f"  - Total samples: {stats['total']}")
         print(
             f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('positive_ratio', 0)*100:.1f}%)"
+            f"({stats.get('prevalence', 0)*100:.1f}%)"
         )
         print(
             f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({stats.get('negative_ratio', 0)*100:.1f}%)"
+            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
         )
 
     # =========================================================================
@@ -363,7 +383,7 @@ def main(cfg: DictConfig) -> None:
         except Exception as e:
             print(f"  - Warning: Could not load checkpoint ({e}), using final model")
 
-    encoder_path = save_encoder_weights(model, cfg.output_dir)
+    encoder_path = save_encoder_weights(model, cfg, cfg.output_dir)
     print(f"\n Encoder saved to: {encoder_path}")
 
     # =========================================================================

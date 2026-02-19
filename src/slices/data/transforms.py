@@ -106,9 +106,12 @@ def create_block_mask(
             ).item()
             end = min(start + block_size, T)
 
+            # Count only newly masked positions (avoid overlap double-counting)
+            previously_masked = (~mask[b, start:end, 0]).sum().item()
+            newly_masked = (end - start) - previously_masked
             # Mask the block across all features
             mask[b, start:end, :] = False
-            masked_count += end - start
+            masked_count += newly_masked
 
     return mask
 
