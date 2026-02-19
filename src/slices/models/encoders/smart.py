@@ -10,13 +10,14 @@ Key features:
 - VarAttention: Cross-variable attention using query-based pooling
 """
 
-import math
 from dataclasses import dataclass
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from slices.models.common import PositionalEncoding
 
 from .base import BaseEncoder, EncoderConfig
 
@@ -74,56 +75,6 @@ class MLPEmbedder(nn.Module):
         x = torch.stack((x, mask.float()), dim=-1)  # (B, V, T, 2)
         x = self.embed(x)  # (B, V, T, d_model)
         return x
-
-
-class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for temporal dimension.
-
-    Uses fixed sinusoidal encoding as in "Attention is All You Need".
-    Applied to the time dimension for each variable.
-    """
-
-    def __init__(self, d_model: int, max_seq_length: int = 5000, dropout: float = 0.1) -> None:
-        """Initialize positional encoding.
-
-        Args:
-            d_model: Model dimension.
-            max_seq_length: Maximum sequence length to support.
-            dropout: Dropout probability.
-        """
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Create positional encoding matrix
-        position = torch.arange(max_seq_length).unsqueeze(1)  # (max_len, 1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-
-        pe = torch.zeros(max_seq_length, d_model)  # (max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
-
-        # Register as buffer (not a parameter, but saved in state_dict)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Add positional encoding to input.
-
-        Args:
-            x: Input tensor of shape (B, V, T, d_model) or (B*V, T, d_model).
-
-        Returns:
-            Tensor with positional encoding added.
-        """
-        # Handle both 4D and 3D inputs
-        if x.dim() == 4:
-            # (B, V, T, d_model) - broadcast over B and V
-            T = x.size(2)
-            x = x + self.pe[:T, :].unsqueeze(0).unsqueeze(0)  # (1, 1, T, d_model)
-        else:
-            # (B*V, T, d_model) - broadcast over batch
-            T = x.size(1)
-            x = x + self.pe[:T, :]  # (T, d_model)
-        return self.dropout(x)
 
 
 class SeqAttentionBlock(nn.Module):

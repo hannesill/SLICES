@@ -1,50 +1,163 @@
 """Training utilities and helpers.
 
-TODO: Implement utilities for:
-- Learning rate scheduling
-- Early stopping
-- Model checkpointing
-- Metrics computation
+Shared optimizer/scheduler construction for pretrain and finetune modules,
+and a shared checkpoint save helper.
 """
 
-from typing import Dict
+from pathlib import Path
+from typing import Any, Dict, Iterator, Optional, Union
 
 import torch
+import torch.nn as nn
 
 
-def compute_metrics(
-    predictions: torch.Tensor,
-    targets: torch.Tensor,
-    task_name: str,
-) -> Dict[str, float]:
-    """Compute task-specific metrics.
+def build_optimizer(
+    params: Iterator[nn.Parameter],
+    config: Any,
+) -> torch.optim.Optimizer:
+    """Build optimizer from config.
 
     Args:
-        predictions: Model predictions.
-        targets: Ground truth labels.
-        task_name: Name of the task ('mortality', 'los', 'aki', etc.).
+        params: Model parameters to optimize.
+        config: Optimizer config with 'name', 'lr', and optional
+                'weight_decay', 'momentum' fields.
 
     Returns:
-        Dictionary of metric names to values.
+        Configured optimizer.
+
+    Raises:
+        ValueError: If optimizer name is not recognized.
     """
-    # TODO: Implement metric computation
-    raise NotImplementedError
+    name = config.name.lower()
+    lr = config.lr
+    weight_decay = config.get("weight_decay", 0.0)
+
+    if name == "adam":
+        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+    elif name == "adamw":
+        return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+    elif name == "sgd":
+        momentum = config.get("momentum", 0.9)
+        return torch.optim.SGD(params, lr=lr, weight_decay=weight_decay, momentum=momentum)
+    else:
+        raise ValueError(f"Unknown optimizer '{name}'. Supported: adam, adamw, sgd")
 
 
-def get_learning_rate_scheduler(
+def build_scheduler(
     optimizer: torch.optim.Optimizer,
-    scheduler_type: str = "cosine",
-    **kwargs,
-) -> torch.optim.lr_scheduler._LRScheduler:
-    """Get learning rate scheduler.
+    config: Any,
+) -> Optional[Dict[str, Any]]:
+    """Build learning rate scheduler from config.
 
     Args:
         optimizer: Optimizer to schedule.
-        scheduler_type: Type of scheduler ('cosine', 'step', 'plateau', etc.).
-        **kwargs: Additional scheduler arguments.
+        config: Scheduler config with 'name' and scheduler-specific fields.
+                If None, returns None.
 
     Returns:
-        Learning rate scheduler.
+        Lightning-compatible scheduler dict, or None if no scheduler.
+
+    Raises:
+        ValueError: If scheduler name is not recognized.
     """
-    # TODO: Implement scheduler creation
-    raise NotImplementedError
+    if config is None:
+        return None
+
+    name = config.name.lower()
+
+    if name == "cosine":
+        T_max = config.get("T_max", 100)
+        eta_min = config.get("eta_min", 0.0)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=T_max,
+            eta_min=eta_min,
+        )
+    elif name == "step":
+        step_size = config.get("step_size", 30)
+        gamma = config.get("gamma", 0.1)
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=step_size,
+            gamma=gamma,
+        )
+    elif name == "plateau":
+        mode = config.get("mode", "min")
+        factor = config.get("factor", 0.1)
+        patience = config.get("patience", 10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=mode,
+            factor=factor,
+            patience=patience,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val/loss",
+            },
+        }
+    elif name == "warmup_cosine":
+        warmup_epochs = config.get("warmup_epochs", 10)
+        max_epochs = config.get("max_epochs", 100)
+        eta_min = config.get("eta_min", 0.0)
+
+        def lr_lambda(epoch: int) -> float:
+            if epoch < warmup_epochs:
+                return float(epoch + 1) / float(max(1, warmup_epochs))
+            else:
+                progress = float(epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
+                return (
+                    eta_min
+                    + (1 - eta_min)
+                    * 0.5
+                    * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))).item()
+                )
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    else:
+        raise ValueError(
+            f"Unknown scheduler '{name}'. Supported: cosine, step, plateau, warmup_cosine"
+        )
+
+    return {
+        "optimizer": optimizer,
+        "lr_scheduler": {
+            "scheduler": scheduler,
+            "interval": "epoch",
+        },
+    }
+
+
+def save_encoder_checkpoint(
+    encoder: nn.Module,
+    encoder_config: Dict[str, Any],
+    path: Union[str, Path],
+    missing_token: Optional[torch.Tensor] = None,
+    d_input: Optional[int] = None,
+) -> None:
+    """Save encoder in v3 checkpoint format.
+
+    Standardized checkpoint saving used across pretrain, finetune, and supervised
+    training scripts.
+
+    Args:
+        encoder: Encoder module whose state_dict to save.
+        encoder_config: Dict with 'name' and encoder architecture params.
+        path: Path to save the checkpoint.
+        missing_token: Optional learned missing token tensor.
+        d_input: Optional input dimension (for token shape validation).
+    """
+    checkpoint: Dict[str, Any] = {
+        "encoder_state_dict": encoder.state_dict(),
+        "encoder_config": encoder_config,
+        "version": 3,
+    }
+
+    if missing_token is not None:
+        checkpoint["missing_token"] = missing_token.data.clone()
+        if d_input is not None:
+            checkpoint["d_input"] = d_input
+
+    torch.save(checkpoint, path)

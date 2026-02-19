@@ -24,6 +24,7 @@ from slices.models.encoders import EncoderWithMissingToken, build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
 from slices.training.config_schemas import TaskConfig as TaskConfigSchema
 from slices.training.config_schemas import TrainingConfig as TrainingConfigSchema
+from slices.training.utils import build_optimizer, build_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -602,87 +603,13 @@ class FineTuneModule(pl.LightningModule):
         Returns:
             Dictionary with optimizer and optional scheduler.
         """
-        # Get parameters to optimize (only those with requires_grad)
         params = filter(lambda p: p.requires_grad, self.parameters())
+        optimizer = build_optimizer(params, self.optimizer_config)
 
-        # Build optimizer
-        optimizer_name = self.optimizer_config.name.lower()
-        lr = self.optimizer_config.lr
-        weight_decay = self.optimizer_config.get("weight_decay", 0.0)
-
-        if optimizer_name == "adam":
-            optimizer = torch.optim.Adam(
-                params,
-                lr=lr,
-                weight_decay=weight_decay,
-            )
-        elif optimizer_name == "adamw":
-            optimizer = torch.optim.AdamW(
-                params,
-                lr=lr,
-                weight_decay=weight_decay,
-            )
-        elif optimizer_name == "sgd":
-            momentum = self.optimizer_config.get("momentum", 0.9)
-            optimizer = torch.optim.SGD(
-                params,
-                lr=lr,
-                weight_decay=weight_decay,
-                momentum=momentum,
-            )
-        else:
-            raise ValueError(f"Unknown optimizer '{optimizer_name}'")
-
-        # Return optimizer only if no scheduler
-        if self.scheduler_config is None:
+        result = build_scheduler(optimizer, self.scheduler_config)
+        if result is None:
             return optimizer
-
-        # Build scheduler
-        scheduler_name = self.scheduler_config.name.lower()
-
-        if scheduler_name == "cosine":
-            T_max = self.scheduler_config.get("T_max", 100)
-            eta_min = self.scheduler_config.get("eta_min", 0.0)
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=T_max,
-                eta_min=eta_min,
-            )
-        elif scheduler_name == "step":
-            step_size = self.scheduler_config.get("step_size", 30)
-            gamma = self.scheduler_config.get("gamma", 0.1)
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=step_size,
-                gamma=gamma,
-            )
-        elif scheduler_name == "plateau":
-            mode = self.scheduler_config.get("mode", "min")
-            factor = self.scheduler_config.get("factor", 0.1)
-            patience = self.scheduler_config.get("patience", 10)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=mode,
-                factor=factor,
-                patience=patience,
-            )
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss",
-                },
-            }
-        else:
-            raise ValueError(f"Unknown scheduler '{scheduler_name}'")
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-            },
-        }
+        return result
 
     def get_encoder(self) -> nn.Module:
         """Get the encoder module.
