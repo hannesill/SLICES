@@ -125,13 +125,17 @@ class RicuExtractor(BaseExtractor):
         dispatch = {
             "mortality_info": "ricu_mortality.parquet",
             "diagnoses": "ricu_diagnoses.parquet",
+            "timeseries": "ricu_timeseries.parquet",
         }
         if source_name not in dispatch:
             raise ValueError(
                 f"Unknown data source '{source_name}'. " f"Available: {list(dispatch.keys())}"
             )
         path = self.parquet_root / dispatch[source_name]
-        return pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
+        df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
+        if source_name == "timeseries":
+            df = self._encode_categorical_columns(df)
+        return df
 
     def run(self) -> None:
         """Execute extraction pipeline for RICU data.

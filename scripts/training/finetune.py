@@ -148,13 +148,28 @@ def main(cfg: DictConfig) -> None:
 
     task_name = cfg.task.get("task_name", "mortality_24h")
 
-    datamodule = ICUDataModule(
-        processed_dir=cfg.data.processed_dir,
-        task_name=task_name,  # Load task labels
-        batch_size=cfg.training.batch_size,
-        num_workers=cfg.data.get("num_workers", 4),
-        seed=cfg.seed,
-    )
+    if task_name == "decompensation":
+        from slices.data.decompensation_datamodule import DecompensationDataModule
+
+        datamodule = DecompensationDataModule(
+            ricu_parquet_root=cfg.data.parquet_root,
+            processed_dir=cfg.data.processed_dir,
+            batch_size=cfg.training.batch_size,
+            num_workers=cfg.data.get("num_workers", 4),
+            obs_window_hours=cfg.task.get("observation_window_hours", 48),
+            pred_window_hours=cfg.task.get("prediction_window_hours", 24),
+            stride_hours=cfg.task.get("label_params", {}).get("stride_hours", 6),
+            eval_stride_hours=cfg.task.get("label_params", {}).get("eval_stride_hours", 1),
+            seed=cfg.seed,
+        )
+    else:
+        datamodule = ICUDataModule(
+            processed_dir=cfg.data.processed_dir,
+            task_name=task_name,  # Load task labels
+            batch_size=cfg.training.batch_size,
+            num_workers=cfg.data.get("num_workers", 4),
+            seed=cfg.seed,
+        )
 
     # Setup data
     datamodule.setup()
