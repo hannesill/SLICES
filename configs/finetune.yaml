@@ -114,6 +114,13 @@ scheduler:
   T_max: ${training.max_epochs}
   eta_min: 1.0e-6
 
+# Evaluation configuration
+eval:
+  fairness:
+    enabled: false
+    protected_attributes: [gender, age_group, race]
+    min_subgroup_size: 50
+
 # Logging configuration
 logging:
   use_wandb: true
