@@ -331,6 +331,12 @@ class BaseExtractor(ABC):
         3. Uses LabelBuilders to compute labels from raw data
         4. Combines labels into a single DataFrame
 
+        Sliding-window tasks (e.g. decompensation) produce multi-row output
+        with a ``window_start`` column.  These are stored separately in
+        ``self._sliding_window_labels`` and saved to dedicated parquet files
+        by the ``run()`` method, rather than being joined into the main
+        single-row-per-stay labels DataFrame.
+
         Args:
             stay_ids: List of ICU stay IDs to extract labels for.
             task_configs: List of task configurations defining which labels to compute.
@@ -357,6 +363,7 @@ class BaseExtractor(ABC):
                 raw_data[source] = self.extract_data_source(source, stay_ids)
 
         # Step 3: Build labels for each task
+        self._sliding_window_labels: Dict[str, pl.DataFrame] = {}
         all_labels = []
         for task_config in task_configs:
             # Check dataset restriction
@@ -375,6 +382,11 @@ class BaseExtractor(ABC):
 
             # Compute labels
             task_labels = builder.build_labels(raw_data)
+
+            # Sliding-window tasks (multi-row per stay) are stored separately
+            if "window_start" in task_labels.columns:
+                self._sliding_window_labels[task_config.task_name] = task_labels
+                continue
 
             # For single-label tasks, the builder returns a 'label' column
             # that we rename to the task name.
