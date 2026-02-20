@@ -233,11 +233,11 @@ class DecompensationDataset(Dataset):
                         mask[hour_idx, feat_idx] = True
 
                         # Also check for mask columns
-                    mask_col = f"{feat_name}_mask"
-                    if mask_col in row:
-                        mask_val = row[mask_col]
-                        if mask_val is not None:
-                            mask[hour_idx, feat_idx] = bool(mask_val)
+                        mask_col = f"{feat_name}_mask"
+                        if mask_col in row:
+                            mask_val = row[mask_col]
+                            if mask_val is not None:
+                                mask[hour_idx, feat_idx] = bool(mask_val)
 
         tensor = torch.from_numpy(timeseries)
         mask_tensor = torch.from_numpy(mask)

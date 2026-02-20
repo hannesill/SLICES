@@ -6,6 +6,7 @@ import polars as pl
 import pytest
 import torch
 import yaml
+from slices.data.decompensation_datamodule import DecompensationDataModule
 from slices.data.decompensation_dataset import DecompensationDataset
 
 
@@ -665,3 +666,229 @@ class TestDecompensationMultipleStays:
         dist = ds.get_label_distribution()
         assert dist["total"] == len(ds)
         assert dist["positive"] + dist["negative"] == dist["total"]
+
+
+@pytest.fixture
+def tmp_ricu_multipatient(tmp_path):
+    """Create RICU parquet data with multiple patients (some sharing patient_id)."""
+    intime = datetime(2020, 1, 1, 0, 0)
+    feature_names = ["hr", "sbp"]
+
+    # 6 stays, 4 patients. Patient 10 has stays 1,2; patient 20 has stays 3,4;
+    # patient 30 has stay 5; patient 40 has stay 6.
+    stays_data = [
+        {
+            "stay_id": 1,
+            "patient_id": 10,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+        {
+            "stay_id": 2,
+            "patient_id": 10,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+        {
+            "stay_id": 3,
+            "patient_id": 20,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+        {
+            "stay_id": 4,
+            "patient_id": 20,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+        {
+            "stay_id": 5,
+            "patient_id": 30,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+        {
+            "stay_id": 6,
+            "patient_id": 40,
+            "intime": intime,
+            "outtime": intime + timedelta(hours=100),
+            "los_days": 100 / 24.0,
+        },
+    ]
+    mortality_data = [
+        {
+            "stay_id": sid,
+            "date_of_death": None,
+            "hospital_expire_flag": 0,
+            "dischtime": intime + timedelta(hours=100),
+            "discharge_location": "HOME",
+        }
+        for sid in range(1, 7)
+    ]
+    timeseries_data = [
+        {"stay_id": sid, "hour": h, "hr": 80.0 + h * 0.1 * sid, "sbp": 120.0 + sid}
+        for sid in range(1, 7)
+        for h in range(100)
+    ]
+
+    pl.DataFrame(stays_data).write_parquet(tmp_path / "ricu_stays.parquet")
+    pl.DataFrame(mortality_data).write_parquet(tmp_path / "ricu_mortality.parquet")
+    pl.DataFrame(timeseries_data).write_parquet(tmp_path / "ricu_timeseries.parquet")
+
+    metadata = {"dataset": "test", "feature_names": feature_names}
+    with open(tmp_path / "ricu_metadata.yaml", "w") as f:
+        yaml.dump(metadata, f)
+
+    return tmp_path
+
+
+class TestDecompensationDataModulePatientSplits:
+    """Test patient-level split integrity in DataModule."""
+
+    def test_no_patient_leakage_across_splits(self, tmp_ricu_multipatient):
+        """All stays from the same patient must be in the same split."""
+        dm = DecompensationDataModule(
+            ricu_parquet_root=tmp_ricu_multipatient,
+            processed_dir=tmp_ricu_multipatient,
+            batch_size=4,
+            num_workers=0,
+            obs_window_hours=48,
+            pred_window_hours=24,
+            stride_hours=6,
+            eval_stride_hours=6,
+            train_ratio=0.5,
+            val_ratio=0.25,
+            test_ratio=0.25,
+            seed=42,
+        )
+        dm.setup()
+
+        # Collect stay_ids per split
+        train_sids = {sid for sid, _, _ in dm.train_dataset.samples}
+        val_sids = {sid for sid, _, _ in dm.val_dataset.samples}
+        test_sids = {sid for sid, _, _ in dm.test_dataset.samples}
+
+        # No overlap between splits
+        assert train_sids.isdisjoint(val_sids), "Train/val stay_id overlap"
+        assert train_sids.isdisjoint(test_sids), "Train/test stay_id overlap"
+        assert val_sids.isdisjoint(test_sids), "Val/test stay_id overlap"
+
+        # Check patient-level: stays sharing a patient_id must be in same split
+        stays_df = pl.read_parquet(tmp_ricu_multipatient / "ricu_stays.parquet")
+        sid_to_pid = dict(zip(stays_df["stay_id"].to_list(), stays_df["patient_id"].to_list()))
+
+        all_assigned_sids = train_sids | val_sids | test_sids
+        for split_name, split_sids in [
+            ("train", train_sids),
+            ("val", val_sids),
+            ("test", test_sids),
+        ]:
+            patients_in_split = {sid_to_pid[sid] for sid in split_sids if sid in sid_to_pid}
+            for sid in all_assigned_sids:
+                if sid in sid_to_pid and sid_to_pid[sid] in patients_in_split:
+                    assert sid in split_sids, (
+                        f"Stay {sid} (patient {sid_to_pid[sid]}) should be in {split_name} "
+                        f"but is missing — patient leakage"
+                    )
+
+    def test_all_stays_assigned(self, tmp_ricu_multipatient):
+        """Every stay should be assigned to exactly one split."""
+        dm = DecompensationDataModule(
+            ricu_parquet_root=tmp_ricu_multipatient,
+            processed_dir=tmp_ricu_multipatient,
+            batch_size=4,
+            num_workers=0,
+            obs_window_hours=48,
+            pred_window_hours=24,
+            stride_hours=6,
+            eval_stride_hours=6,
+            seed=42,
+        )
+        dm.setup()
+
+        info = dm.get_split_info()
+        stays_df = pl.read_parquet(tmp_ricu_multipatient / "ricu_stays.parquet")
+        total_stays = len(stays_df)
+        assert info["train_stays"] + info["val_stays"] + info["test_stays"] == total_stays
+
+
+class TestDecompensationDataModuleNormalization:
+    """Test normalization stats are computed from training data only."""
+
+    def test_normalization_from_train_only(self, tmp_ricu_multipatient):
+        """Val/test datasets should use stats computed from train set."""
+        dm = DecompensationDataModule(
+            ricu_parquet_root=tmp_ricu_multipatient,
+            processed_dir=tmp_ricu_multipatient,
+            batch_size=4,
+            num_workers=0,
+            obs_window_hours=48,
+            pred_window_hours=24,
+            stride_hours=6,
+            eval_stride_hours=6,
+            train_ratio=0.5,
+            val_ratio=0.25,
+            test_ratio=0.25,
+            seed=42,
+        )
+        dm.setup()
+
+        # Train dataset should have normalization enabled with its own stats
+        assert dm.train_dataset.normalize is True
+        assert dm.train_dataset.feature_means is not None
+        assert dm.train_dataset.feature_stds is not None
+
+        # Val/test should share the exact same stats objects
+        assert dm.val_dataset.feature_means is dm._feature_means
+        assert dm.val_dataset.feature_stds is dm._feature_stds
+        assert dm.test_dataset.feature_means is dm._feature_means
+        assert dm.test_dataset.feature_stds is dm._feature_stds
+
+        # Stats should match what train computes independently
+        train_means, train_stds = dm.train_dataset.compute_normalization_stats()
+        # Note: train_dataset already has normalization set, but compute_normalization_stats
+        # operates on raw data, so we compare the stored stats
+        assert torch.allclose(dm._feature_means, train_means, atol=1e-5)
+        assert torch.allclose(dm._feature_stds, train_stds, atol=1e-5)
+
+
+class TestDecompensationDataModuleStrides:
+    """Test different strides for train vs eval."""
+
+    def test_train_uses_training_stride(self, tmp_ricu_multipatient):
+        """Train dataset should use stride_hours, not eval_stride_hours."""
+        dm = DecompensationDataModule(
+            ricu_parquet_root=tmp_ricu_multipatient,
+            processed_dir=tmp_ricu_multipatient,
+            batch_size=4,
+            num_workers=0,
+            obs_window_hours=48,
+            pred_window_hours=24,
+            stride_hours=12,
+            eval_stride_hours=3,
+            seed=42,
+        )
+        dm.setup()
+
+        assert dm.train_dataset.stride_hours == 12
+        assert dm.val_dataset.stride_hours == 3
+        assert dm.test_dataset.stride_hours == 3
+
+        # Eval sets should have more samples per stay than train
+        train_samples = len(dm.train_dataset)
+        val_samples = len(dm.val_dataset)
+        # val has fewer stays but finer stride, so ratio per stay is higher
+        train_stays = len({sid for sid, _, _ in dm.train_dataset.samples})
+        val_stays = len({sid for sid, _, _ in dm.val_dataset.samples})
+        if train_stays > 0 and val_stays > 0:
+            train_per_stay = train_samples / train_stays
+            val_per_stay = val_samples / val_stays
+            assert val_per_stay > train_per_stay, (
+                f"Val should have more samples per stay ({val_per_stay:.1f}) "
+                f"than train ({train_per_stay:.1f}) due to finer stride"
+            )

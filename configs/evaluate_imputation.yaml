@@ -22,7 +22,6 @@ masking:
 
 # Reconstruction head (for non-MAE models only)
 reconstruction_head:
-  hidden_dim: 128
   max_epochs: 10
   lr: 1.0e-3
 

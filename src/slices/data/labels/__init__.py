@@ -8,6 +8,7 @@ from .aki import AKILabelBuilder
 from .base import LabelBuilder, LabelConfig
 from .factory import LabelBuilderFactory
 from .los import LOSLabelBuilder
+from .mortality import MortalityLabelBuilder
 from .phenotyping import PhenotypingLabelBuilder
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "LabelBuilder",
     "LabelBuilderFactory",
     "LOSLabelBuilder",
+    "MortalityLabelBuilder",
     "PhenotypingLabelBuilder",
 ]

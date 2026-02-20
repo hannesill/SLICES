@@ -392,18 +392,12 @@ class ImputationEvaluator:
             all_abs_errors.extend(ae.tolist())
 
         # Overall metrics
-        if all_squared_errors:
-            all_se = torch.tensor(all_squared_errors)
+        if nrmse_per_feature:
+            # Average per-feature NRMSEs (avoids scale-mixing across features)
+            nrmse_overall = sum(nrmse_per_feature.values()) / len(nrmse_per_feature)
+
             all_ae = torch.tensor(all_abs_errors)
             mae_overall = all_ae.mean().item()
-            rmse_overall = all_se.mean().sqrt().item()
-
-            # Overall NRMSE: normalize by std of all original values
-            all_vals = []
-            for vals_list in feature_values.values():
-                all_vals.extend(vals_list)
-            overall_std = torch.tensor(all_vals).std().item() if len(all_vals) > 1 else 1.0
-            nrmse_overall = rmse_overall / max(overall_std, 1e-8)
         else:
             mae_overall = 0.0
             nrmse_overall = 0.0

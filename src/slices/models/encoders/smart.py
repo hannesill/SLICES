@@ -31,7 +31,7 @@ class SMARTEncoderConfig(EncoderConfig):
     """
 
     n_heads: int = 4  # Number of attention heads
-    d_ff: int = 256  # Feedforward dimension (typically 8 * d_model)
+    d_ff: int = 128  # Feedforward dimension (4 * d_model, matches original SMART)
     dropout: float = 0.1
     pooling: str = "query"  # "query", "mean", or "none" (for SSL)
 
