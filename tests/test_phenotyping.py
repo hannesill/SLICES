@@ -1017,6 +1017,52 @@ class TestMultilabelDatasetLoading:
 
 
 # ===========================================================================
+# TestPhenotypingDatasetRestriction
+# ===========================================================================
+
+
+class TestPhenotypingDatasetRestriction:
+    """Tests for supported_datasets field on LabelConfig."""
+
+    def test_supported_datasets_field_loads(self):
+        """LabelConfig with supported_datasets loads correctly."""
+        config = LabelConfig(
+            task_name="phenotyping",
+            task_type="multilabel",
+            label_sources=["stays", "diagnoses"],
+            supported_datasets=["miiv"],
+        )
+        assert config.supported_datasets == ["miiv"]
+
+    def test_supported_datasets_none_means_all_allowed(self):
+        """supported_datasets=None means all datasets allowed (default)."""
+        config = LabelConfig(
+            task_name="phenotyping",
+            task_type="multilabel",
+            label_sources=["stays", "diagnoses"],
+        )
+        assert config.supported_datasets is None
+
+    def test_supported_datasets_roundtrips_through_yaml(self, tmp_path):
+        """supported_datasets field round-trips through YAML correctly."""
+        config_dict = {
+            "task_name": "phenotyping",
+            "task_type": "multilabel",
+            "label_sources": ["stays", "diagnoses"],
+            "supported_datasets": ["miiv", "mimic"],
+        }
+        config_file = tmp_path / "phenotyping.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(config_dict, f)
+
+        with open(config_file) as f:
+            loaded = yaml.safe_load(f)
+
+        roundtripped = LabelConfig(**loaded)
+        assert roundtripped.supported_datasets == ["miiv", "mimic"]
+
+
+# ===========================================================================
 # TestPhenotypingIntegration
 # ===========================================================================
 

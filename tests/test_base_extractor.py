@@ -604,6 +604,68 @@ class TestExtractorRun:
         assert "los_days" in static_df.columns
 
 
+class TestSupportedDatasets:
+    """Tests for supported_datasets filtering in extract_labels."""
+
+    def test_extract_labels_skips_unsupported_dataset(self, temp_parquet_structure):
+        """extract_labels() skips unsupported datasets."""
+        from slices.data.labels import LabelConfig
+
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)  # _get_dataset_name() returns "mock"
+
+        task_config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            label_sources=["stays", "mortality_info"],
+            supported_datasets=["miiv", "mimic"],  # "mock" not included
+        )
+
+        labels = extractor.extract_labels([1, 2, 3], [task_config])
+
+        # Task should be skipped; result should only have stay_id column
+        assert "stay_id" in labels.columns
+        assert "mortality_hospital" not in labels.columns
+
+    def test_extract_labels_includes_when_supported_datasets_is_none(self, temp_parquet_structure):
+        """extract_labels() includes tasks where supported_datasets is None."""
+        from slices.data.labels import LabelConfig
+
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)
+
+        task_config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            label_sources=["stays", "mortality_info"],
+            supported_datasets=None,  # All datasets allowed
+        )
+
+        labels = extractor.extract_labels([1, 2, 3], [task_config])
+
+        assert "stay_id" in labels.columns
+        assert "mortality_hospital" in labels.columns
+
+    def test_extract_labels_includes_when_dataset_matches(self, temp_parquet_structure):
+        """extract_labels() includes tasks where the current dataset is in supported_datasets."""
+        from slices.data.labels import LabelConfig
+
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)  # _get_dataset_name() returns "mock"
+
+        task_config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            label_sources=["stays", "mortality_info"],
+            supported_datasets=["mock", "mimic"],  # "mock" is included
+        )
+
+        labels = extractor.extract_labels([1, 2, 3], [task_config])
+
+        assert "stay_id" in labels.columns
+        assert "mortality_hospital" in labels.columns
+
+
 class TestLoadTaskConfigs:
     """Tests for _load_task_configs method."""
 

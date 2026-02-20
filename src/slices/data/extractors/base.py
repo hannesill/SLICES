@@ -359,6 +359,17 @@ class BaseExtractor(ABC):
         # Step 3: Build labels for each task
         all_labels = []
         for task_config in task_configs:
+            # Check dataset restriction
+            if task_config.supported_datasets is not None:
+                dataset_name = self._get_dataset_name()
+                if dataset_name not in task_config.supported_datasets:
+                    console.print(
+                        f"[yellow]Warning: Skipping task '{task_config.task_name}' — "
+                        f"not supported on dataset '{dataset_name}'. "
+                        f"Supported: {task_config.supported_datasets}[/yellow]"
+                    )
+                    continue
+
             # Create appropriate LabelBuilder
             builder: LabelBuilder = LabelBuilderFactory.create(task_config)
 
