@@ -28,6 +28,11 @@ label_params:
   phenotype_config: phenotypes/ccs_phenotypes.yaml
   exclude_multi_stay_admissions: true
 
+# Dataset restrictions (ICD codes only available in MIMIC-family datasets)
+supported_datasets:
+  - miiv
+  - mimic
+
 # Evaluation metrics
 primary_metric: auroc  # Macro-averaged across phenotypes
 additional_metrics:

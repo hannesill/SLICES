@@ -36,6 +36,9 @@ class LabelConfig:
     class_names: Optional[List[str]] = None
     positive_class: Optional[str] = None  # For binary tasks
 
+    # Dataset restrictions
+    supported_datasets: Optional[List[str]] = None  # None = all datasets allowed
+
 
 class LabelBuilder(ABC):
     """Abstract base class for building task labels from raw extracted data.
