@@ -81,13 +81,12 @@ class TestMetricConfig:
     def test_all_available_metrics_valid(self):
         """Test that all available metrics are valid for each task."""
         for task_type, metrics in AVAILABLE_METRICS.items():
-            if metrics:  # Skip regression (empty list)
-                config = MetricConfig(
-                    task_type=task_type,
-                    n_classes=2 if task_type == "binary" else 5,
-                    metrics=metrics,
-                )
-                assert config.metrics == metrics
+            config = MetricConfig(
+                task_type=task_type,
+                n_classes=2 if task_type == "binary" else 5,
+                metrics=metrics,
+            )
+            assert config.metrics == metrics
 
 
 class TestBuildMetric:
@@ -126,9 +125,9 @@ class TestBuildMetric:
         with pytest.raises(ValueError, match="Unknown metric"):
             _build_metric("invalid", "binary", 2)
 
-    def test_invalid_task_type_for_metric(self):
-        """Test that invalid task type raises error."""
-        with pytest.raises(ValueError, match="Unsupported task_type"):
+    def test_invalid_metric_for_regression(self):
+        """Test that classification metric raises error for regression task."""
+        with pytest.raises(ValueError, match="not available for task_type 'regression'"):
             _build_metric("auroc", "regression", 1)
 
 
@@ -180,13 +179,16 @@ class TestBuildMetrics:
 
         assert len(metrics) == 2
 
-    def test_regression_returns_empty_collection(self):
-        """Test that regression returns empty MetricCollection."""
+    def test_regression_returns_metrics(self):
+        """Test that regression returns MetricCollection with default metrics."""
         config = MetricConfig(task_type="regression")
         metrics = build_metrics(config)
 
         assert isinstance(metrics, MetricCollection)
-        assert len(metrics) == 0
+        assert len(metrics) == len(DEFAULT_METRICS["regression"])
+        assert "mse" in metrics
+        assert "mae" in metrics
+        assert "r2" in metrics
 
     def test_empty_prefix(self):
         """Test building metrics with empty prefix."""

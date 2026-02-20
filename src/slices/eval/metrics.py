@@ -29,6 +29,7 @@ from torchmetrics import (
     Specificity,
 )
 from torchmetrics.classification import BinaryCalibrationError
+from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, R2Score
 
 # Supported task types
 TaskType = Literal["binary", "multiclass", "multilabel", "regression"]
@@ -48,7 +49,7 @@ AVAILABLE_METRICS = {
     ],
     "multiclass": ["auroc", "auprc", "accuracy", "f1", "precision", "recall"],
     "multilabel": ["auroc", "auprc", "accuracy", "f1"],
-    "regression": [],  # TODO: Add MSE, MAE, R2 when needed
+    "regression": ["mse", "mae", "rmse", "r2"],
 }
 
 # Default metrics per task type (minimal set for clinical tasks)
@@ -56,7 +57,7 @@ DEFAULT_METRICS = {
     "binary": ["auroc", "auprc", "brier_score"],
     "multiclass": ["auroc", "accuracy"],
     "multilabel": ["auroc"],
-    "regression": [],
+    "regression": ["mse", "mae", "r2"],
 }
 
 
@@ -154,6 +155,22 @@ def _build_metric(
     Returns:
         Configured torchmetrics instance.
     """
+    # Handle regression metrics separately
+    if task_type == "regression":
+        if name == "mse":
+            return MeanSquaredError()
+        elif name == "mae":
+            return MeanAbsoluteError()
+        elif name == "r2":
+            return R2Score()
+        elif name == "rmse":
+            return MeanSquaredError(squared=False)
+        else:
+            raise ValueError(
+                f"Metric '{name}' not available for task_type 'regression'. "
+                f"Available: {AVAILABLE_METRICS['regression']}"
+            )
+
     # Map task_type to torchmetrics task parameter
     if task_type == "binary":
         task = "binary"
@@ -165,7 +182,7 @@ def _build_metric(
         task = "multilabel"
         kwargs = {"num_labels": n_classes}
     else:
-        raise ValueError(f"Unsupported task_type for classification: {task_type}")
+        raise ValueError(f"Unsupported task_type: {task_type}")
 
     # Build the metric
     if name == "auroc":
@@ -214,10 +231,6 @@ def build_metrics(
         >>> val_metrics = build_metrics(config, prefix="val")
         >>> test_metrics = build_metrics(config, prefix="test")
     """
-    if config.task_type == "regression":
-        # TODO: Add regression metrics when needed
-        return MetricCollection({}, prefix=f"{prefix}/" if prefix else "")
-
     metrics = {}
     for name in config.metrics:
         metrics[name] = _build_metric(name, config.task_type, config.n_classes)

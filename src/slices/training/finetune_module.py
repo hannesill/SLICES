@@ -431,13 +431,6 @@ class FineTuneModule(pl.LightningModule):
 
     def _setup_metrics(self) -> None:
         """Setup task-specific metrics using eval module."""
-        if self.task_type == "regression":
-            # No metrics for regression yet
-            self.train_metrics = None
-            self.val_metrics = None
-            self.test_metrics = None
-            return
-
         # Build metric config from task settings
         output_dim = self.task_head.config.get_output_dim()
 
@@ -520,29 +513,32 @@ class FineTuneModule(pl.LightningModule):
             sync_dist=True,
         )
 
-        # Log classification metrics
-        if self.task_type in ("binary", "multiclass", "multilabel"):
-            labels_long = labels.long()  # Convert to long for metrics
+        # Log metrics
+        metrics = getattr(self, f"{stage}_metrics", None)
+        if metrics is not None:
+            if self.task_type in ("binary", "multiclass", "multilabel"):
+                labels_long = labels.long()  # Convert to long for metrics
 
-            # For AUROC/AUPRC, use probabilities
-            output_dim = self.task_head.config.get_output_dim()
-            if output_dim == 2:
-                # Binary: use probability of positive class
-                metric_input = probs[:, 1]  # (B,)
-            else:
-                metric_input = probs  # (B, n_classes)
+                # For AUROC/AUPRC, use probabilities
+                output_dim = self.task_head.config.get_output_dim()
+                if output_dim == 2:
+                    # Binary: use probability of positive class
+                    metric_input = probs[:, 1]  # (B,)
+                else:
+                    metric_input = probs  # (B, n_classes)
 
-            # Get metrics for this stage
-            metrics = getattr(self, f"{stage}_metrics", None)
-            if metrics is not None:
                 metrics.update(metric_input, labels_long)
-                self.log_dict(
-                    metrics,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=(stage == "val"),
-                    sync_dist=True,
-                )
+            elif self.task_type == "regression":
+                predictions = logits.squeeze(-1)
+                metrics.update(predictions, labels.float())
+
+            self.log_dict(
+                metrics,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=(stage == "val"),
+                sync_dist=True,
+            )
 
         return loss
 
