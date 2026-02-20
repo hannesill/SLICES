@@ -105,6 +105,12 @@ class DecompensationDataModule(L.LightningDataModule):
         self._feature_names: Optional[List[str]] = None
         self._feature_means: Optional[torch.Tensor] = None
         self._feature_stds: Optional[torch.Tensor] = None
+        self._train_ids: List[int] = []
+        self._val_ids: List[int] = []
+        self._test_ids: List[int] = []
+        self._n_train_patients: int = 0
+        self._n_val_patients: int = 0
+        self._n_test_patients: int = 0
 
     def _get_feature_names(self) -> List[str]:
         """Load feature names from RICU metadata."""
@@ -115,14 +121,15 @@ class DecompensationDataModule(L.LightningDataModule):
 
     def _get_patient_level_splits(
         self, stays_df: pl.DataFrame
-    ) -> Tuple[List[int], List[int], List[int]]:
+    ) -> Tuple[List[int], List[int], List[int], int, int, int]:
         """Split stays into train/val/test by patient.
 
         Args:
             stays_df: DataFrame with stay_id and patient_id columns.
 
         Returns:
-            Tuple of (train_stay_ids, val_stay_ids, test_stay_ids).
+            Tuple of (train_stay_ids, val_stay_ids, test_stay_ids,
+                       n_train_patients, n_val_patients, n_test_patients).
         """
         stay_to_patient = dict(zip(stays_df["stay_id"].to_list(), stays_df["patient_id"].to_list()))
 
@@ -152,7 +159,14 @@ class DecompensationDataModule(L.LightningDataModule):
             elif pid in remaining_patients:
                 test_ids.append(sid)
 
-        return train_ids, val_ids, test_ids
+        return (
+            train_ids,
+            val_ids,
+            test_ids,
+            len(train_patients),
+            len(val_patients),
+            len(remaining_patients),
+        )
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Set up datasets with patient-level splits."""
@@ -169,7 +183,15 @@ class DecompensationDataModule(L.LightningDataModule):
         stays_df = pl.read_parquet(stays_path)
 
         # Get patient-level splits
-        train_ids, val_ids, test_ids = self._get_patient_level_splits(stays_df)
+        train_ids, val_ids, test_ids, n_train_p, n_val_p, n_test_p = self._get_patient_level_splits(
+            stays_df
+        )
+        self._train_ids = train_ids
+        self._val_ids = val_ids
+        self._test_ids = test_ids
+        self._n_train_patients = n_train_p
+        self._n_val_patients = n_val_p
+        self._n_test_patients = n_test_p
         logger.info(
             f"Patient splits: {len(train_ids)} train, "
             f"{len(val_ids)} val, {len(test_ids)} test stays"
@@ -283,9 +305,16 @@ class DecompensationDataModule(L.LightningDataModule):
     def get_split_info(self) -> Dict[str, Any]:
         """Return split information."""
         return {
-            "train_stays": len(self.train_dataset) if self.train_dataset else 0,
-            "val_stays": len(self.val_dataset) if self.val_dataset else 0,
-            "test_stays": len(self.test_dataset) if self.test_dataset else 0,
+            "train_patients": self._n_train_patients,
+            "val_patients": self._n_val_patients,
+            "test_patients": self._n_test_patients,
+            "total_patients": self._n_train_patients + self._n_val_patients + self._n_test_patients,
+            "train_stays": len(self._train_ids),
+            "val_stays": len(self._val_ids),
+            "test_stays": len(self._test_ids),
+            "train_samples": len(self.train_dataset) if self.train_dataset else 0,
+            "val_samples": len(self.val_dataset) if self.val_dataset else 0,
+            "test_samples": len(self.test_dataset) if self.test_dataset else 0,
         }
 
     def get_label_statistics(self) -> Dict[str, Dict[str, Any]]:

@@ -58,7 +58,7 @@ class AKILabelBuilder(LabelBuilder):
                 results.append({"stay_id": stay_id, "label": None})
                 continue
 
-            crea_data = stay_ts.select("hour", crea_col).drop_nulls()
+            crea_data = stay_ts.select("hour", crea_col).drop_nulls().sort("hour")
             if len(crea_data) == 0:
                 results.append({"stay_id": stay_id, "label": None})
                 continue

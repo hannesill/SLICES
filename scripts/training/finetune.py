@@ -357,6 +357,12 @@ def main(cfg: DictConfig) -> None:
                 for metric_name, value in metrics.items():
                     if isinstance(value, (int, float)):
                         logger.experiment.summary[f"fairness/{attr}/{metric_name}"] = value
+                    elif isinstance(value, dict):
+                        for sub_key, sub_val in value.items():
+                            if isinstance(sub_val, (int, float)):
+                                logger.experiment.summary[
+                                    f"fairness/{attr}/{metric_name}/{sub_key}"
+                                ] = sub_val
 
     # =========================================================================
     # Summary

@@ -29,7 +29,7 @@ max_seq_length: 168  # Maximum sequence length in hours (7 days)
 # MART architecture
 n_layers: 2  # Number of BasicBlocks (SeqAtt + VarAtt + MLP)
 n_heads: 4  # Attention heads for both seq and var attention
-d_ff: 256  # Feedforward dimension (typically 8 * d_model)
+d_ff: 128  # Feedforward dimension (4 * d_model, matches original SMART)
 
 # Regularization
 dropout: 0.1  # Dropout probability
