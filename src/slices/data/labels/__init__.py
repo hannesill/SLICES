@@ -6,6 +6,13 @@ Separate from src/slices/models/heads/ which contains model prediction heads for
 
 from .base import LabelBuilder, LabelConfig
 from .factory import LabelBuilderFactory
+from .los import LOSLabelBuilder
 from .phenotyping import PhenotypingLabelBuilder
 
-__all__ = ["LabelConfig", "LabelBuilder", "LabelBuilderFactory", "PhenotypingLabelBuilder"]
+__all__ = [
+    "LabelConfig",
+    "LabelBuilder",
+    "LabelBuilderFactory",
+    "LOSLabelBuilder",
+    "PhenotypingLabelBuilder",
+]

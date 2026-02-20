@@ -3,6 +3,7 @@
 from typing import Dict, Type
 
 from .base import LabelBuilder, LabelConfig
+from .los import LOSLabelBuilder
 from .mortality import MortalityLabelBuilder
 from .phenotyping import PhenotypingLabelBuilder
 
@@ -18,6 +19,7 @@ class LabelBuilderFactory:
 
     # Registry mapping task categories to builder classes
     _REGISTRY: Dict[str, Type[LabelBuilder]] = {
+        "los": LOSLabelBuilder,
         "mortality": MortalityLabelBuilder,
         "phenotyping": PhenotypingLabelBuilder,
     }
