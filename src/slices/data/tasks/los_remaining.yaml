@@ -1,0 +1,9 @@
+task_name: los_remaining
+task_type: regression
+observation_window_hours: 48
+prediction_window_hours: null
+gap_hours: 0
+label_sources: [stays]
+label_params: {}
+primary_metric: mae
+additional_metrics: [mse, r2]
