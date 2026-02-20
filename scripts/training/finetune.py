@@ -308,6 +308,57 @@ def main(cfg: DictConfig) -> None:
         test_results = trainer.test(model, datamodule=datamodule)
 
     # =========================================================================
+    # 6. Fairness Evaluation (optional)
+    # =========================================================================
+    fairness_cfg = cfg.get("eval", {}).get("fairness", {})
+    if fairness_cfg.get("enabled", False) and task_name != "decompensation":
+        print("\n" + "=" * 80)
+        print("6. Fairness Evaluation")
+        print("=" * 80)
+
+        from slices.eval.fairness_evaluator import FairnessEvaluator
+
+        # Collect test predictions
+        model.eval()
+        all_preds, all_labels, all_stay_ids = [], [], []
+        for batch in datamodule.test_dataloader():
+            with torch.no_grad():
+                outputs = model(
+                    batch["timeseries"].to(model.device),
+                    batch["mask"].to(model.device),
+                )
+            probs = outputs["probs"]
+            if probs.dim() > 1 and probs.shape[1] == 2:
+                all_preds.append(probs[:, 1].cpu())
+            else:
+                all_preds.append(probs.cpu())
+            all_labels.append(batch["label"].cpu())
+            all_stay_ids.extend(
+                batch["stay_id"].tolist()
+                if isinstance(batch["stay_id"], torch.Tensor)
+                else batch["stay_id"]
+            )
+
+        predictions = torch.cat(all_preds)
+        labels_tensor = torch.cat(all_labels)
+
+        evaluator = FairnessEvaluator(
+            static_df=datamodule.dataset.static_df,
+            protected_attributes=list(
+                fairness_cfg.get("protected_attributes", ["gender", "age_group"])
+            ),
+            min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
+        )
+        fairness_report = evaluator.evaluate(predictions, labels_tensor, all_stay_ids)
+        evaluator.print_report(fairness_report)
+
+        if logger:
+            for attr, metrics in fairness_report.items():
+                for metric_name, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        logger.experiment.summary[f"fairness/{attr}/{metric_name}"] = value
+
+    # =========================================================================
     # Summary
     # =========================================================================
     print("\n" + "=" * 80)

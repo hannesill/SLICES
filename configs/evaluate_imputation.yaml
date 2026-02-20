@@ -1,0 +1,45 @@
+# Imputation Evaluation Configuration
+#
+# Evaluates SSL encoder quality by measuring reconstruction of masked values.
+#
+# Example usage:
+#   uv run python scripts/eval/evaluate_imputation.py \
+#       checkpoint=outputs/encoder.pt \
+#       data.processed_dir=data/processed/mimic-iv
+
+defaults:
+  - data: ricu
+  - _self_
+
+# Checkpoint path (one of these must be provided)
+checkpoint: null            # encoder.pt file
+pretrain_checkpoint: null   # full pretrain .ckpt (includes MAE decoder)
+
+# Masking configuration
+masking:
+  strategies: [random, feature_block, temporal_block]
+  mask_ratio: 0.15
+
+# Reconstruction head (for non-MAE models only)
+reconstruction_head:
+  hidden_dim: 128
+  max_epochs: 10
+  lr: 1.0e-3
+
+# Evaluation settings
+batch_size: 64
+seed: 42
+
+# Output directory
+output_dir: ${hydra:runtime.output_dir}
+
+# Logging
+logging:
+  use_wandb: false
+  wandb_project: slices
+  wandb_entity: null
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/eval_imputation/${now:%Y-%m-%d}/${now:%H-%M-%S}
