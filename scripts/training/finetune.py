@@ -201,6 +201,20 @@ def main(cfg: DictConfig) -> None:
     # Inject d_input from data into encoder config
     OmegaConf.set_struct(cfg, False)
     cfg.encoder.d_input = datamodule.get_feature_dim()
+
+    # Resolve "balanced" class weights from label distribution
+    if cfg.training.get("class_weight") == "balanced":
+        if task_name in label_stats:
+            stats = label_stats[task_name]
+            n_pos = stats.get("positive", 1)
+            n_neg = stats.get("negative", 1)
+            n_total = n_pos + n_neg
+            cfg.training.class_weight = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
+            print(f"\n  Balanced class weights: {cfg.training.class_weight}")
+        else:
+            print(f"\n  Warning: No label stats for '{task_name}', skipping class weighting")
+            cfg.training.class_weight = None
+
     OmegaConf.set_struct(cfg, True)
 
     # Create Lightning module

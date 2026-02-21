@@ -5,20 +5,21 @@ and a shared checkpoint save helper.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import torch
 import torch.nn as nn
 
 
 def build_optimizer(
-    params: Iterator[nn.Parameter],
+    params: Union[Iterator[nn.Parameter], List[Dict[str, Any]]],
     config: Any,
 ) -> torch.optim.Optimizer:
     """Build optimizer from config.
 
     Args:
-        params: Model parameters to optimize.
+        params: Model parameters to optimize. Can be an iterator of
+                parameters or a list of param group dicts.
         config: Optimizer config with 'name', 'lr', and optional
                 'weight_decay', 'momentum' fields.
 

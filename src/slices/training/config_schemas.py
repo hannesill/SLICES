@@ -14,7 +14,7 @@ dataclass constructors (TransformerConfig, MAEConfig, etc.), so they are
 not duplicated here.
 """
 
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from pydantic import BaseModel, field_validator
 
@@ -76,6 +76,7 @@ class TrainingConfig(BaseModel):
     freeze_encoder: bool = True
     unfreeze_epoch: Optional[int] = None
     use_missing_token: bool = True
+    class_weight: Optional[Union[Literal["balanced"], List[float]]] = None
     accelerator: str = "auto"
     devices: Any = "auto"
     precision: Any = 32
