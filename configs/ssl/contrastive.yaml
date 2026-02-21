@@ -1,0 +1,21 @@
+# @package ssl
+# Contrastive (SimCLR-style) SSL Configuration
+#
+# Observation-level tokenization: two different random masks create two "views"
+# of the same sample. NT-Xent loss pulls views of the same sample together
+# and pushes different samples apart in a learned projection space.
+#
+# Key difference from MAE: discriminative (not reconstructive)
+# Key difference from JEPA: global invariance (not local positional prediction)
+
+name: contrastive
+
+# Masking parameters (same as MAE/JEPA for fair comparison)
+mask_ratio: 0.75  # Fraction of observation tokens to mask per view
+
+# Projection head parameters
+proj_hidden_dim: 512   # Hidden dimension of projection MLP
+proj_output_dim: 128   # Output dimension (contrastive embedding space)
+
+# NT-Xent temperature
+temperature: 0.1

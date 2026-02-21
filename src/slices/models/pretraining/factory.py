@@ -9,6 +9,8 @@ from typing import Dict, Type
 import torch.nn as nn
 
 from .base import BaseSSLObjective, SSLConfig
+from .contrastive import ContrastiveConfig, ContrastiveObjective
+from .jepa import JEPAConfig, JEPAObjective
 from .mae import MAEConfig, MAEObjective
 from .smart import SMARTObjective, SMARTSSLConfig
 
@@ -16,12 +18,16 @@ from .smart import SMARTObjective, SMARTSSLConfig
 SSL_REGISTRY: Dict[str, Type[BaseSSLObjective]] = {
     "mae": MAEObjective,
     "smart": SMARTObjective,
+    "jepa": JEPAObjective,
+    "contrastive": ContrastiveObjective,
 }
 
 # Registry of SSL configs
 CONFIG_REGISTRY: Dict[str, Type[SSLConfig]] = {
     "mae": MAEConfig,
     "smart": SMARTSSLConfig,
+    "jepa": JEPAConfig,
+    "contrastive": ContrastiveConfig,
 }
 
 

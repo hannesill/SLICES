@@ -1,0 +1,30 @@
+# @package ssl
+# JEPA (Joint-Embedding Predictive Architecture) SSL Configuration
+#
+# Observation-level tokenization: same masking as MAE, but predicts
+# latent representations (d_model vectors) instead of raw input values.
+# Uses EMA target encoder for stable training targets.
+#
+# Key difference from MAE: latent-space prediction (not input-space)
+# Key difference from Contrastive: local positional prediction (not global invariance)
+
+name: jepa
+
+# Masking parameters (same as MAE for fair comparison)
+mask_ratio: 0.75  # Fraction of observation tokens to mask
+
+# Predictor parameters (mirrors MAE decoder for fairness)
+predictor_d_model: 128
+predictor_n_layers: 2
+predictor_n_heads: 4
+predictor_d_ff: 512
+predictor_dropout: 0.1
+
+# Momentum encoder parameters
+# Target encoder updated via EMA: target = m * target + (1-m) * online
+# Momentum increases linearly from base to final during training
+momentum_base: 0.996
+momentum_final: 1.0
+
+# Loss type: mse or cosine
+loss_type: mse

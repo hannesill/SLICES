@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 
 from .base import BaseSSLObjective, SSLConfig
+from .masking import create_observation_mask, extract_visible
 
 
 @dataclass
@@ -141,11 +142,11 @@ class MAEDecoder(nn.Module):
         # Place visible tokens at their original positions.
         # ssl_mask is (B, max_obs), True at visible positions.
         # Stable descending argsort on ssl_mask.float() puts visible (1.0) positions
-        # first. This mirrors _extract_visible(), so vis_indices[:, :n_vis] gives
+        # first. This mirrors extract_visible(), so vis_indices[:, :n_vis] gives
         # the original positions of the n_vis visible tokens in the same order
         # they were fed to the encoder.
         # Padding invariant: padding positions have ssl_mask=True (see
-        # _create_observation_mask), so they sort among visible positions.
+        # create_observation_mask), so they sort among visible positions.
         # But because tokenization places valid tokens before padding and argsort
         # is stable, valid-visible tokens always precede padding tokens in the
         # sorted order. We only scatter the first n_vis entries, which are the
@@ -250,10 +251,10 @@ class MAEObjective(BaseSSLObjective):
 
         # 2. Create SSL mask on observation tokens
         # ssl_mask: True = visible, False = masked
-        ssl_mask = self._create_observation_mask(padding_mask, device)
+        ssl_mask = create_observation_mask(padding_mask, self.config.mask_ratio, device)
 
         # 3. Extract visible tokens
-        visible_tokens, vis_padding = self._extract_visible(tokens, ssl_mask, padding_mask)
+        visible_tokens, vis_padding = extract_visible(tokens, ssl_mask, padding_mask)
 
         # 4. Encode visible tokens only
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
@@ -271,83 +272,6 @@ class MAEObjective(BaseSSLObjective):
         loss, metrics = self._compute_loss(predictions, true_values, ssl_mask, padding_mask)
 
         return loss, metrics
-
-    def _create_observation_mask(
-        self,
-        padding_mask: torch.Tensor,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """Create random mask on observation tokens.
-
-        Args:
-            padding_mask: (B, max_obs) True = valid token.
-            device: Device.
-
-        Returns:
-            ssl_mask: (B, max_obs) True = visible, False = masked.
-                      Padding positions are always marked visible (excluded from loss).
-        """
-        B, N = padding_mask.shape
-
-        # Random values for valid positions
-        rand_vals = torch.rand(B, N, device=device)
-
-        # Only mask valid (non-padding) tokens
-        # For each sample, we want mask_ratio fraction of valid tokens to be masked
-        ssl_mask = (rand_vals >= self.config.mask_ratio) | (~padding_mask)
-
-        # Ensure at least 1 visible token per sample
-        n_valid = padding_mask.sum(dim=1)  # (B,)
-        n_visible = (ssl_mask & padding_mask).sum(dim=1)  # (B,)
-
-        # If any sample has 0 visible tokens, unmask the first valid one
-        needs_fix = (n_visible == 0) & (n_valid > 0)
-        if needs_fix.any():
-            for b in range(B):
-                if needs_fix[b]:
-                    # Find first valid token
-                    first_valid = padding_mask[b].nonzero(as_tuple=True)[0][0]
-                    ssl_mask[b, first_valid] = True
-
-        return ssl_mask
-
-    def _extract_visible(
-        self,
-        tokens: torch.Tensor,
-        ssl_mask: torch.Tensor,
-        padding_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Extract visible tokens from full token sequence.
-
-        Args:
-            tokens: (B, max_obs, d_model)
-            ssl_mask: (B, max_obs) True = visible
-            padding_mask: (B, max_obs) True = valid
-
-        Returns:
-            visible_tokens: (B, max_vis, d_model)
-            vis_padding: (B, max_vis) True = valid visible token
-        """
-        B, N, d_model = tokens.shape
-
-        # visible = ssl_mask AND padding_mask (both True)
-        visible_mask = ssl_mask & padding_mask  # (B, N)
-
-        n_visible = visible_mask.sum(dim=1)  # (B,)
-        max_vis = max(int(n_visible.max().item()), 1)
-
-        # Sort so visible tokens come first
-        sort_idx = visible_mask.float().argsort(dim=1, descending=True, stable=True)
-        sort_idx_expanded = sort_idx.unsqueeze(-1).expand(-1, -1, d_model)
-
-        sorted_tokens = tokens.gather(1, sort_idx_expanded)
-        visible_tokens = sorted_tokens[:, :max_vis, :]  # (B, max_vis, d_model)
-
-        # Build padding mask for visible
-        vis_positions = torch.arange(max_vis, device=tokens.device).unsqueeze(0)
-        vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
-
-        return visible_tokens, vis_padding
 
     def _compute_loss(
         self,
