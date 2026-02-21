@@ -1,0 +1,36 @@
+# @package encoder
+# Observation-Level Transformer Encoder Configuration
+#
+# Each observed measurement becomes a separate token:
+#   token = value_proj(value) + feature_embed(feature_id) + time_pe(timestep)
+#
+# Only observed values are tokenized -- missingness is handled intrinsically.
+# Designed for MAE pretraining with visible-only encoding.
+#
+# For fair comparison with timestep-level transformer:
+#   Same TransformerEncoderLayer blocks, d_model, n_heads, d_ff, n_layers.
+
+name: observation_transformer
+
+# Input/Output dimensions
+d_model: 128
+max_seq_length: 168  # Maximum sequence length in hours (7 days)
+
+# Transformer architecture
+n_layers: 4
+n_heads: 8
+d_ff: 512
+
+# Regularization
+dropout: 0.1
+
+# Architecture choices
+activation: gelu
+prenorm: true
+layer_norm_eps: 1.0e-5
+
+# Pooling strategy
+# - mean: Average over observation tokens (default for finetuning)
+# - max: Max pooling over observation tokens
+# - none: Return per-token embeddings (required for MAE pretraining)
+pooling: mean

@@ -21,7 +21,7 @@ def minimal_config():
     return OmegaConf.create(
         {
             "encoder": {
-                "name": "transformer",
+                "name": "observation_transformer",
                 "d_input": 9,
                 "d_model": 32,
                 "n_layers": 1,
@@ -30,24 +30,18 @@ def minimal_config():
                 "max_seq_length": 48,
                 "pooling": "none",
                 "dropout": 0.1,
-                "use_positional_encoding": True,
                 "prenorm": True,
                 "activation": "gelu",
                 "layer_norm_eps": 1e-5,
             },
             "ssl": {
                 "name": "mae",
-                "mask_ratio": 0.15,
-                "mask_strategy": "random",
+                "mask_ratio": 0.75,
                 "decoder_d_model": 16,
                 "decoder_n_layers": 1,
                 "decoder_n_heads": 2,
                 "decoder_d_ff": 32,
                 "decoder_dropout": 0.1,
-                "loss_on_observed_only": True,
-                "norm_target": False,
-                "min_block_size": 3,
-                "max_block_size": 10,
             },
             "optimizer": {
                 "name": "adamw",
@@ -71,10 +65,10 @@ class TestSSLPretrainModuleInitialization:
 
     def test_encoder_type(self, minimal_config):
         """Test that encoder is correct type."""
-        from slices.models.encoders import TransformerEncoder
+        from slices.models.encoders import ObservationTransformerEncoder
 
         module = SSLPretrainModule(minimal_config)
-        assert isinstance(module.encoder, TransformerEncoder)
+        assert isinstance(module.encoder, ObservationTransformerEncoder)
 
     def test_ssl_objective_type(self, minimal_config):
         """Test that SSL objective is correct type."""
@@ -317,7 +311,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "transformer",
+                    "name": "observation_transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -326,24 +320,18 @@ class TestLRWarmup:
                     "max_seq_length": 48,
                     "pooling": "none",
                     "dropout": 0.1,
-                    "use_positional_encoding": True,
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
                 },
                 "ssl": {
                     "name": "mae",
-                    "mask_ratio": 0.15,
-                    "mask_strategy": "random",
+                    "mask_ratio": 0.75,
                     "decoder_d_model": 16,
                     "decoder_n_layers": 1,
                     "decoder_n_heads": 2,
                     "decoder_d_ff": 32,
                     "decoder_dropout": 0.1,
-                    "loss_on_observed_only": True,
-                    "norm_target": False,
-                    "min_block_size": 3,
-                    "max_block_size": 10,
                 },
                 "optimizer": {
                     "name": "adamw",
@@ -382,7 +370,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "transformer",
+                    "name": "observation_transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -391,24 +379,18 @@ class TestLRWarmup:
                     "max_seq_length": 48,
                     "pooling": "none",
                     "dropout": 0.1,
-                    "use_positional_encoding": True,
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
                 },
                 "ssl": {
                     "name": "mae",
-                    "mask_ratio": 0.15,
-                    "mask_strategy": "random",
+                    "mask_ratio": 0.75,
                     "decoder_d_model": 16,
                     "decoder_n_layers": 1,
                     "decoder_n_heads": 2,
                     "decoder_d_ff": 32,
                     "decoder_dropout": 0.1,
-                    "loss_on_observed_only": True,
-                    "norm_target": False,
-                    "min_block_size": 3,
-                    "max_block_size": 10,
                 },
                 "optimizer": {
                     "name": "adamw",
@@ -458,7 +440,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "transformer",
+                    "name": "observation_transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -467,24 +449,18 @@ class TestLRWarmup:
                     "max_seq_length": 48,
                     "pooling": "none",
                     "dropout": 0.1,
-                    "use_positional_encoding": True,
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
                 },
                 "ssl": {
                     "name": "mae",
-                    "mask_ratio": 0.15,
-                    "mask_strategy": "random",
+                    "mask_ratio": 0.75,
                     "decoder_d_model": 16,
                     "decoder_n_layers": 1,
                     "decoder_n_heads": 2,
                     "decoder_d_ff": 32,
                     "decoder_dropout": 0.1,
-                    "loss_on_observed_only": True,
-                    "norm_target": False,
-                    "min_block_size": 3,
-                    "max_block_size": 10,
                 },
                 "optimizer": {
                     "name": "adamw",

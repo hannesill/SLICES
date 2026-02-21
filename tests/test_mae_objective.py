@@ -1,4 +1,4 @@
-"""Tests for MAE (Masked Autoencoder) SSL objective."""
+"""Tests for observation-level MAE (Masked Autoencoder) SSL objective."""
 
 import pytest
 import torch
@@ -11,7 +11,12 @@ from slices.data.transforms import (
     create_ssl_mask,
     create_timestep_mask,
 )
-from slices.models.encoders import TransformerConfig, TransformerEncoder
+from slices.models.encoders import (
+    ObservationTransformerConfig,
+    ObservationTransformerEncoder,
+    TransformerConfig,
+    TransformerEncoder,
+)
 from slices.models.pretraining import (
     MAEConfig,
     MAEObjective,
@@ -19,464 +24,665 @@ from slices.models.pretraining import (
     get_ssl_config_class,
 )
 
+# =============================================================================
+# Legacy masking function tests (still used by transforms.py)
+# =============================================================================
+
 
 class TestMaskingFunctions:
-    """Tests for masking utilities."""
+    """Tests for masking utilities (still in transforms.py for other uses)."""
 
     def test_create_random_mask(self):
-        """Test random mask creation."""
         shape = (2, 10, 5)
-        mask_ratio = 0.3
-        device = torch.device("cpu")
-
-        mask = create_random_mask(shape, mask_ratio, device)
-
+        mask = create_random_mask(shape, 0.3, torch.device("cpu"))
         assert mask.shape == shape
         assert mask.dtype == torch.bool
-        # Check approximate mask ratio (with some tolerance)
         actual_ratio = (~mask).float().mean().item()
-        assert 0.15 <= actual_ratio <= 0.45  # Allow ~15% absolute deviation
+        assert 0.15 <= actual_ratio <= 0.45
 
     def test_create_block_mask(self):
-        """Test block mask creation."""
         shape = (2, 20, 5)
-        mask_ratio = 0.3
-        device = torch.device("cpu")
-
         mask = create_block_mask(
-            shape, mask_ratio, min_block_size=3, max_block_size=5, device=device
+            shape, 0.3, min_block_size=3, max_block_size=5, device=torch.device("cpu")
         )
-
         assert mask.shape == shape
-        assert mask.dtype == torch.bool
-        # Check that masking is consistent across features (entire timesteps)
         for b in range(shape[0]):
-            # For each timestep, either all features are masked or none
-            timestep_mask = mask[b, :, 0]  # First feature
+            timestep_mask = mask[b, :, 0]
             for d in range(1, shape[2]):
                 assert torch.equal(mask[b, :, d], timestep_mask)
 
     def test_create_timestep_mask(self):
-        """Test timestep mask creation."""
         shape = (2, 10, 5)
-        mask_ratio = 0.3
-        device = torch.device("cpu")
-
-        mask = create_timestep_mask(shape, mask_ratio, device)
-
+        mask = create_timestep_mask(shape, 0.3, torch.device("cpu"))
         assert mask.shape == shape
-        assert mask.dtype == torch.bool
-        # Check that mask is consistent across features
         for b in range(shape[0]):
             timestep_mask = mask[b, :, 0]
             for d in range(1, shape[2]):
                 assert torch.equal(mask[b, :, d], timestep_mask)
 
     def test_create_feature_mask(self):
-        """Test feature mask creation."""
         shape = (2, 10, 5)
-        mask_ratio = 0.3
-        device = torch.device("cpu")
-
-        mask = create_feature_mask(shape, mask_ratio, device)
-
+        mask = create_feature_mask(shape, 0.3, torch.device("cpu"))
         assert mask.shape == shape
-        assert mask.dtype == torch.bool
-        # Check that mask is consistent across timesteps
         for b in range(shape[0]):
             feature_mask = mask[b, 0, :]
             for t in range(1, shape[1]):
                 assert torch.equal(mask[b, t, :], feature_mask)
 
     def test_apply_mask(self):
-        """Test applying mask to tensor."""
         x = torch.randn(2, 10, 5)
-        mask = torch.rand(2, 10, 5) > 0.5  # Random boolean mask
-        mask_value = 0.0
-
-        x_masked = apply_mask(x, mask, mask_value)
-
-        assert x_masked.shape == x.shape
-        # Check that masked positions are set to mask_value
-        assert torch.allclose(x_masked[~mask], torch.tensor(mask_value))
-        # Check that unmasked positions are unchanged
+        mask = torch.rand(2, 10, 5) > 0.5
+        x_masked = apply_mask(x, mask, 0.0)
+        assert torch.allclose(x_masked[~mask], torch.tensor(0.0))
         assert torch.allclose(x_masked[mask], x[mask])
 
     def test_create_ssl_mask_respects_obs_mask(self):
-        """Test that SSL mask respects observation mask."""
         shape = (2, 10, 5)
-        mask_ratio = 0.5
-        device = torch.device("cpu")
-
-        # Create observation mask (30% missing)
-        obs_mask = torch.rand(shape, device=device) > 0.3
-
-        # Create SSL mask
+        obs_mask = torch.rand(shape) > 0.3
         ssl_mask = create_ssl_mask(
-            shape, mask_ratio, strategy="random", obs_mask=obs_mask, device=device
+            shape, 0.5, strategy="random", obs_mask=obs_mask, device=torch.device("cpu")
         )
-
-        # SSL should not mask missing values
-        # obs_mask: True = observed, False = missing
-        # ssl_mask: False = masked for SSL
-        # Where obs_mask is False, ssl_mask must be True (not masked for SSL)
         assert torch.all(ssl_mask[~obs_mask])
 
     @pytest.mark.parametrize("strategy", ["random", "block", "timestep", "feature"])
     def test_all_masking_strategies(self, strategy: MaskingStrategy):
-        """Test all masking strategies work."""
         shape = (2, 20, 5)
-        mask_ratio = 0.3
-        device = torch.device("cpu")
-
-        mask = create_ssl_mask(shape, mask_ratio, strategy=strategy, device=device)
-
+        mask = create_ssl_mask(shape, 0.3, strategy=strategy, device=torch.device("cpu"))
         assert mask.shape == shape
         assert mask.dtype == torch.bool
+
+
+# =============================================================================
+# Observation tokenization tests
+# =============================================================================
+
+
+class TestObservationTokenization:
+    """Tests for observation-level tokenization."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        )
+        return ObservationTransformerEncoder(config)
+
+    def test_token_count_equals_observed(self, encoder):
+        """Number of valid tokens should equal number of observed values."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.5
+
+        tokens, padding_mask, token_info = encoder.tokenize(x, obs_mask)
+
+        for b in range(B):
+            expected_n = obs_mask[b].sum().item()
+            actual_n = padding_mask[b].sum().item()
+            assert actual_n == expected_n
+
+    def test_token_values_match_input(self, encoder):
+        """Token values should correspond to actual observed input values."""
+        B, T, D = 1, 4, 3
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+        obs_mask[0, 2, 1] = False  # One missing value
+
+        _, _, token_info = encoder.tokenize(x, obs_mask)
+        n_obs = token_info["n_obs"][0].item()
+
+        # All observed values should be in token_info["values"]
+        observed_vals = x[obs_mask].sort()[0]
+        token_vals = token_info["values"][0, :n_obs].sort()[0]
+        assert torch.allclose(observed_vals, token_vals)
+
+    def test_empty_obs_mask_gives_at_least_one_token(self, encoder):
+        """Even with no observations, we get at least 1 token (padded)."""
+        B, T, D = 1, 4, 3
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+
+        tokens, padding_mask, token_info = encoder.tokenize(x, obs_mask)
+
+        assert tokens.shape[1] >= 1
+        assert padding_mask.shape[1] >= 1
+        # No valid tokens
+        assert padding_mask.sum().item() == 0
+
+    def test_all_observed_token_count(self, encoder):
+        """With all observed, tokens = T * D."""
+        B, T, D = 1, 4, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        _, padding_mask, token_info = encoder.tokenize(x, obs_mask)
+
+        assert padding_mask.sum().item() == T * D
+
+    def test_feature_and_timestep_indices_valid(self, encoder):
+        """Feature and timestep indices should be within valid ranges."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.3
+
+        _, padding_mask, token_info = encoder.tokenize(x, obs_mask)
+
+        for b in range(B):
+            n = padding_mask[b].sum().item()
+            assert token_info["timestep_idx"][b, :n].max() < T
+            assert token_info["feature_idx"][b, :n].max() < D
+            assert token_info["timestep_idx"][b, :n].min() >= 0
+            assert token_info["feature_idx"][b, :n].min() >= 0
+
+
+# =============================================================================
+# MAE Decoder tests
+# =============================================================================
 
 
 class TestMAEDecoder:
     """Tests for MAE decoder."""
 
-    def test_decoder_forward(self):
-        """Test decoder forward pass."""
+    def test_decoder_output_shape(self):
         from slices.models.pretraining.mae import MAEDecoder
 
-        B, T, d_encoder, d_input = 2, 10, 128, 35
         config = MAEConfig(
-            decoder_d_model=64,
-            decoder_n_layers=2,
-            decoder_n_heads=4,
+            decoder_d_model=32, decoder_n_layers=1, decoder_n_heads=2, decoder_d_ff=64
         )
+        decoder = MAEDecoder(d_encoder=32, n_features=10, max_seq_length=48, config=config)
 
-        decoder = MAEDecoder(d_encoder, d_input, config)
-        x = torch.randn(B, T, d_encoder)
+        B, max_obs, n_vis = 2, 20, 5
+        encoded_visible = torch.randn(B, n_vis, 32)
+        ssl_mask = torch.ones(B, max_obs, dtype=torch.bool)
+        ssl_mask[:, :15] = False  # First 15 are masked
+        token_info = {
+            "timestep_idx": torch.randint(0, 8, (B, max_obs)),
+            "feature_idx": torch.randint(0, 10, (B, max_obs)),
+        }
+        padding_mask = torch.ones(B, max_obs, dtype=torch.bool)
 
-        recon = decoder(x)
+        pred = decoder(encoded_visible, ssl_mask, token_info, max_obs, padding_mask)
+        assert pred.shape == (B, max_obs)
 
-        assert recon.shape == (B, T, d_input)
-
-    def test_decoder_trainable(self):
-        """Test that decoder parameters are trainable."""
+    def test_decoder_mask_token_is_learnable(self):
         from slices.models.pretraining.mae import MAEDecoder
 
-        config = MAEConfig()
-        decoder = MAEDecoder(d_encoder=128, d_input=35, config=config)
+        config = MAEConfig(
+            decoder_d_model=16, decoder_n_layers=1, decoder_n_heads=2, decoder_d_ff=32
+        )
+        decoder = MAEDecoder(d_encoder=16, n_features=5, max_seq_length=10, config=config)
 
-        # Check that decoder has parameters
-        n_params = sum(p.numel() for p in decoder.parameters())
-        assert n_params > 0
+        assert decoder.mask_token.requires_grad
+        assert decoder.mask_token.shape == (1, 1, 16)
 
-        # Check that parameters require grad
-        for param in decoder.parameters():
-            assert param.requires_grad
+    def test_decoder_mask_token_in_decoder_space(self):
+        """MASK_TOKEN should be in d_decoder space, not d_encoder."""
+        from slices.models.pretraining.mae import MAEDecoder
+
+        d_encoder, d_decoder = 64, 32
+        config = MAEConfig(decoder_d_model=d_decoder, decoder_n_layers=1, decoder_n_heads=2)
+        decoder = MAEDecoder(d_encoder=d_encoder, n_features=10, max_seq_length=48, config=config)
+
+        assert decoder.mask_token.shape[-1] == d_decoder
+
+
+# =============================================================================
+# MAE Objective tests
+# =============================================================================
 
 
 class TestMAEObjective:
-    """Tests for MAE objective."""
+    """Tests for observation-level MAE objective."""
 
     @pytest.fixture
     def encoder(self):
-        """Create a small transformer encoder for testing."""
-        config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",  # Required for MAE
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
         )
-        return TransformerEncoder(config)
+        return ObservationTransformerEncoder(config)
 
     @pytest.fixture
     def mae_config(self):
-        """Create MAE config for testing."""
         return MAEConfig(
-            mask_ratio=0.15,
-            mask_strategy="random",
-            decoder_d_model=32,
+            mask_ratio=0.75,
+            decoder_d_model=16,
             decoder_n_layers=1,
             decoder_n_heads=2,
+            decoder_d_ff=32,
         )
 
     def test_mae_initialization(self, encoder, mae_config):
-        """Test MAE initialization."""
         mae = MAEObjective(encoder, mae_config)
-
         assert mae.encoder is encoder
         assert mae.config == mae_config
         assert hasattr(mae, "decoder")
+        # No MISSING_TOKEN in observation-level MAE
+        assert mae.missing_token is None
 
     def test_mae_forward(self, encoder, mae_config):
-        """Test MAE forward pass."""
         mae = MAEObjective(encoder, mae_config)
 
-        B, T, D = 2, 10, 35
+        B, T, D = 2, 8, 10
         x = torch.randn(B, T, D)
-        obs_mask = torch.rand(B, T, D) > 0.3  # 30% missing
+        obs_mask = torch.rand(B, T, D) > 0.3
 
         loss, metrics = mae(x, obs_mask)
 
-        # Check loss
-        assert loss.shape == ()  # Scalar
+        assert loss.shape == ()
         assert loss.item() >= 0
         assert not torch.isnan(loss)
-
-        # Check metrics
         assert "mae_loss" in metrics
         assert "mae_recon_loss_masked" in metrics
         assert "mae_recon_loss_visible" in metrics
         assert "mae_mask_ratio_actual" in metrics
-        assert "mae_obs_ratio" in metrics
+        assert "mae_n_tokens_per_sample" in metrics
+        assert "mae_n_visible_per_sample" in metrics
+        assert "mae_n_masked_per_sample" in metrics
 
     def test_mae_backward(self, encoder, mae_config):
-        """Test that MAE can backpropagate."""
         mae = MAEObjective(encoder, mae_config)
 
-        x = torch.randn(2, 10, 35)
-        obs_mask = torch.rand(2, 10, 35) > 0.3
+        x = torch.randn(2, 8, 10)
+        obs_mask = torch.rand(2, 8, 10) > 0.3
 
         loss, _ = mae(x, obs_mask)
         loss.backward()
 
-        # Check that gradients exist
         for name, param in mae.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"No gradient for {name}"
 
-    def test_mae_training_step(self, encoder, mae_config):
-        """Test a full training step."""
-        mae = MAEObjective(encoder, mae_config)
-        optimizer = torch.optim.Adam(mae.parameters(), lr=1e-3)
-
-        x = torch.randn(4, 10, 35)
-        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)  # All observed
-
-        # Training step
-        optimizer.zero_grad()
-        loss, metrics = mae(x, obs_mask)
-        loss.backward()
-        optimizer.step()
-
-        # Check that loss is finite
-        assert torch.isfinite(loss)
-
-    @pytest.mark.parametrize("mask_strategy", ["random", "block", "timestep", "feature"])
-    def test_mae_all_strategies(self, encoder, mask_strategy):
-        """Test MAE with all masking strategies."""
-        config = MAEConfig(
-            mask_ratio=0.15,
-            mask_strategy=mask_strategy,
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-
-        x = torch.randn(2, 10, 35)
-        obs_mask = torch.ones(2, 10, 35, dtype=torch.bool)
-
-        loss, metrics = mae(x, obs_mask)
-
-        assert torch.isfinite(loss)
-        assert loss.item() >= 0
-
-    def test_mae_respects_obs_mask(self, encoder, mae_config):
-        """Test that MAE respects observation mask."""
+    def test_encoder_sees_fewer_tokens(self, encoder, mae_config):
+        """Encoder should process fewer tokens than total observations (75% masked)."""
         mae = MAEObjective(encoder, mae_config)
 
-        x = torch.randn(2, 10, 35)
-        # Create obs mask where some values are missing
-        obs_mask = torch.rand(2, 10, 35) > 0.5
+        B, T, D = 4, 12, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
 
-        # Forward pass should not error with missing values
         loss, metrics = mae(x, obs_mask)
 
-        assert torch.isfinite(loss)
-        # Check that observation ratio is tracked
-        obs_ratio = metrics["mae_obs_ratio"]
-        expected_ratio = obs_mask.float().mean().item()
-        assert abs(obs_ratio - expected_ratio) < 0.01
+        B = 4
+        n_total = metrics["mae_n_tokens_per_sample"] * B
+        n_visible = metrics["mae_n_visible_per_sample"] * B
+        # Visible should be ~25% of total
+        assert n_visible < n_total
+        ratio = n_visible / n_total
+        assert 0.10 <= ratio <= 0.50  # Allow tolerance around 0.25
 
-    def test_mae_loss_on_observed_only(self, encoder):
-        """Test that loss_on_observed_only flag works."""
-        # Config with loss only on observed
-        config_obs = MAEConfig(
-            mask_ratio=0.5,
-            mask_strategy="random",
-            loss_on_observed_only=True,
-        )
-        mae_obs = MAEObjective(encoder, config_obs)
+    def test_loss_only_on_masked(self, encoder, mae_config):
+        """Loss should only be computed on masked positions."""
+        mae = MAEObjective(encoder, mae_config)
 
-        # Config with loss on all masked
-        config_all = MAEConfig(
-            mask_ratio=0.5,
-            mask_strategy="random",
-            loss_on_observed_only=False,
-        )
-        mae_all = MAEObjective(encoder, config_all)
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
 
-        # Create data with missing values
-        torch.manual_seed(42)
-        x = torch.randn(2, 10, 35)
-        obs_mask = torch.rand(2, 10, 35) > 0.5  # 50% observed
+        loss, metrics = mae(x, obs_mask)
 
-        # Both should run without error
-        loss_obs, metrics_obs = mae_obs(x, obs_mask)
-        loss_all, metrics_all = mae_all(x, obs_mask)
+        B = 2
+        n_masked = metrics["mae_n_masked_per_sample"] * B
+        n_total = metrics["mae_n_tokens_per_sample"] * B
+        assert n_masked > 0
+        assert n_masked < n_total
 
-        assert torch.isfinite(loss_obs)
-        assert torch.isfinite(loss_all)
+    def test_mae_requires_observation_encoder(self):
+        """MAE should reject encoders without tokenize/encode methods."""
+        config = TransformerConfig(d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none")
+        encoder = TransformerEncoder(config)
+        mae_config = MAEConfig()
 
-        # Loss positions should be different
-        # obs: only masked AND observed
-        # all: all masked (including missing)
-        assert metrics_obs["mae_loss_positions"] <= metrics_all["mae_loss_positions"]
+        with pytest.raises(ValueError, match="tokenize.*encode"):
+            MAEObjective(encoder, mae_config)
 
     def test_mae_requires_no_pooling(self):
-        """Test that MAE raises error if encoder has pooling."""
-        # Create encoder with pooling
-        config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="mean",  # This should cause error
+        """MAE should reject encoder with pooling != 'none'."""
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="mean"
         )
-        encoder = TransformerEncoder(config)
-
+        encoder = ObservationTransformerEncoder(config)
         mae_config = MAEConfig()
 
         with pytest.raises(ValueError, match="pooling='none'"):
             MAEObjective(encoder, mae_config)
 
-    def test_mae_get_encoder(self, encoder, mae_config):
-        """Test getting encoder from MAE."""
+    def test_mae_training_step(self, encoder, mae_config):
         mae = MAEObjective(encoder, mae_config)
+        optimizer = torch.optim.Adam(mae.parameters(), lr=1e-3)
 
-        retrieved_encoder = mae.get_encoder()
+        x = torch.randn(4, 8, 10)
+        obs_mask = torch.ones(4, 8, 10, dtype=torch.bool)
 
-        assert retrieved_encoder is encoder
-
-    def test_mae_two_token_system(self, encoder):
-        """Test MAE with two learned tokens (MISSING_TOKEN and MASK_TOKEN)."""
-        mae_config = MAEConfig(
-            mask_ratio=0.3,
-            mask_strategy="random",
-        )
-        mae = MAEObjective(encoder, mae_config)
-
-        # Check both tokens were created
-        assert mae.missing_token is not None
-        assert mae.mask_token is not None
-        assert mae.missing_token.shape == (1, 1, 35)  # d_input=35
-        assert mae.mask_token.shape == (1, 1, 35)
-        assert mae.missing_token.requires_grad
-        assert mae.mask_token.requires_grad
-
-        # Test forward pass works
-        B, T, D = 4, 24, 35
-        x = torch.randn(B, T, D)
-        obs_mask = torch.rand(B, T, D) > 0.3
-
-        mae.train()
-        loss, metrics = mae(x, obs_mask)
-
-        assert loss.requires_grad
-        assert loss.item() > 0
-
-        # Test backward pass - gradients should flow to both tokens
+        optimizer.zero_grad()
+        loss, _ = mae(x, obs_mask)
         loss.backward()
-        assert mae.missing_token.grad is not None
-        assert mae.mask_token.grad is not None
-        # At least one should have non-zero gradient (mask_token definitely should)
-        assert mae.mask_token.grad.abs().sum() > 0
+        optimizer.step()
 
-    def test_missing_token_placement(self, encoder):
-        """Test that MISSING_TOKEN is placed at genuinely missing positions."""
+        assert torch.isfinite(loss)
+
+    def test_mae_respects_obs_mask(self, encoder, mae_config):
+        """With sparse data, tokens should match observed count."""
+        mae = MAEObjective(encoder, mae_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.8  # ~20% observed
+
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
+
+        # n_tokens should reflect observed count
+        expected_obs = obs_mask.sum().item()
+        assert metrics["mae_n_tokens_per_sample"] * B == expected_obs
+
+    def test_mae_get_encoder(self, encoder, mae_config):
+        mae = MAEObjective(encoder, mae_config)
+        assert mae.get_encoder() is encoder
+
+
+# =============================================================================
+# Mask ratio tests
+# =============================================================================
+
+
+class TestMaskRatios:
+    """Test different mask ratios."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        )
+        return ObservationTransformerEncoder(config)
+
+    @pytest.mark.parametrize("mask_ratio", [0.25, 0.5, 0.75, 0.9])
+    def test_mask_ratios(self, encoder, mask_ratio):
+        config = MAEConfig(
+            mask_ratio=mask_ratio,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, config)
+
+        x = torch.randn(4, 8, 10)
+        obs_mask = torch.ones(4, 8, 10, dtype=torch.bool)
+
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
+
+        # Check actual ratio is close to target
+        actual = metrics["mae_mask_ratio_actual"]
+        assert abs(actual - mask_ratio) < 0.15
+
+    def test_high_mask_ratio_at_least_one_visible(self, encoder):
+        """Even with very high mask ratio, at least 1 visible token per sample."""
+        config = MAEConfig(
+            mask_ratio=0.99,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, config)
+
+        x = torch.randn(4, 8, 10)
+        obs_mask = torch.ones(4, 8, 10, dtype=torch.bool)
+
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
+        assert metrics["mae_n_visible_per_sample"] * 4 >= 4  # At least 1 per sample
+
+
+# =============================================================================
+# Edge cases
+# =============================================================================
+
+
+class TestEdgeCases:
+    """Test edge cases."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        )
+        return ObservationTransformerEncoder(config)
+
+    def test_very_sparse_data(self, encoder):
+        """Test with very few observations per sample."""
         mae_config = MAEConfig(
-            mask_ratio=0.0,  # No SSL masking - isolate missing token behavior
-            mask_strategy="random",
+            mask_ratio=0.5,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
         )
         mae = MAEObjective(encoder, mae_config)
-        mae.eval()
 
-        B, T, D = 2, 10, 35
+        B, T, D = 2, 8, 10
         x = torch.randn(B, T, D)
-        # Create obs_mask with known missing positions
-        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
-        obs_mask[:, :, 0] = False  # First feature always missing
+        # Very sparse: ~5% observed
+        obs_mask = torch.rand(B, T, D) > 0.95
 
-        # Capture the input to encoder
-        captured_input = []
-        original_forward = mae.encoder.forward
+        # Ensure at least some observations exist
+        obs_mask[0, 0, 0] = True
+        obs_mask[1, 0, 0] = True
 
-        def capture_forward(x_in, **kwargs):
-            captured_input.append(x_in.clone())
-            return original_forward(x_in, **kwargs)
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
 
-        from unittest.mock import patch
-
-        with patch.object(mae.encoder, "forward", capture_forward):
-            with torch.no_grad():
-                mae(x, obs_mask)
-
-        # Check that missing positions have MISSING_TOKEN values
-        encoder_input = captured_input[0]
-        missing_token_expanded = mae.missing_token.expand(B, T, D)
-
-        # First feature should have MISSING_TOKEN values
-        assert torch.allclose(encoder_input[:, :, 0], missing_token_expanded[:, :, 0], atol=1e-6)
-
-    def test_mask_token_placement(self, encoder):
-        """Test that MASK_TOKEN is placed at SSL-masked positions."""
+    def test_single_observation(self, encoder):
+        """Test with exactly 1 observed value per sample."""
         mae_config = MAEConfig(
-            mask_ratio=1.0,  # Mask everything observed for testing
-            mask_strategy="random",
+            mask_ratio=0.75,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
         )
         mae = MAEObjective(encoder, mae_config)
-        mae.eval()
 
-        B, T, D = 2, 10, 35
+        B, T, D = 2, 4, 10
         x = torch.randn(B, T, D)
-        # All observed - so all will be SSL-masked
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[0, 0, 0] = True
+        obs_mask[1, 1, 3] = True
+
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
+        # With 1 obs, at least 1 must be visible, so 0 masked → loss should be 0
+        # (no masked tokens to compute loss on)
+        assert loss.item() < 1e-7
+
+    def test_batch_with_varying_sparsity(self, encoder):
+        """Test batch where samples have different observation counts."""
+        mae_config = MAEConfig(
+            mask_ratio=0.75,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, mae_config)
+
+        B, T, D = 3, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[0] = True  # All observed
+        obs_mask[1, :4, :5] = True  # Half observed
+        obs_mask[2, 0, 0] = True  # Almost nothing
+
+        loss, metrics = mae(x, obs_mask)
+        assert torch.isfinite(loss)
+
+
+# =============================================================================
+# Gradient flow tests
+# =============================================================================
+
+
+class TestGradientFlow:
+    """Test gradient flow through all components."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        )
+        return ObservationTransformerEncoder(config)
+
+    def test_gradients_flow_to_encoder(self, encoder):
+        mae_config = MAEConfig(
+            mask_ratio=0.75,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, mae_config)
+
+        x = torch.randn(2, 8, 10)
+        obs_mask = torch.ones(2, 8, 10, dtype=torch.bool)
+
+        loss, _ = mae(x, obs_mask)
+        loss.backward()
+
+        # Encoder parameters should have gradients
+        encoder_has_grad = False
+        for name, param in encoder.named_parameters():
+            if param.grad is not None and param.grad.abs().sum() > 0:
+                encoder_has_grad = True
+                break
+        assert encoder_has_grad, "No gradients flowed to encoder"
+
+    def test_gradients_flow_to_decoder(self, encoder):
+        mae_config = MAEConfig(
+            mask_ratio=0.75,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, mae_config)
+
+        x = torch.randn(2, 8, 10)
+        obs_mask = torch.ones(2, 8, 10, dtype=torch.bool)
+
+        loss, _ = mae(x, obs_mask)
+        loss.backward()
+
+        # Decoder mask_token should have gradient
+        assert mae.decoder.mask_token.grad is not None
+        assert mae.decoder.mask_token.grad.abs().sum() > 0
+
+    def test_gradients_flow_to_decoder_feature_embed(self, encoder):
+        mae_config = MAEConfig(
+            mask_ratio=0.75,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, mae_config)
+
+        x = torch.randn(2, 8, 10)
+        obs_mask = torch.ones(2, 8, 10, dtype=torch.bool)
+
+        loss, _ = mae(x, obs_mask)
+        loss.backward()
+
+        assert mae.decoder.feature_embed.weight.grad is not None
+
+
+# =============================================================================
+# Training convergence test
+# =============================================================================
+
+
+class TestTrainingConvergence:
+    """Test that loss decreases during training."""
+
+    def test_loss_decreases(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=2, n_heads=4, d_ff=64, pooling="none"
+        )
+        encoder = ObservationTransformerEncoder(config)
+
+        mae_config = MAEConfig(
+            mask_ratio=0.75,
+            decoder_d_model=32,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=64,
+        )
+        mae = MAEObjective(encoder, mae_config)
+        optimizer = torch.optim.Adam(mae.parameters(), lr=1e-3)
+
+        # Fixed data for reproducible convergence
+        torch.manual_seed(42)
+        B, T, D = 4, 8, 10
+        x = torch.randn(B, T, D)
         obs_mask = torch.ones(B, T, D, dtype=torch.bool)
 
-        # Capture the input to encoder
-        captured_input = []
-        original_forward = mae.encoder.forward
+        initial_loss = None
+        for step in range(30):
+            optimizer.zero_grad()
+            loss, _ = mae(x, obs_mask)
+            loss.backward()
+            optimizer.step()
 
-        def capture_forward(x_in, **kwargs):
-            captured_input.append(x_in.clone())
-            return original_forward(x_in, **kwargs)
+            if initial_loss is None:
+                initial_loss = loss.item()
 
-        from unittest.mock import patch
+        final_loss = loss.item()
+        assert (
+            final_loss < initial_loss
+        ), f"Loss should decrease: initial={initial_loss:.4f}, final={final_loss:.4f}"
 
-        with patch.object(mae.encoder, "forward", capture_forward):
-            with torch.no_grad():
-                mae(x, obs_mask)
+    def test_training_masks_vary(self):
+        """Training masks should vary between forward passes."""
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        )
+        encoder = ObservationTransformerEncoder(config)
 
-        # Check that encoder input differs from original (should be MASK_TOKEN)
-        encoder_input = captured_input[0]
-        mask_token_expanded = mae.mask_token.expand(B, T, D)
+        mae_config = MAEConfig(
+            mask_ratio=0.5,
+            decoder_d_model=16,
+            decoder_n_layers=1,
+            decoder_n_heads=2,
+            decoder_d_ff=32,
+        )
+        mae = MAEObjective(encoder, mae_config)
+        mae.train()
 
-        # All positions should have MASK_TOKEN values (since mask_ratio=1.0)
-        assert torch.allclose(encoder_input, mask_token_expanded, atol=1e-6)
+        x = torch.randn(4, 8, 10)
+        obs_mask = torch.ones(4, 8, 10, dtype=torch.bool)
+
+        losses = []
+        for _ in range(5):
+            loss, _ = mae(x, obs_mask)
+            losses.append(loss.item())
+
+        unique = len(set(f"{l:.6f}" for l in losses))
+        assert unique > 1, "Training masks should vary but all losses were identical"
+
+
+# =============================================================================
+# SSL Factory tests
+# =============================================================================
 
 
 class TestSSLFactory:
-    """Tests for SSL factory functions."""
+    """Tests for SSL factory with observation-level MAE."""
 
     def test_build_ssl_objective_mae(self):
-        """Test building MAE via factory."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
+        encoder_config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none"
         )
-        encoder = TransformerEncoder(encoder_config)
-
-        mae_config = MAEConfig(mask_ratio=0.15)
+        encoder = ObservationTransformerEncoder(encoder_config)
+        mae_config = MAEConfig(mask_ratio=0.75)
 
         ssl_objective = build_ssl_objective(encoder, mae_config)
 
@@ -484,9 +690,8 @@ class TestSSLFactory:
         assert ssl_objective.encoder is encoder
 
     def test_build_ssl_objective_unknown(self):
-        """Test that unknown objective raises error."""
-        encoder_config = TransformerConfig(d_input=35, d_model=64, pooling="none")
-        encoder = TransformerEncoder(encoder_config)
+        encoder_config = ObservationTransformerConfig(d_input=10, d_model=32, pooling="none")
+        encoder = ObservationTransformerEncoder(encoder_config)
 
         from slices.models.pretraining.base import SSLConfig
 
@@ -496,320 +701,63 @@ class TestSSLFactory:
             build_ssl_objective(encoder, bad_config)
 
     def test_get_ssl_config_class(self):
-        """Test getting SSL config class."""
         config_cls = get_ssl_config_class("mae")
-
         assert config_cls == MAEConfig
 
     def test_get_ssl_config_class_unknown(self):
-        """Test that unknown config raises error."""
         with pytest.raises(ValueError, match="Unknown SSL objective"):
             get_ssl_config_class("unknown_objective")
 
 
-class TestMAEIntegration:
-    """Integration tests for MAE with dataset."""
+# =============================================================================
+# Observation encoder forward (finetuning mode) tests
+# =============================================================================
 
-    def test_mae_with_real_data(self, tmp_path):
-        """Test MAE with realistic ICU-like data."""
-        # Create synthetic ICU-like data
-        B, T, D = 8, 48, 35
+
+class TestObservationEncoderForward:
+    """Test observation encoder in forward/finetuning mode."""
+
+    def test_forward_with_mean_pooling(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="mean"
+        )
+        encoder = ObservationTransformerEncoder(config)
+
+        B, T, D = 4, 8, 10
         x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.3
 
-        # Add realistic missingness pattern
-        # More missing values in later timesteps (common in ICU)
-        obs_prob = torch.linspace(0.9, 0.6, T).unsqueeze(0).unsqueeze(-1)
-        obs_mask = torch.rand(B, T, D) < obs_prob.expand(B, T, D)
+        out = encoder(x, mask=obs_mask)
+        assert out.shape == (B, 32)  # (B, d_model)
 
-        # Impute missing values (forward fill)
-        x_imputed = x.clone()
-        for b in range(B):
-            for d in range(D):
-                last_valid = x[b, 0, d]
-                for t in range(T):
-                    if obs_mask[b, t, d]:
-                        last_valid = x[b, t, d]
-                    else:
-                        x_imputed[b, t, d] = last_valid
-
-        # Create MAE model
-        encoder_config = TransformerConfig(
-            d_input=D,
-            d_model=128,
-            n_layers=4,
-            n_heads=8,
-            pooling="none",
+    def test_forward_with_no_pooling(self):
+        config = ObservationTransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
         )
-        encoder = TransformerEncoder(encoder_config)
+        encoder = ObservationTransformerEncoder(config)
 
-        mae_config = MAEConfig(
-            mask_ratio=0.15,
-            mask_strategy="block",
-            decoder_d_model=64,
-            decoder_n_layers=2,
-        )
-        mae = MAEObjective(encoder, mae_config)
-
-        # Train for a few steps
-        optimizer = torch.optim.Adam(mae.parameters(), lr=1e-3)
-
-        initial_loss = None
-        for step in range(20):  # More steps for reliable decrease with two-token system
-            optimizer.zero_grad()
-            loss, metrics = mae(x_imputed, obs_mask)
-            loss.backward()
-            optimizer.step()
-
-            if initial_loss is None:
-                initial_loss = loss.item()
-
-        final_loss = loss.item()
-
-        # Check that loss decreased (allow 10% tolerance for random fluctuations)
-        assert final_loss < initial_loss * 1.1, (
-            f"Loss should decrease during training: initial={initial_loss:.4f}, "
-            f"final={final_loss:.4f}"
-        )
-
-        # Check that metrics are reasonable
-        assert 0.0 <= metrics["mae_mask_ratio_actual"] <= 1.0
-        assert 0.0 <= metrics["mae_obs_ratio"] <= 1.0
-
-    def test_mae_different_mask_ratios(self):
-        """Test MAE with different mask ratios."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        x = torch.randn(4, 10, 35)
-        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
-
-        for mask_ratio in [0.05, 0.15, 0.30, 0.50, 0.75]:
-            config = MAEConfig(
-                mask_ratio=mask_ratio,
-                decoder_d_model=32,
-                decoder_n_layers=1,
-            )
-            mae = MAEObjective(encoder, config)
-
-            loss, metrics = mae(x, obs_mask)
-
-            # Check that actual mask ratio is close to target
-            actual_ratio = metrics["mae_mask_ratio_actual"]
-            # Allow 15% relative error
-            assert abs(actual_ratio - mask_ratio) < 0.15
-
-
-class TestTwoTokenSystem:
-    """Tests for the two-token system (MISSING_TOKEN and MASK_TOKEN)."""
-
-    def test_encoder_receives_no_mask(self):
-        """Test that encoder receives mask=None (tokens carry the information)."""
-        from unittest.mock import patch
-
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        config = MAEConfig(
-            mask_ratio=0.5,
-            mask_strategy="random",
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-        mae.eval()
-
-        B, T, D = 2, 10, 35
+        B, T, D = 2, 4, 10
         x = torch.randn(B, T, D)
         obs_mask = torch.ones(B, T, D, dtype=torch.bool)
 
-        # Capture what mask is passed to encoder
-        captured_masks = []
-        original_forward = encoder.forward
+        out = encoder(x, mask=obs_mask)
+        assert out.shape == (B, T * D, 32)  # (B, max_obs, d_model)
 
-        def capture_forward(x_in, mask=None, padding_mask=None):
-            captured_masks.append(mask)
-            return original_forward(x_in, mask=mask, padding_mask=padding_mask)
-
-        with patch.object(encoder, "forward", capture_forward):
-            mae(x, obs_mask)
-
-        # The mask should be None (tokens carry the information)
-        assert captured_masks[0] is None
-
-    def test_tokens_differentiate_missing_vs_masked(self):
-        """Test that MISSING_TOKEN and MASK_TOKEN have different values."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
+    def test_forward_without_mask(self):
+        """Without mask, all values treated as observed."""
+        config = ObservationTransformerConfig(
+            d_input=5, d_model=16, n_layers=1, n_heads=2, d_ff=32, pooling="mean"
         )
-        encoder = TransformerEncoder(encoder_config)
+        encoder = ObservationTransformerEncoder(config)
 
-        config = MAEConfig(
-            mask_ratio=0.3,
-            mask_strategy="random",
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
+        x = torch.randn(2, 4, 5)
+        out = encoder(x)
+        assert out.shape == (2, 16)
 
-        # After random initialization, tokens should be different
-        assert not torch.allclose(mae.missing_token, mae.mask_token)
-
-    def test_input_contains_both_tokens(self):
-        """Test that encoder input contains both MISSING_TOKEN and MASK_TOKEN."""
-        from unittest.mock import patch
-
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        config = MAEConfig(
-            mask_ratio=0.5,  # High ratio to ensure some positions get masked
-            mask_strategy="random",
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-        mae.eval()
-
-        B, T, D = 2, 10, 35
-        x = torch.randn(B, T, D) + 5.0  # Offset to differentiate from tokens
-        # Mix of missing and observed
-        obs_mask = torch.rand(B, T, D) > 0.5
-
-        # Capture what input is passed to encoder
-        captured_inputs = []
-        original_forward = encoder.forward
-
-        def capture_forward(x_in, **kwargs):
-            captured_inputs.append(x_in.clone())
-            return original_forward(x_in, **kwargs)
-
-        with patch.object(encoder, "forward", capture_forward):
-            with torch.no_grad():
-                mae(x, obs_mask)
-
-        encoder_input = captured_inputs[0]
-
-        # Check that input contains values close to MISSING_TOKEN (at missing positions)
-        missing_positions = ~obs_mask
-        if missing_positions.any():
-            missing_vals = encoder_input[missing_positions]
-            expected_missing = mae.missing_token.expand_as(encoder_input)[missing_positions]
-            assert torch.allclose(missing_vals, expected_missing, atol=1e-6)
-
-
-class TestBugFixes:
-    """Tests for bug fixes in the pretraining pipeline."""
-
-    def test_block_masking_respects_max_ratio(self):
-        """Test that block masking doesn't exceed target mask ratio significantly."""
-        from slices.data.transforms import create_block_mask
-
-        shape = (8, 48, 35)
-        mask_ratio = 0.15
-
-        # Run multiple times to check consistency
-        for _ in range(10):
-            mask = create_block_mask(
-                shape,
-                mask_ratio=mask_ratio,
-                min_block_size=3,
-                max_block_size=10,
-                device=torch.device("cpu"),
-            )
-
-            # Count masked positions (False = masked)
-            actual_ratio = (~mask[:, :, 0]).float().mean().item()  # Check first feature
-
-            # Should not exceed target by more than max_block_size/T
-            max_overshoot = 10 / 48  # max_block_size / T
-            assert actual_ratio <= mask_ratio + max_overshoot, (
-                f"Block masking exceeded target ratio: {actual_ratio:.3f} > "
-                f"{mask_ratio + max_overshoot:.3f}"
-            )
-
-    def test_training_mask_varies(self):
-        """Test that training masks vary between forward passes."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        config = MAEConfig(
-            mask_ratio=0.15,
-            mask_strategy="random",
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-
-        # Set to train mode
-        mae.train()
-
-        x = torch.randn(4, 10, 35)
-        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
-
-        # Run multiple times and check that losses vary
-        losses = []
-        for _ in range(5):
-            loss, _ = mae(x, obs_mask)
-            losses.append(loss.item())
-
-        # At least some losses should be different (random masks)
-        unique_losses = len(set(f"{l:.6f}" for l in losses))
-        assert unique_losses > 1, "Training masks should vary but all losses were identical"
-
-    def test_norm_target_raises_error(self):
-        """Test that norm_target=True raises NotImplementedError."""
-        encoder_config = TransformerConfig(
-            d_input=35,
-            d_model=64,
-            n_layers=2,
-            n_heads=4,
-            pooling="none",
-        )
-        encoder = TransformerEncoder(encoder_config)
-
-        config = MAEConfig(
-            mask_ratio=0.15,
-            norm_target=True,  # This should cause error
-            decoder_d_model=32,
-            decoder_n_layers=1,
-        )
-        mae = MAEObjective(encoder, config)
-
-        x = torch.randn(4, 10, 35)
-        obs_mask = torch.ones(4, 10, 35, dtype=torch.bool)
-
-        with pytest.raises(
-            NotImplementedError, match="norm_target=True is not currently supported"
-        ):
-            mae(x, obs_mask)
+    def test_encoder_output_dim(self):
+        config = ObservationTransformerConfig(d_input=10, d_model=64)
+        encoder = ObservationTransformerEncoder(config)
+        assert encoder.get_output_dim() == 64
 
 
 if __name__ == "__main__":

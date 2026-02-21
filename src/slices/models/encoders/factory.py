@@ -8,6 +8,7 @@ from typing import Any, Dict, Type
 
 from .base import BaseEncoder, EncoderConfig
 from .linear import LinearConfig, LinearEncoder
+from .observation import ObservationTransformerConfig, ObservationTransformerEncoder
 from .smart import SMARTEncoder, SMARTEncoderConfig
 from .transformer import TransformerConfig, TransformerEncoder
 
@@ -16,6 +17,7 @@ ENCODER_REGISTRY: Dict[str, Type[BaseEncoder]] = {
     "transformer": TransformerEncoder,
     "linear": LinearEncoder,
     "smart": SMARTEncoder,
+    "observation_transformer": ObservationTransformerEncoder,
 }
 
 # Registry of encoder configs
@@ -23,6 +25,7 @@ ENCODER_CONFIG_REGISTRY: Dict[str, Type[EncoderConfig]] = {
     "transformer": TransformerConfig,
     "linear": LinearConfig,
     "smart": SMARTEncoderConfig,
+    "observation_transformer": ObservationTransformerConfig,
 }
 
 

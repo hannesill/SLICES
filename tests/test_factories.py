@@ -157,6 +157,48 @@ class TestEncoderFactory:
         # With query pooling, output should be (B, V*d_model)
         assert output.shape == (2, 35 * 32)
 
+    def test_encoder_registry_contains_observation_transformer(self):
+        """Encoder registry should contain observation_transformer."""
+        from slices.models.encoders.observation import ObservationTransformerEncoder
+
+        assert "observation_transformer" in ENCODER_REGISTRY
+        assert ENCODER_REGISTRY["observation_transformer"] is ObservationTransformerEncoder
+
+    def test_build_encoder_creates_observation_transformer(self):
+        """build_encoder should create ObservationTransformerEncoder correctly."""
+        from slices.models.encoders.observation import ObservationTransformerEncoder
+
+        config_dict = {
+            "d_input": 10,
+            "d_model": 32,
+            "n_layers": 1,
+            "n_heads": 4,
+            "d_ff": 64,
+            "pooling": "mean",
+        }
+        encoder = build_encoder("observation_transformer", config_dict)
+        assert isinstance(encoder, ObservationTransformerEncoder)
+        assert encoder.config.d_input == 10
+        assert encoder.config.d_model == 32
+
+    def test_built_observation_transformer_produces_output(self):
+        """Built observation transformer should produce output of correct shape."""
+        config_dict = {
+            "d_input": 10,
+            "d_model": 32,
+            "n_layers": 1,
+            "n_heads": 4,
+            "d_ff": 64,
+            "pooling": "mean",
+        }
+        encoder = build_encoder("observation_transformer", config_dict)
+
+        x = torch.randn(2, 8, 10)
+        obs_mask = torch.ones(2, 8, 10, dtype=torch.bool)
+
+        output = encoder(x, mask=obs_mask)
+        assert output.shape == (2, 32)
+
 
 class TestTaskHeadFactory:
     """Tests for task head factory functions."""
@@ -309,27 +351,29 @@ class TestSSLObjectiveFactory:
 
     def test_build_ssl_objective_mae(self):
         """build_ssl_objective should create MAEObjective correctly."""
-        # Create encoder first
-        encoder_config = TransformerConfig(
+        from slices.models.encoders import (
+            ObservationTransformerConfig,
+            ObservationTransformerEncoder,
+        )
+
+        encoder_config = ObservationTransformerConfig(
             d_input=35,
             d_model=64,
             n_layers=2,
             n_heads=4,
             pooling="none",
         )
-        encoder = TransformerEncoder(encoder_config)
+        encoder = ObservationTransformerEncoder(encoder_config)
 
-        # Create MAE config
         mae_config = MAEConfig(
             name="mae",
-            mask_ratio=0.15,
-            mask_strategy="random",
+            mask_ratio=0.75,
         )
 
         ssl_objective = build_ssl_objective(encoder, mae_config)
 
         assert isinstance(ssl_objective, MAEObjective)
-        assert ssl_objective.config.mask_ratio == 0.15
+        assert ssl_objective.config.mask_ratio == 0.75
 
     def test_build_ssl_objective_unknown_raises(self):
         """build_ssl_objective should raise for unknown objective name."""
@@ -354,31 +398,34 @@ class TestSSLObjectiveFactory:
 
     def test_built_ssl_objective_forward_pass(self):
         """Built SSL objective should perform forward pass correctly."""
-        encoder_config = TransformerConfig(
+        from slices.models.encoders import (
+            ObservationTransformerConfig,
+            ObservationTransformerEncoder,
+        )
+
+        encoder_config = ObservationTransformerConfig(
             d_input=35,
             d_model=64,
             n_layers=2,
             n_heads=4,
             pooling="none",
         )
-        encoder = TransformerEncoder(encoder_config)
+        encoder = ObservationTransformerEncoder(encoder_config)
 
         mae_config = MAEConfig(
             name="mae",
-            mask_ratio=0.15,
-            mask_strategy="random",
+            mask_ratio=0.75,
         )
 
         ssl_objective = build_ssl_objective(encoder, mae_config)
 
-        # Test forward pass - MAEObjective takes x and obs_mask as separate args
         x = torch.randn(2, 48, 35)
         obs_mask = torch.ones(2, 48, 35, dtype=torch.bool)
 
         loss, metrics = ssl_objective(x, obs_mask)
 
         assert isinstance(loss, torch.Tensor)
-        assert loss.ndim == 0  # Scalar loss
+        assert loss.ndim == 0
         assert isinstance(metrics, dict)
 
     def test_ssl_registry_contains_smart(self):
