@@ -7,6 +7,7 @@ label_sources:
   - stays
   - mortality_info
 label_params:
+  window_label_mode: death_hours
   stride_hours: 6
   eval_stride_hours: 1
 primary_metric: auprc

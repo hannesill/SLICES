@@ -1,7 +1,11 @@
-"""Decompensation prediction label builder (sliding-window)."""
+"""Death-hours label builder for decompensation prediction.
+
+Stores hours from admission to death as a per-stay Float64 column.
+Binary per-window labels are computed on-the-fly by SlidingWindowDataset.
+"""
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import polars as pl
 
@@ -10,102 +14,55 @@ from .base import LabelBuilder
 logger = logging.getLogger(__name__)
 
 
-class DecompensationLabelBuilder(LabelBuilder):
-    """Build decompensation labels using a sliding-window approach.
+class DeathHoursLabelBuilder(LabelBuilder):
+    """Build death_hours labels: one row per stay.
 
-    Unlike single-label tasks, this produces multiple labels per stay — one
-    per valid window position. The output DataFrame contains a ``window_start``
-    column to identify each window.
-
-    Label definition for a window starting at hour *t*:
-        - Observation period: [t, t + obs_window)
-        - Prediction period:  [t + obs_window, t + obs_window + pred_window)
-        - Label = 1 if death falls within the prediction period
-        - Label = 0 if survived past prediction period (or no death)
-        - EXCLUDED if death occurs during observation period
-        - EXCLUDED if stay is shorter than t + obs_window
+    Output column ``label`` is Float64:
+    - Hours from admission to death for deceased patients
+    - ``float('inf')`` for survivors (avoids null-based filtering in ICUDataset)
     """
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
-        """Build sliding-window decompensation labels.
+        """Build per-stay death_hours labels.
 
         Args:
             raw_data: Dict with ``"stays"`` and ``"mortality_info"`` DataFrames.
 
         Returns:
-            DataFrame with columns: stay_id (Int64), window_start (Int64),
-            label (Int32).
+            DataFrame with columns: stay_id (Int64), label (Float64).
         """
         self.validate_inputs(raw_data)
 
         stays = raw_data["stays"]
         mortality = raw_data["mortality_info"]
 
-        empty = pl.DataFrame(
-            {
-                "stay_id": pl.Series([], dtype=pl.Int64),
-                "window_start": pl.Series([], dtype=pl.Int64),
-                "label": pl.Series([], dtype=pl.Int32),
-            }
-        )
-
         if len(stays) == 0:
-            return empty
-
-        obs_window = self.config.observation_window_hours or 48
-        pred_window = self.config.prediction_window_hours or 24
-        stride = self.config.label_params.get("stride_hours", 6)
+            return pl.DataFrame(
+                {
+                    "stay_id": pl.Series([], dtype=pl.Int64),
+                    "label": pl.Series([], dtype=pl.Float64),
+                }
+            )
 
         death_hours = self._compute_death_hours(stays, mortality)
 
-        # Compute stay lengths in hours
-        stay_lengths: Dict[int, float] = dict(
-            zip(
-                stays["stay_id"].to_list(),
-                (stays["los_days"] * 24.0).cast(pl.Float64).to_list(),
+        rows = []
+        for stay_id in stays["stay_id"].to_list():
+            dh = death_hours.get(stay_id)
+            rows.append(
+                {
+                    "stay_id": stay_id,
+                    "label": dh if dh is not None else float("inf"),
+                }
             )
-        )
 
-        rows: List[Dict] = []
-        for stay_id, stay_length in stay_lengths.items():
-            death_hour = death_hours.get(stay_id)
-            t_start = 0
+        result = pl.DataFrame(rows).cast({"stay_id": pl.Int64, "label": pl.Float64})
 
-            while True:
-                obs_end = t_start + obs_window
-                pred_end = obs_end + pred_window
-
-                # Stay too short for this window
-                if obs_end > stay_length:
-                    break
-
-                # Death during observation [t_start, obs_end) — exclude
-                if death_hour is not None and t_start <= death_hour < obs_end:
-                    t_start += stride
-                    continue
-
-                # Determine label
-                if death_hour is not None and obs_end <= death_hour < pred_end:
-                    label = 1
-                else:
-                    label = 0
-
-                rows.append({"stay_id": stay_id, "window_start": t_start, "label": label})
-                t_start += stride
-
-        if not rows:
-            return empty
-
-        result = pl.DataFrame(rows).cast(
-            {"stay_id": pl.Int64, "window_start": pl.Int64, "label": pl.Int32}
-        )
-
-        n_pos = result.filter(pl.col("label") == 1).height
-        n_neg = result.filter(pl.col("label") == 0).height
-        n_stays = result["stay_id"].n_unique()
+        n_deceased = sum(1 for v in death_hours.values() if v is not None)
+        n_survivors = len(result) - n_deceased
         logger.info(
-            f"Decompensation labels: {n_pos} positive, {n_neg} negative "
-            f"from {n_stays} stays ({len(result)} total windows)"
+            f"Death-hours labels: {n_deceased} deceased, {n_survivors} survivors "
+            f"({len(result)} total stays)"
         )
 
         return result

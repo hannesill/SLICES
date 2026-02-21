@@ -1,4 +1,4 @@
-"""Sliding window dataset wrapper for SSL pretraining.
+"""Sliding window dataset wrapper for SSL pretraining and decompensation.
 
 Creates multiple training samples from longer ICU stays by extracting
 overlapping windows. This increases the effective training set size
@@ -6,11 +6,16 @@ significantly (e.g., 46k stays -> 100k+ windows with 168h stays).
 
 The windowing is a training-time augmentation that respects patient-level
 splits - windows from the same stay never appear in different splits.
+
+For decompensation prediction, computes per-window binary labels on-the-fly
+from stay-level death_hours using ``decompensation_pred_hours``.
 """
 
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import torch
 from torch.utils.data import Dataset
 
 from slices.data.dataset import ICUDataset
@@ -25,8 +30,8 @@ class SlidingWindowDataset(Dataset):
     Windows can overlap based on the stride parameter.
 
     This is designed for SSL pretraining where more diverse windows help
-    learn better representations. For supervised tasks, windowing may not
-    be appropriate as labels are stay-level.
+    learn better representations. It also supports decompensation prediction
+    via on-the-fly per-window label computation from stay-level death_hours.
 
     Example:
         >>> base_dataset = ICUDataset("data/processed/mimic-iv-168h")  # 168h sequences
@@ -47,6 +52,7 @@ class SlidingWindowDataset(Dataset):
         window_size: Size of each window in timesteps.
         stride: Step size between consecutive windows.
         stay_indices: Which stays from base dataset to include.
+        decompensation_pred_hours: If set, compute per-window binary labels.
     """
 
     def __init__(
@@ -55,6 +61,7 @@ class SlidingWindowDataset(Dataset):
         window_size: int,
         stride: Optional[int] = None,
         stay_indices: Optional[List[int]] = None,
+        decompensation_pred_hours: Optional[int] = None,
     ) -> None:
         """Initialize sliding window dataset.
 
@@ -67,6 +74,12 @@ class SlidingWindowDataset(Dataset):
                          only windows from these stays are created. This is used
                          to respect patient-level splits (e.g., only train stays).
                          If None, all stays are included.
+            decompensation_pred_hours: If set, enables decompensation mode.
+                         Per-window binary labels are computed on-the-fly:
+                         1 if death occurs in [obs_end, obs_end + pred_hours),
+                         0 otherwise. Windows where death occurs during
+                         observation [window_start, window_start + window_size)
+                         are excluded.
         """
         self.base_dataset = base_dataset
         self.window_size = window_size
@@ -74,6 +87,7 @@ class SlidingWindowDataset(Dataset):
         self.stay_indices = (
             stay_indices if stay_indices is not None else list(range(len(base_dataset)))
         )
+        self.decompensation_pred_hours = decompensation_pred_hours
 
         # Validate parameters
         if self.window_size <= 0:
@@ -86,36 +100,73 @@ class SlidingWindowDataset(Dataset):
                 f"seq_length ({base_dataset.seq_length})"
             )
 
+        # Pre-build death_hours lookup for decompensation mode
+        self._death_hours: Optional[Dict[int, float]] = None
+        if self.decompensation_pred_hours is not None:
+            self._death_hours = self._build_death_hours_lookup()
+
         # Pre-compute window index mapping for fast __getitem__
         self._window_index: List[Tuple[int, int]] = []
         self._build_window_index()
 
-        logger.info(
-            f"SlidingWindowDataset created: {len(self._window_index)} windows "
-            f"from {len(self.stay_indices)} stays (window_size={window_size}, stride={self.stride})"
+        decomp_info = (
+            f", decompensation_pred_hours={decompensation_pred_hours}"
+            if decompensation_pred_hours
+            else ""
         )
+        logger.info(
+            f"SlidingWindowDataset created: {len(self._window_index)} "
+            f"windows from {len(self.stay_indices)} stays "
+            f"(window_size={window_size}, stride={self.stride}"
+            f"{decomp_info})"
+        )
+
+    def _build_death_hours_lookup(self) -> Dict[int, float]:
+        """Build stay_id -> death_hours lookup from base dataset labels.
+
+        Returns:
+            Dict mapping stay_idx to death_hours value (inf for survivors).
+        """
+        death_hours = {}
+        for stay_idx in self.stay_indices:
+            sample = self.base_dataset[stay_idx]
+            if "label" in sample:
+                death_hours[stay_idx] = float(sample["label"].item())
+        return death_hours
 
     def _build_window_index(self) -> None:
         """Build mapping from window_idx -> (stay_idx, window_start).
 
         Pre-computes all valid window positions for fast random access.
         A window is valid if it fits entirely within the sequence length.
+
+        In decompensation mode, windows where death occurs during the
+        observation period [window_start, window_start + window_size) are excluded.
         """
         self._window_index = []
         seq_length = self.base_dataset.seq_length
 
         for stay_idx in self.stay_indices:
             # Calculate number of valid windows for this stay
-            # A window starting at position `start` covers [start, start + window_size)
-            # Valid if: start + window_size <= seq_length
-            # So: start <= seq_length - window_size
             max_start = seq_length - self.window_size
             if max_start < 0:
-                continue  # No valid windows (shouldn't happen if validation passed)
+                continue
 
-            # Generate window starts: 0, stride, 2*stride, ... while start <= max_start
+            # Get death_hours for decompensation exclusion
+            death_hour = None
+            if self._death_hours is not None:
+                death_hour = self._death_hours.get(stay_idx)
+
             window_start = 0
             while window_start <= max_start:
+                # In decompensation mode, exclude windows where death occurs
+                # during observation [window_start, window_start + window_size)
+                if death_hour is not None and not math.isinf(death_hour):
+                    obs_end = window_start + self.window_size
+                    if window_start <= death_hour < obs_end:
+                        window_start += self.stride
+                        continue
+
                 self._window_index.append((stay_idx, window_start))
                 window_start += self.stride
 
@@ -136,6 +187,7 @@ class SlidingWindowDataset(Dataset):
                 - 'stay_id': Stay identifier (int)
                 - 'window_start': Start position of window in original sequence (int)
                 - 'window_idx': Index of this window within the stay (int)
+                - 'label': Binary label (decompensation mode) or stay-level label
         """
         if idx < 0 or idx >= len(self._window_index):
             raise IndexError(f"Window index {idx} out of range [0, {len(self._window_index)})")
@@ -159,9 +211,18 @@ class SlidingWindowDataset(Dataset):
             "window_idx": self._get_window_idx_within_stay(stay_idx, window_start),
         }
 
-        # Labels are stay-level, so include them unchanged if present
-        # (though for SSL pretraining, labels are typically not used)
-        if "label" in sample:
+        # Compute per-window label for decompensation
+        if self.decompensation_pred_hours is not None and "label" in sample:
+            death_hour = float(sample["label"].item())
+            obs_end = window_start + self.window_size
+            pred_end = obs_end + self.decompensation_pred_hours
+
+            if not math.isinf(death_hour) and obs_end <= death_hour < pred_end:
+                result["label"] = torch.tensor(1.0, dtype=torch.float32)
+            else:
+                result["label"] = torch.tensor(0.0, dtype=torch.float32)
+        elif "label" in sample:
+            # Stay-level labels passed through unchanged
             result["label"] = sample["label"]
 
         return result

@@ -291,26 +291,6 @@ class RicuExtractor(BaseExtractor):
 
             self._validate_labels(labels, stay_ids)
 
-            # Save sliding-window labels (e.g. decompensation) to separate files
-            sliding_window_tasks = []
-            if hasattr(self, "_sliding_window_labels"):
-                for sw_task_name, sw_labels in self._sliding_window_labels.items():
-                    sw_path = self.output_dir / f"labels_{sw_task_name}.parquet"
-
-                    # Merge with existing sliding-window labels if resuming
-                    if existing_data_locked is not None:
-                        existing_sw_path = self.output_dir / f"labels_{sw_task_name}.parquet"
-                        if existing_sw_path.exists():
-                            existing_sw = pl.read_parquet(existing_sw_path)
-                            sw_labels = pl.concat([existing_sw, sw_labels])
-
-                    self._atomic_write(sw_path, lambda tmp, df=sw_labels: df.write_parquet(tmp))
-                    console.print(
-                        f"  Sliding-window labels ({sw_task_name}): "
-                        f"{sw_path} ({len(sw_labels)} samples)"
-                    )
-                    sliding_window_tasks.append(sw_task_name)
-
             metadata = {
                 "dataset": self._get_dataset_name(),
                 "feature_set": self.config.feature_set,
@@ -320,7 +300,6 @@ class RicuExtractor(BaseExtractor):
                 "seq_length_hours": self.config.seq_length_hours,
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
-                "sliding_window_tasks": sliding_window_tasks,
                 "n_stays": len(stays_filtered),
                 "extraction_config": {
                     "parquet_root": str(self.parquet_root),
