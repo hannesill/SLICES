@@ -123,7 +123,14 @@ def paired_bootstrap_test(
     score_a = _compute_metric(metric_fn, preds_a, targets)
     score_b = _compute_metric(metric_fn, preds_b, targets)
 
-    count_b_wins = 0
+    # Observed delta: positive means A is better when higher_is_better=True
+    observed_delta = score_a - score_b
+
+    # Shift-based paired bootstrap test (Efron & Tibshirani, 1993):
+    # Under H0 (no difference), bootstrap deltas are centered by subtracting
+    # the observed delta. The p-value is the fraction of bootstrap deltas
+    # (under H0) that are at least as extreme as the observed delta.
+    count_extreme = 0
     valid = 0
 
     for _ in range(n_bootstraps):
@@ -135,14 +142,19 @@ def paired_bootstrap_test(
             continue
         valid += 1
 
+        boot_delta = boot_a - boot_b
+        # Shift bootstrap delta to be centered under H0:
+        # null_delta = boot_delta - observed_delta
+        # Test: is null_delta >= observed_delta?
+        # Equivalent: boot_delta >= 2 * observed_delta
         if higher_is_better:
-            if boot_b >= boot_a:
-                count_b_wins += 1
+            if boot_delta >= 2 * observed_delta:
+                count_extreme += 1
         else:
-            if boot_b <= boot_a:
-                count_b_wins += 1
+            if boot_delta <= 2 * observed_delta:
+                count_extreme += 1
 
-    p_value = count_b_wins / max(valid, 1)
+    p_value = count_extreme / max(valid, 1)
 
     return {
         "score_a": score_a,

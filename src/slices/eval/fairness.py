@@ -237,7 +237,7 @@ def disparate_impact_ratio(
     Returns:
         Ratio of minimum to maximum positive prediction rate across groups.
         Returns 1.0 if fewer than 2 groups exist.
-        Returns 0.0 if the maximum rate is 0 (all groups have zero positive rate).
+        Returns 1.0 if the maximum rate is 0 (all groups have zero positive rate = perfect parity).
     """
     groups = _get_unique_groups(group_ids)
     if len(groups) < 2:
@@ -252,7 +252,7 @@ def disparate_impact_ratio(
     min_rate = min(rates)
 
     if max_rate == 0.0:
-        return 0.0
+        return 1.0
 
     return min_rate / max_rate
 
