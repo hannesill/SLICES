@@ -67,6 +67,11 @@ ssl:
   decoder_d_model: 128  # Override: larger decoder for pretraining (default: 64)
 
 # Training configuration
+# NOTE: For fair SSL objective comparison, equalize training budget across
+# methods. MAE (500 epochs) and SMART (25 epochs in pretrain_smart.yaml)
+# have very different defaults from their respective papers. Use gradient
+# steps (max_epochs * steps_per_epoch) or wall-clock time as the budget
+# unit, not raw epochs. Override max_epochs accordingly.
 training:
   max_epochs: 500
   batch_size: 256

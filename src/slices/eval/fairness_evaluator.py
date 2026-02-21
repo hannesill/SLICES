@@ -51,6 +51,7 @@ class FairnessEvaluator:
         static_df: pl.DataFrame,
         protected_attributes: Optional[List[str]] = None,
         min_subgroup_size: int = 50,
+        task_type: str = "binary",
     ) -> None:
         """Initialize FairnessEvaluator.
 
@@ -60,10 +61,13 @@ class FairnessEvaluator:
             protected_attributes: List of attributes to evaluate.
                 Defaults to ["gender", "age_group"].
             min_subgroup_size: Minimum samples for a subgroup to be included.
+            task_type: Task type ("binary", "multiclass", "regression").
+                Determines which per-group metrics are computed.
         """
         self.static_df = static_df
         self.protected_attributes = protected_attributes or ["gender", "age_group"]
         self.min_subgroup_size = min_subgroup_size
+        self.task_type = task_type
         self._available_attributes = self._detect_available_attributes()
 
     def _detect_available_attributes(self) -> List[str]:
@@ -175,9 +179,13 @@ class FairnessEvaluator:
     ) -> Dict[str, Any]:
         """Compute fairness report across all available attributes.
 
+        For binary tasks: per-group AUROC, demographic parity, equalized odds.
+        For regression tasks: per-group MSE, MAE, R2.
+
         Args:
-            predictions: Model prediction probabilities, shape (N,).
-            labels: Ground truth binary labels, shape (N,).
+            predictions: Model predictions, shape (N,).
+                Probabilities for binary tasks, continuous values for regression.
+            labels: Ground truth labels, shape (N,).
             stay_ids: List of stay IDs corresponding to each sample.
 
         Returns:
@@ -206,58 +214,111 @@ class FairnessEvaluator:
                 )
                 continue
 
-            # Compute per-group AUROC
-            per_group_auroc: Dict[str, float] = {}
-            auroc_values = []
+            group_sizes = {group_names[g]: int((group_ids == g).sum().item()) for g in valid_groups}
 
-            for g in valid_groups:
-                group_mask = group_ids == g
-                g_preds = predictions[group_mask]
-                g_labels = labels[group_mask].long()
-
-                # Need both classes present for AUROC
-                if g_labels.unique().numel() < 2:
-                    per_group_auroc[group_names[g]] = float("nan")
-                    continue
-
-                auroc_metric = AUROC(task="binary")
-                auroc_val = auroc_metric(g_preds, g_labels).item()
-                per_group_auroc[group_names[g]] = auroc_val
-                auroc_values.append(auroc_val)
-
-            # Worst-group AUROC
-            worst_group_auroc = min(auroc_values) if auroc_values else float("nan")
-
-            # Create mask for valid groups only (for parity/odds computation)
-            valid_mask = torch.zeros_like(group_ids, dtype=torch.bool)
-            for g in valid_groups:
-                valid_mask |= group_ids == g
-
-            # Demographic parity difference
-            dp_diff = demographic_parity_difference(
-                predictions[valid_mask],
-                group_ids[valid_mask],
-            )
-
-            # Equalized odds difference
-            eo_diff = equalized_odds_difference(
-                labels[valid_mask],
-                predictions[valid_mask],
-                group_ids[valid_mask],
-            )
-
-            report[attr] = {
-                "per_group_auroc": per_group_auroc,
-                "worst_group_auroc": worst_group_auroc,
-                "demographic_parity_diff": dp_diff,
-                "equalized_odds_diff": eo_diff,
-                "n_valid_groups": len(valid_groups),
-                "group_sizes": {
-                    group_names[g]: int((group_ids == g).sum().item()) for g in valid_groups
-                },
-            }
+            if self.task_type == "regression":
+                report[attr] = self._evaluate_regression(
+                    predictions, labels, group_ids, group_names, valid_groups, group_sizes
+                )
+            else:
+                report[attr] = self._evaluate_binary(
+                    predictions, labels, group_ids, group_names, valid_groups, group_sizes
+                )
 
         return report
+
+    def _evaluate_binary(
+        self,
+        predictions: torch.Tensor,
+        labels: torch.Tensor,
+        group_ids: torch.Tensor,
+        group_names: Dict[int, str],
+        valid_groups: List[int],
+        group_sizes: Dict[str, int],
+    ) -> Dict[str, Any]:
+        """Compute binary classification fairness metrics."""
+        per_group_auroc: Dict[str, float] = {}
+        auroc_values = []
+
+        for g in valid_groups:
+            group_mask = group_ids == g
+            g_preds = predictions[group_mask]
+            g_labels = labels[group_mask].long()
+
+            if g_labels.unique().numel() < 2:
+                per_group_auroc[group_names[g]] = float("nan")
+                continue
+
+            auroc_metric = AUROC(task="binary")
+            auroc_val = auroc_metric(g_preds, g_labels).item()
+            per_group_auroc[group_names[g]] = auroc_val
+            auroc_values.append(auroc_val)
+
+        worst_group_auroc = min(auroc_values) if auroc_values else float("nan")
+
+        valid_mask = torch.zeros_like(group_ids, dtype=torch.bool)
+        for g in valid_groups:
+            valid_mask |= group_ids == g
+
+        dp_diff = demographic_parity_difference(predictions[valid_mask], group_ids[valid_mask])
+        eo_diff = equalized_odds_difference(
+            labels[valid_mask], predictions[valid_mask], group_ids[valid_mask]
+        )
+
+        return {
+            "per_group_auroc": per_group_auroc,
+            "worst_group_auroc": worst_group_auroc,
+            "demographic_parity_diff": dp_diff,
+            "equalized_odds_diff": eo_diff,
+            "n_valid_groups": len(valid_groups),
+            "group_sizes": group_sizes,
+        }
+
+    def _evaluate_regression(
+        self,
+        predictions: torch.Tensor,
+        labels: torch.Tensor,
+        group_ids: torch.Tensor,
+        group_names: Dict[int, str],
+        valid_groups: List[int],
+        group_sizes: Dict[str, int],
+    ) -> Dict[str, Any]:
+        """Compute regression fairness metrics (per-group MSE, MAE, R2)."""
+        per_group_mse: Dict[str, float] = {}
+        per_group_mae: Dict[str, float] = {}
+        per_group_r2: Dict[str, float] = {}
+        mse_values = []
+
+        for g in valid_groups:
+            group_mask = group_ids == g
+            g_preds = predictions[group_mask].float()
+            g_labels = labels[group_mask].float()
+
+            residuals = g_preds - g_labels
+            mse = (residuals**2).mean().item()
+            mae = residuals.abs().mean().item()
+
+            # R2 = 1 - SS_res / SS_tot
+            ss_res = (residuals**2).sum().item()
+            ss_tot = ((g_labels - g_labels.mean()) ** 2).sum().item()
+            r2 = 1.0 - ss_res / max(ss_tot, 1e-8)
+
+            name = group_names[g]
+            per_group_mse[name] = mse
+            per_group_mae[name] = mae
+            per_group_r2[name] = r2
+            mse_values.append(mse)
+
+        worst_group_mse = max(mse_values) if mse_values else float("nan")
+
+        return {
+            "per_group_mse": per_group_mse,
+            "per_group_mae": per_group_mae,
+            "per_group_r2": per_group_r2,
+            "worst_group_mse": worst_group_mse,
+            "n_valid_groups": len(valid_groups),
+            "group_sizes": group_sizes,
+        }
 
     def print_report(self, report: Dict[str, Any]) -> None:
         """Print formatted fairness report to console.
@@ -273,22 +334,42 @@ class FairnessEvaluator:
             print(f"\n  Attribute: {attr}")
             print("  " + "-" * 40)
 
-            # Per-group AUROC
-            print("  Per-group AUROC:")
-            for group, auroc in metrics["per_group_auroc"].items():
-                size = metrics["group_sizes"].get(group, "?")
-                if isinstance(auroc, float) and auroc != auroc:  # NaN check
-                    print(f"    {group} (n={size}): N/A (single class)")
-                else:
-                    print(f"    {group} (n={size}): {auroc:.4f}")
+            if "per_group_auroc" in metrics:
+                # Binary classification report
+                print("  Per-group AUROC:")
+                for group, auroc in metrics["per_group_auroc"].items():
+                    size = metrics["group_sizes"].get(group, "?")
+                    if isinstance(auroc, float) and auroc != auroc:  # NaN check
+                        print(f"    {group} (n={size}): N/A (single class)")
+                    else:
+                        print(f"    {group} (n={size}): {auroc:.4f}")
 
-            # Summary metrics
-            wg = metrics["worst_group_auroc"]
-            if isinstance(wg, float) and wg == wg:  # Not NaN
-                print(f"  Worst-group AUROC: {wg:.4f}")
-            else:
-                print("  Worst-group AUROC: N/A")
-            print(f"  Demographic parity diff: {metrics['demographic_parity_diff']:.4f}")
-            print(f"  Equalized odds diff: {metrics['equalized_odds_diff']:.4f}")
+                wg = metrics["worst_group_auroc"]
+                if isinstance(wg, float) and wg == wg:  # Not NaN
+                    print(f"  Worst-group AUROC: {wg:.4f}")
+                else:
+                    print("  Worst-group AUROC: N/A")
+                print(f"  Demographic parity diff: {metrics['demographic_parity_diff']:.4f}")
+                eo = metrics["equalized_odds_diff"]
+                if isinstance(eo, float) and eo == eo:
+                    print(f"  Equalized odds diff: {eo:.4f}")
+                else:
+                    print("  Equalized odds diff: N/A (undefined for some groups)")
+
+            elif "per_group_mse" in metrics:
+                # Regression report
+                print("  Per-group MSE / MAE / R2:")
+                for group in metrics["per_group_mse"]:
+                    size = metrics["group_sizes"].get(group, "?")
+                    mse = metrics["per_group_mse"][group]
+                    mae = metrics["per_group_mae"][group]
+                    r2 = metrics["per_group_r2"][group]
+                    print(f"    {group} (n={size}): MSE={mse:.4f}  MAE={mae:.4f}  R2={r2:.4f}")
+
+                wg = metrics["worst_group_mse"]
+                if isinstance(wg, float) and wg == wg:
+                    print(f"  Worst-group MSE: {wg:.4f}")
+                else:
+                    print("  Worst-group MSE: N/A")
 
         print("\n" + "=" * 60)

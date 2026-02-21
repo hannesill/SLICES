@@ -52,9 +52,15 @@ def setup_callbacks(cfg: DictConfig) -> list:
     """
     callbacks = []
 
-    # Model checkpointing (based on AUROC for classification tasks)
-    monitor = cfg.training.get("early_stopping_monitor", "val/auroc")
-    mode = cfg.training.get("early_stopping_mode", "max")
+    # Model checkpointing — use task-type-aware defaults so regression
+    # tasks don't silently monitor a non-existent classification metric.
+    task_type = cfg.task.get("task_type", "binary")
+    if task_type == "regression":
+        default_monitor, default_mode = "val/mse", "min"
+    else:
+        default_monitor, default_mode = "val/auroc", "max"
+    monitor = cfg.training.get("early_stopping_monitor", default_monitor)
+    mode = cfg.training.get("early_stopping_mode", default_mode)
 
     # Convert metric name for filename (val/auroc -> val_auroc)
     metric_filename = monitor.replace("/", "_")

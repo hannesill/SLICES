@@ -67,6 +67,14 @@ task:
   activation: relu
   use_layer_norm: false  # Add LayerNorm in MLP head (set true for SMART paper protocol)
 
+  # Projection dimension for fair linear probing comparison.
+  # Different encoders produce different output dimensions (e.g., Transformer
+  # with mean pooling: d_model=64, SMART with query pooling: V*d_model=1120).
+  # Set this to project all representations to a shared dimensionality before
+  # the task head, so linear probing measures representation quality, not
+  # dimensionality. Set to null to use encoder output directly.
+  projection_dim: null
+
 # Training configuration
 training:
   max_epochs: 50

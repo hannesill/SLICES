@@ -14,6 +14,7 @@ from slices.eval.metrics import (
     build_metrics,
     get_default_metrics,
 )
+from slices.eval.statistical import bootstrap_ci, paired_bootstrap_test
 
 __all__ = [
     "MetricConfig",
@@ -21,4 +22,6 @@ __all__ = [
     "get_default_metrics",
     "FairnessEvaluator",
     "ImputationEvaluator",
+    "bootstrap_ci",
+    "paired_bootstrap_test",
 ]

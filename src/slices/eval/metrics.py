@@ -54,7 +54,7 @@ AVAILABLE_METRICS = {
 
 # Default metrics per task type (minimal set for clinical tasks)
 DEFAULT_METRICS = {
-    "binary": ["auroc", "auprc", "brier_score"],
+    "binary": ["auroc", "auprc", "brier_score", "ece"],
     "multiclass": ["auroc", "accuracy"],
     "multilabel": ["auroc"],
     "regression": ["mse", "mae", "r2"],
@@ -143,6 +143,7 @@ def _build_metric(
     name: str,
     task_type: TaskType,
     n_classes: int,
+    threshold: float = 0.5,
 ) -> torch.nn.Module:
     """Build a single metric instance.
 
@@ -151,6 +152,7 @@ def _build_metric(
               specificity, brier_score, ece).
         task_type: Task type for metric configuration.
         n_classes: Number of classes.
+        threshold: Decision threshold for binary classification metrics.
 
     Returns:
         Configured torchmetrics instance.
@@ -174,21 +176,29 @@ def _build_metric(
     # Map task_type to torchmetrics task parameter
     if task_type == "binary":
         task = "binary"
-        kwargs = {"num_classes": n_classes}
+        kwargs = {"num_classes": n_classes, "threshold": threshold}
     elif task_type == "multiclass":
         task = "multiclass"
         kwargs = {"num_classes": n_classes}
     elif task_type == "multilabel":
         task = "multilabel"
-        kwargs = {"num_labels": n_classes}
+        kwargs = {"num_labels": n_classes, "threshold": threshold}
     else:
         raise ValueError(f"Unsupported task_type: {task_type}")
 
-    # Build the metric
+    # Build the metric — threshold-independent metrics (AUROC, AUPRC) ignore threshold
     if name == "auroc":
-        return AUROC(task=task, **kwargs)
+        return AUROC(
+            task=task,
+            num_classes=n_classes if task != "multilabel" else None,
+            num_labels=n_classes if task == "multilabel" else None,
+        )
     elif name == "auprc":
-        return AveragePrecision(task=task, **kwargs)
+        return AveragePrecision(
+            task=task,
+            num_classes=n_classes if task != "multilabel" else None,
+            num_labels=n_classes if task == "multilabel" else None,
+        )
     elif name == "accuracy":
         return Accuracy(task=task, **kwargs)
     elif name == "f1":
@@ -200,7 +210,7 @@ def _build_metric(
     elif name == "specificity":
         if task_type != "binary":
             raise ValueError(f"Specificity only available for binary tasks, got {task_type}")
-        return Specificity(task="binary")
+        return Specificity(task="binary", threshold=threshold)
     elif name == "brier_score":
         if task_type != "binary":
             raise ValueError(f"Brier Score only available for binary tasks, got {task_type}")
@@ -233,7 +243,7 @@ def build_metrics(
     """
     metrics = {}
     for name in config.metrics:
-        metrics[name] = _build_metric(name, config.task_type, config.n_classes)
+        metrics[name] = _build_metric(name, config.task_type, config.n_classes, config.threshold)
 
     return MetricCollection(metrics, prefix=f"{prefix}/" if prefix else "")
 

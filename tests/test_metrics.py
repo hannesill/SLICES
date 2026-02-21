@@ -344,7 +344,7 @@ class TestConstants:
     def test_binary_defaults_minimal(self):
         """Test binary defaults are minimal."""
         defaults = DEFAULT_METRICS["binary"]
-        assert len(defaults) <= 3  # Keep it minimal
+        assert len(defaults) <= 4  # Core discrimination + calibration metrics
         assert "auroc" in defaults  # Core clinical metric
 
     def test_all_task_types_covered(self):
