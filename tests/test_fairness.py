@@ -84,11 +84,11 @@ class TestDisparateImpact:
         assert ratio < 0.8
 
     def test_zero_max_rate(self):
-        """If no group predicts positive, return 0.0."""
+        """If no group predicts positive, all rates equal at zero = perfect parity -> 1.0."""
         predictions = torch.tensor([0.1, 0.1, 0.1, 0.1])
         group_ids = torch.tensor([0, 0, 1, 1])
         ratio = disparate_impact_ratio(predictions, group_ids, threshold=0.5)
-        assert ratio == 0.0
+        assert ratio == 1.0
 
     def test_single_group(self):
         predictions = torch.tensor([0.9])

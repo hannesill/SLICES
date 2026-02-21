@@ -54,14 +54,19 @@ def main(cfg: DictConfig) -> None:
         )
         sys.exit(1)
 
-    config = ExtractorConfig(
-        parquet_root=str(cfg.data.ricu_output_dir),
-        output_dir=str(cfg.data.processed_dir),
-        feature_set=cfg.data.feature_set,
-        tasks=list(cfg.data.get("tasks", [])) if cfg.data.get("tasks") else [],
-        seq_length_hours=cfg.data.get("seq_length_hours", SEQ_LENGTH_HOURS),
-        min_stay_hours=cfg.data.get("min_stay_hours", MIN_STAY_HOURS),
-    )
+    # Build config kwargs, only overriding tasks if explicitly specified
+    # so that ExtractorConfig defaults (mortality_24h, mortality_hospital) are used
+    config_kwargs: dict = {
+        "parquet_root": str(cfg.data.ricu_output_dir),
+        "output_dir": str(cfg.data.processed_dir),
+        "feature_set": cfg.data.feature_set,
+        "seq_length_hours": cfg.data.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        "min_stay_hours": cfg.data.get("min_stay_hours", MIN_STAY_HOURS),
+    }
+    if cfg.data.get("tasks"):
+        config_kwargs["tasks"] = list(cfg.data.tasks)
+
+    config = ExtractorConfig(**config_kwargs)
 
     extractor = RicuExtractor(config)
     extractor.run()

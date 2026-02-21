@@ -96,7 +96,7 @@ def build_scheduler(
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val/loss",
+                "monitor": config.get("monitor", "val/loss"),
             },
         }
     elif name == "warmup_cosine":
