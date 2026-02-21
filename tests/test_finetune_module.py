@@ -473,15 +473,15 @@ class TestFineTuneModule:
         # Load checkpoint - encoder should be auto-detected as SMART
         module = FineTuneModule(sample_config, pretrain_checkpoint_path=str(ckpt_path))
 
-        # Verify encoder was rebuilt as SMART, not transformer
-        # The inner encoder should be SMART (after EncoderWithMissingToken wrapper)
-        inner_encoder = module.encoder.encoder
-        assert isinstance(inner_encoder, SMARTEncoder)
-        assert inner_encoder.config.d_model == 32  # From pretrain_config, not sample_config
+        # Verify encoder was rebuilt as SMART, not transformer.
+        # SMART encoder should NOT be wrapped with EncoderWithMissingToken
+        # because it handles missingness intrinsically via MLPEmbedder.
+        assert isinstance(module.encoder, SMARTEncoder)
+        assert module.encoder.config.d_model == 32  # From pretrain_config, not sample_config
 
         # Verify pooling was overridden from 'none' (pretraining) to 'mean' (finetuning)
         # The pretrain config had pooling='none' but finetuning config has pooling='mean'
-        assert inner_encoder.config.pooling == sample_config.encoder.pooling
+        assert module.encoder.config.pooling == sample_config.encoder.pooling
 
         # Verify forward pass works (would fail if pooling='none' since output shape would be 4D)
         batch_size = 4
@@ -612,8 +612,8 @@ class TestFineTuneModule:
         assert trainable_params == total_params
 
 
-class TestObservationEncoderNotWrapped:
-    """Test that ObservationTransformerEncoder is NOT wrapped with EncoderWithMissingToken."""
+class TestIntrinsicMissingnessEncodersNotWrapped:
+    """Test that encoders with intrinsic missingness handling are NOT wrapped."""
 
     def test_observation_encoder_not_wrapped(self):
         """ObservationTransformerEncoder should not be wrapped with EncoderWithMissingToken."""
@@ -657,6 +657,49 @@ class TestObservationEncoderNotWrapped:
 
         # Encoder should be ObservationTransformerEncoder directly, not wrapped
         assert isinstance(module.encoder, ObservationTransformerEncoder)
+
+    def test_smart_encoder_not_wrapped(self):
+        """SMARTEncoder should not be wrapped (handles missingness via MLPEmbedder)."""
+        from slices.models.encoders import SMARTEncoder
+
+        config = OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "smart",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.1,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.1,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                    "use_missing_token": True,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+            }
+        )
+
+        module = FineTuneModule(config)
+
+        # SMART encoder should NOT be wrapped
+        assert isinstance(module.encoder, SMARTEncoder)
 
 
 class TestFineTuneModuleGradualUnfreeze:
@@ -1018,3 +1061,239 @@ class TestEndToEnd:
 
         assert torch.allclose(out1["logits"], out2["logits"])
         assert torch.allclose(out1["probs"], out2["probs"])
+
+
+class TestOptimizerParamGroups:
+    """Test that optimizer uses param groups for gradual unfreezing support."""
+
+    @pytest.fixture
+    def frozen_config(self):
+        return OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.0,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": True,
+                    "unfreeze_epoch": 2,
+                },
+                "optimizer": {
+                    "name": "adamw",
+                    "lr": 1e-3,
+                    "weight_decay": 0.01,
+                },
+            }
+        )
+
+    def test_optimizer_has_all_params(self, frozen_config):
+        """Optimizer should contain both head and encoder params (as groups)."""
+        module = FineTuneModule(frozen_config)
+        optimizer = module.configure_optimizers()
+
+        assert isinstance(optimizer, torch.optim.AdamW)
+        assert len(optimizer.param_groups) == 2
+
+        # Group 0: task head, Group 1: encoder
+        head_params = set(id(p) for p in module.task_head.parameters())
+        encoder_params = set(id(p) for p in module.encoder.parameters())
+        group0_params = set(id(p) for p in optimizer.param_groups[0]["params"])
+        group1_params = set(id(p) for p in optimizer.param_groups[1]["params"])
+
+        assert group0_params == head_params
+        assert group1_params == encoder_params
+
+    def test_unfreezing_enables_encoder_updates(self, frozen_config):
+        """After unfreezing, optimizer should update encoder params."""
+        module = FineTuneModule(frozen_config)
+        optimizer = module.configure_optimizers()
+
+        batch = {
+            "timeseries": torch.randn(4, 24, 10),
+            "mask": torch.ones(4, 24, 10, dtype=torch.bool),
+            "label": torch.tensor([0, 1, 0, 1]),
+        }
+
+        # Save encoder weights before
+        encoder_weights_before = {k: v.clone() for k, v in module.encoder.state_dict().items()}
+
+        # Step while frozen — encoder should NOT change
+        optimizer.zero_grad()
+        loss = module.training_step(batch, 0)
+        loss.backward()
+        optimizer.step()
+
+        for k, v in module.encoder.state_dict().items():
+            assert torch.equal(
+                v, encoder_weights_before[k]
+            ), f"Frozen encoder param '{k}' changed during optimizer step"
+
+        # Unfreeze encoder
+        module._unfreeze_encoder()
+        module.freeze_strategy = False
+
+        # Step after unfreezing — encoder SHOULD change
+        optimizer.zero_grad()
+        loss = module.training_step(batch, 0)
+        loss.backward()
+        optimizer.step()
+
+        any_changed = False
+        for k, v in module.encoder.state_dict().items():
+            if not torch.equal(v, encoder_weights_before[k]):
+                any_changed = True
+                break
+
+        assert any_changed, "Encoder weights should change after unfreezing"
+
+
+class TestFrozenEncoderEvalMode:
+    """Test that frozen encoder stays in eval mode during training."""
+
+    @pytest.fixture
+    def config_with_dropout(self):
+        return OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.5,  # High dropout to make difference visible
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": True,
+                    "unfreeze_epoch": None,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+            }
+        )
+
+    def test_frozen_encoder_eval_after_model_train(self, config_with_dropout):
+        """Frozen encoder should be in eval mode even after model.train()."""
+        module = FineTuneModule(config_with_dropout)
+
+        # Simulate what Lightning does: call model.train()
+        module.train()
+
+        # Then on_train_epoch_start re-sets encoder to eval
+        module.on_train_epoch_start()
+
+        assert (
+            not module.encoder.training
+        ), "Frozen encoder should be in eval mode after on_train_epoch_start"
+
+    def test_frozen_encoder_deterministic_forward(self, config_with_dropout):
+        """Frozen encoder should produce deterministic outputs (no dropout)."""
+        module = FineTuneModule(config_with_dropout)
+
+        timeseries = torch.randn(8, 24, 10)
+        mask = torch.ones(8, 24, 10, dtype=torch.bool)
+
+        # Simulate Lightning training loop: model.train() then on_train_epoch_start
+        module.train()
+        module.on_train_epoch_start()
+
+        with torch.no_grad():
+            out1 = module.encoder(timeseries, mask=mask)
+            out2 = module.encoder(timeseries, mask=mask)
+
+        assert torch.allclose(
+            out1, out2
+        ), "Frozen encoder outputs differ — dropout is active when it shouldn't be"
+
+
+class TestClassWeighting:
+    """Test configurable class weighting for imbalanced tasks."""
+
+    @pytest.fixture
+    def base_config(self):
+        return OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.0,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+            }
+        )
+
+    def test_no_class_weight_by_default(self, base_config):
+        """Without class_weight, CrossEntropyLoss should have no weights."""
+        module = FineTuneModule(base_config)
+        assert module.criterion.weight is None
+
+    def test_explicit_class_weights(self, base_config):
+        """Explicit class weights should be passed to loss function."""
+        base_config.training.class_weight = [0.3, 0.7]
+        module = FineTuneModule(base_config)
+
+        assert module.criterion.weight is not None
+        assert torch.allclose(module.criterion.weight, torch.tensor([0.3, 0.7]))

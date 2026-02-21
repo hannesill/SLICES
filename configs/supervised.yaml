@@ -63,10 +63,20 @@ training:
   # IMPORTANT: Always train all parameters from scratch
   freeze_encoder: false
 
+  # No missing token for supervised baseline (no pretrained token to use,
+  # and a random one would confound SSL vs supervised comparison)
+  use_missing_token: false
+
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto
   precision: 32
+
+  # Class weighting for imbalanced tasks
+  # null: no weighting (default)
+  # "balanced": auto-compute inverse frequency weights from training labels
+  # [w0, w1, ...]: explicit per-class weights
+  class_weight: null
 
   # Regularization
   gradient_clip_val: 1.0

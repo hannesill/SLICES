@@ -84,6 +84,12 @@ training:
   # Use learned missing token from pretraining
   use_missing_token: true
 
+  # Class weighting for imbalanced tasks
+  # null: no weighting (default)
+  # "balanced": auto-compute inverse frequency weights from training labels
+  # [w0, w1, ...]: explicit per-class weights
+  class_weight: null
+
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto  # auto | 1 | [0,1] | etc.

@@ -23,6 +23,7 @@ from slices.eval import MetricConfig, build_metrics
 from slices.models.encoders import (
     EncoderWithMissingToken,
     ObservationTransformerEncoder,
+    SMARTEncoder,
     build_encoder,
 )
 from slices.models.heads import TaskHeadConfig, build_task_head
@@ -118,6 +119,15 @@ class FineTuneModule(pl.LightningModule):
 
         # Apply initial freezing strategy
         self._apply_freeze_strategy()
+
+        # Parse class weights from config (null, "balanced", or list of floats).
+        # "balanced" should be resolved to a list by the training script before
+        # constructing the module; if it reaches here unresolved, skip it.
+        class_weight = config.training.get("class_weight", None)
+        if class_weight is not None and class_weight != "balanced":
+            self._class_weights = torch.tensor(list(class_weight), dtype=torch.float32)
+        else:
+            self._class_weights = None
 
         # Setup loss function (use task head's task_type)
         self.task_type = self.task_head.config.task_type
@@ -380,9 +390,12 @@ class FineTuneModule(pl.LightningModule):
             missing_token: Optional pretrained missing token. If None,
                 a random token will be initialized.
         """
-        # Observation encoders handle missingness intrinsically by only
-        # tokenizing observed values — no missing token wrapper needed.
-        if isinstance(self.encoder, ObservationTransformerEncoder):
+        # Some encoders handle missingness intrinsically and should not be
+        # wrapped with EncoderWithMissingToken:
+        # - ObservationTransformerEncoder: only tokenizes observed values
+        # - SMARTEncoder: MLPEmbedder jointly embeds (value, mask) pairs,
+        #   so it needs to see original values with the mask bit
+        if isinstance(self.encoder, (ObservationTransformerEncoder, SMARTEncoder)):
             logger.info(
                 "Skipping EncoderWithMissingToken wrapper for %s "
                 "(handles missingness intrinsically)",
@@ -437,9 +450,7 @@ class FineTuneModule(pl.LightningModule):
             Loss module.
         """
         if self.task_type in ("binary", "multiclass"):
-            # Use CrossEntropyLoss (works with 2+ class output)
-            # Can add class weights for imbalanced data
-            return nn.CrossEntropyLoss()
+            return nn.CrossEntropyLoss(weight=self._class_weights)
         elif self.task_type == "multilabel":
             return nn.BCEWithLogitsLoss()
         elif self.task_type == "regression":
@@ -611,7 +622,11 @@ class FineTuneModule(pl.LightningModule):
     def on_train_epoch_start(self) -> None:
         """Called at the start of each training epoch.
 
-        Used for gradual unfreezing strategy.
+        Handles two concerns:
+        1. Gradual unfreezing: unfreeze encoder after warmup epochs.
+        2. Frozen encoder eval mode: Lightning calls model.train() before each
+           epoch, recursively re-enabling dropout on frozen encoder submodules.
+           We counteract this by calling encoder.eval() when frozen.
         """
         # Gradual unfreezing: unfreeze encoder after warmup
         if self.unfreeze_epoch is not None and self.current_epoch >= self.unfreeze_epoch:
@@ -620,14 +635,29 @@ class FineTuneModule(pl.LightningModule):
                 self.freeze_strategy = False  # Don't unfreeze again
                 logger.info("Epoch %d: Unfroze encoder for finetuning", self.current_epoch)
 
+        # Keep frozen encoder in eval mode to disable dropout.
+        # Lightning calls model.train() before on_train_epoch_start,
+        # which recursively sets all submodules to training mode.
+        if self.freeze_strategy:
+            self.encoder.eval()
+
     def configure_optimizers(self) -> Dict[str, Any]:
         """Configure optimizer and optional learning rate scheduler.
+
+        Uses param groups (encoder + head) so that all parameters are tracked
+        by the optimizer from the start. When the encoder is frozen, its params
+        have requires_grad=False so the optimizer skips them (grad is None).
+        When gradual unfreezing sets requires_grad=True, the optimizer
+        immediately starts applying updates — no need to recreate it.
 
         Returns:
             Dictionary with optimizer and optional scheduler.
         """
-        params = filter(lambda p: p.requires_grad, self.parameters())
-        optimizer = build_optimizer(params, self.optimizer_config)
+        param_groups = [
+            {"params": list(self.task_head.parameters())},
+            {"params": list(self.encoder.parameters())},
+        ]
+        optimizer = build_optimizer(param_groups, self.optimizer_config)
 
         result = build_scheduler(optimizer, self.scheduler_config)
         if result is None:
