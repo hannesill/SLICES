@@ -83,35 +83,50 @@ def create_block_mask(
     mask = torch.ones((B, T, D), dtype=torch.bool, device=device)
 
     for b in range(B):
-        masked_count = 0
         target_masked = int(T * mask_ratio)
 
-        while masked_count < target_masked:
-            # Calculate remaining budget
-            remaining = target_masked - masked_count
-
-            # Cap block size to not exceed remaining budget
+        # Pre-compute block sizes to cover the target
+        block_sizes = []
+        total = 0
+        while total < target_masked:
+            remaining = target_masked - total
             actual_max = min(max_block_size, remaining)
             if actual_max < min_block_size:
-                # Can't add another block without exceeding target
                 break
-
-            # Random block size within allowed range (always on CPU to avoid MPS issues)
-            block_size = torch.randint(
+            bs = torch.randint(
                 min_block_size, actual_max + 1, (1,), device="cpu", generator=cpu_generator
             ).item()
-            # Random start position (always on CPU to avoid MPS issues)
-            start = torch.randint(
-                0, max(1, T - block_size + 1), (1,), device="cpu", generator=cpu_generator
-            ).item()
-            end = min(start + block_size, T)
+            block_sizes.append(bs)
+            total += bs
 
-            # Count only newly masked positions (avoid overlap double-counting)
-            previously_masked = (~mask[b, start:end, 0]).sum().item()
-            newly_masked = (end - start) - previously_masked
-            # Mask the block across all features
-            mask[b, start:end, :] = False
-            masked_count += newly_masked
+        if not block_sizes:
+            continue
+
+        # Randomly assign start positions using a permutation to avoid bias
+        # Shuffle all valid start positions, then greedily place blocks
+        perm = torch.randperm(T, device="cpu", generator=cpu_generator)
+        occupied = torch.zeros(T, dtype=torch.bool)
+
+        for bs in block_sizes:
+            # Find a valid start from the permuted order
+            placed = False
+            for idx in range(T):
+                start = perm[idx].item()
+                end = min(start + bs, T)
+                if end - start < bs:
+                    continue
+                if not occupied[start:end].any():
+                    occupied[start:end] = True
+                    mask[b, start:end, :] = False
+                    placed = True
+                    break
+            if not placed:
+                # Fallback: place with overlap allowed
+                start = torch.randint(
+                    0, max(1, T - bs + 1), (1,), device="cpu", generator=cpu_generator
+                ).item()
+                end = min(start + bs, T)
+                mask[b, start:end, :] = False
 
     return mask
 
