@@ -505,8 +505,8 @@ class TestMortalityBoundaryConditions:
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
         assert labels_dict[1] == 1  # Has mortality info
-        assert labels_dict[2] == 0  # Missing info defaults to 0
-        assert labels_dict[3] == 0  # Missing info defaults to 0
+        assert labels_dict[2] is None  # Missing info -> null (unknown outcome)
+        assert labels_dict[3] is None  # Missing info -> null (unknown outcome)
 
 
 class TestWindowedMortalityLabels:

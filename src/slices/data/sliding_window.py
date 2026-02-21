@@ -243,7 +243,7 @@ class SlidingWindowDataset(Dataset):
             obs_end = window_start + self.window_size
             pred_end = obs_end + self.decompensation_pred_hours
 
-            if not math.isinf(death_hour) and obs_end <= death_hour <= pred_end:
+            if not math.isinf(death_hour) and obs_end <= death_hour < pred_end:
                 result["label"] = torch.tensor(1.0, dtype=torch.float32)
             else:
                 result["label"] = torch.tensor(0.0, dtype=torch.float32)

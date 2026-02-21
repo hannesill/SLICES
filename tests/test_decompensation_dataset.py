@@ -190,7 +190,7 @@ class TestDecompensationPerWindowLabels:
         assert found, "Window at t=0 should exist"
 
     def test_death_exactly_at_pred_end(self, decompensation_data):
-        """Death at hour 72, t=0: pred=[48,72], death at 72 -> label=1 (inclusive)."""
+        """Death at hour 72, t=0: pred=[48,72), death at 72 -> label=0 (exclusive upper bound)."""
         data_dir = decompensation_data([{"stay_id": 1, "patient_id": 1, "death_hours": 72.0}])
         base = ICUDataset(data_dir, task_name="decompensation", normalize=False, train_indices=[0])
 
@@ -205,9 +205,9 @@ class TestDecompensationPerWindowLabels:
         for i in range(len(sw)):
             sample = sw[i]
             if sample["window_start"] == 0:
-                # Inclusive boundary: death at exactly pred_end counts as decompensation
-                # Consistent with mortality label builder which also uses <= for pred_end
-                assert sample["label"].item() == 1.0
+                # Exclusive upper bound: death at exactly pred_end is outside
+                # the prediction window [obs_end, obs_end + pred_hours)
+                assert sample["label"].item() == 0.0
                 found = True
                 break
         assert found
