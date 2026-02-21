@@ -654,7 +654,7 @@ class TestWindowedMortalityLabels:
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
 
         assert labels_dict[1] is None, "Death during obs should be excluded"
-        assert labels_dict[2] == 0, "Death during gap should be negative (not in pred window)"
+        assert labels_dict[2] is None, "Death during gap should be excluded (ambiguous)"
         assert labels_dict[3] == 1, "Death during pred should be positive"
         assert labels_dict[4] == 0, "Death after pred should be negative"
         assert labels_dict[5] == 0, "Survivor should be negative"

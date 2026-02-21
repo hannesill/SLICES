@@ -1,10 +1,13 @@
 """Mortality prediction label builders."""
 
+import logging
 from typing import Dict
 
 import polars as pl
 
 from .base import LabelBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class MortalityLabelBuilder(LabelBuilder):
@@ -58,15 +61,44 @@ class MortalityLabelBuilder(LabelBuilder):
         # Join mortality info with stays
         merged = stays.join(mortality, on="stay_id", how="left")
 
-        # Check dtype of date_of_death to handle DATE vs DATETIME properly
-        # This avoids edge cases where DATE type is cast to DATETIME with 00:00:00
-        date_of_death_dtype = mortality["date_of_death"].dtype
-        is_date_type = date_of_death_dtype == pl.Date
-
         # Compute label based on prediction window
         window_hours = self.config.prediction_window_hours
         obs_hours = self.config.observation_window_hours
         gap_hours = self.config.gap_hours
+
+        # Validate required temporal fields for windowed tasks
+        needs_intime = obs_hours is not None or (
+            window_hours is not None and window_hours != -1 and obs_hours is None
+        )
+        needs_outtime = window_hours == -1
+        needs_date_of_death = window_hours is not None
+
+        if needs_intime and merged["intime"].null_count() == len(merged):
+            raise ValueError(
+                f"Task '{self.config.task_name}' requires 'intime' for windowed labels, "
+                "but all values are null. This dataset (e.g., eICU) may not provide "
+                "admission timestamps. Use a hospital-mortality task with "
+                "prediction_window_hours=null and observation_window_hours=null instead."
+            )
+
+        if needs_outtime and merged["outtime"].null_count() == len(merged):
+            raise ValueError(
+                f"Task '{self.config.task_name}' requires 'outtime' for ICU mortality labels, "
+                "but all values are null. This dataset may not provide discharge timestamps."
+            )
+
+        if needs_date_of_death and merged["date_of_death"].null_count() == len(merged):
+            logger.warning(
+                f"Task '{self.config.task_name}': 'date_of_death' is null for all stays. "
+                "This dataset (e.g., eICU) may not provide death timestamps. "
+                "All windowed mortality labels will be null (excluded). "
+                "Consider using hospital-mortality (hospital_expire_flag) instead."
+            )
+
+        # Check dtype of date_of_death to handle DATE vs DATETIME properly
+        # This avoids edge cases where DATE type is cast to DATETIME with 00:00:00
+        date_of_death_dtype = mortality["date_of_death"].dtype
+        is_date_type = date_of_death_dtype == pl.Date
 
         if window_hours is None and obs_hours is None:
             # Hospital mortality, no observation window (legacy)
@@ -190,7 +222,7 @@ class MortalityLabelBuilder(LabelBuilder):
             DataFrame with stay_id and label:
             - 1: Death occurred during prediction window
             - 0: Survived prediction window (or died after)
-            - null: Death occurred during observation window (excluded)
+            - null: Death occurred during observation or gap window (excluded)
 
         Note:
             Uses outtime (ICU discharge time) in addition to date_of_death to determine
@@ -231,6 +263,17 @@ class MortalityLabelBuilder(LabelBuilder):
                 & left_icu_during_obs
             )
 
+            # Death during gap period (exclude — ambiguous whether model could predict)
+            died_during_gap = (
+                (
+                    pl.col("date_of_death").is_not_null()
+                    & (pl.col("date_of_death") > obs_end)
+                    & (pl.col("date_of_death") < pred_start)
+                )
+                if gap_hours > 0
+                else pl.lit(False)
+            )
+
             if until_icu_discharge:
                 # Prediction window ends at ICU discharge (outtime)
                 pred_end = pl.col("outtime").cast(pl.Date)
@@ -261,6 +304,17 @@ class MortalityLabelBuilder(LabelBuilder):
                 & left_icu_during_obs
             )
 
+            # Death during gap period (exclude — ambiguous whether model could predict)
+            died_during_gap = (
+                (
+                    pl.col("date_of_death").is_not_null()
+                    & (pl.col("date_of_death") > obs_end)
+                    & (pl.col("date_of_death") < pred_start)
+                )
+                if gap_hours > 0
+                else pl.lit(False)
+            )
+
             if until_icu_discharge:
                 # Prediction window ends at ICU discharge (outtime)
                 pred_end = pl.col("outtime")
@@ -279,12 +333,15 @@ class MortalityLabelBuilder(LabelBuilder):
 
         # Build labels:
         # - null if died during observation (can't predict the past)
+        # - null if died during gap period (ambiguous, exclude)
         # - 1 if died during prediction window
         # - 0 otherwise (survived or died after prediction window)
         labels = merged.select(
             [
                 "stay_id",
                 pl.when(died_during_obs)
+                .then(None)
+                .when(died_during_gap)
                 .then(None)
                 .when(died_during_pred)
                 .then(1)

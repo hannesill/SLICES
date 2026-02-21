@@ -1,7 +1,7 @@
 """AKI (Acute Kidney Injury) label builder using KDIGO criteria."""
 
 import logging
-from typing import Dict, List
+from typing import Dict
 
 import polars as pl
 
@@ -15,7 +15,7 @@ class AKILabelBuilder(LabelBuilder):
 
     KDIGO criteria (ANY triggers AKI = 1):
     - Creatinine rise >= 0.3 mg/dL within any 48h window
-    - Creatinine >= 1.5x baseline within 7 days
+    - Creatinine >= 1.5x baseline within 7 days of baseline measurement
 
     Baseline: minimum creatinine in first 24h (standard clinical proxy).
     Only evaluates criteria AFTER the observation window ends.
@@ -48,42 +48,109 @@ class AKILabelBuilder(LabelBuilder):
         baseline_hours = self.config.label_params.get("baseline_window_hours", 24)
         abs_threshold = self.config.label_params.get("absolute_rise_threshold", 0.3)
         rel_threshold = self.config.label_params.get("relative_rise_threshold", 1.5)
+        rel_window_hours = self.config.label_params.get("relative_window_hours", 168)
 
-        results: List[Dict] = []
-        for stay_id in stays["stay_id"].to_list():
-            stay_ts = timeseries.filter(pl.col("stay_id") == stay_id)
+        stay_ids = stays["stay_id"].to_list()
 
-            # Check creatinine column exists and has data
-            if crea_col not in stay_ts.columns:
-                results.append({"stay_id": stay_id, "label": None})
-                continue
-
-            crea_data = stay_ts.select("hour", crea_col).drop_nulls().sort("hour")
-            if len(crea_data) == 0:
-                results.append({"stay_id": stay_id, "label": None})
-                continue
-
-            # Baseline: min creatinine in first baseline_hours
-            baseline_crea = crea_data.filter(pl.col("hour") < baseline_hours)[crea_col]
-            if len(baseline_crea) == 0:
-                results.append({"stay_id": stay_id, "label": None})
-                continue
-            baseline = baseline_crea.min()
-
-            # Only evaluate AFTER observation window
-            post_obs = crea_data.filter(pl.col("hour") >= obs_hours)
-            if len(post_obs) == 0:
-                results.append({"stay_id": stay_id, "label": 0})
-                continue
-
-            aki = self._check_kdigo_criteria(
-                post_obs, crea_col, baseline, abs_threshold, rel_threshold
+        # Validate creatinine column exists
+        if crea_col not in timeseries.columns:
+            logger.warning(f"Creatinine column '{crea_col}' not in timeseries; all labels null")
+            return pl.DataFrame(
+                {
+                    "stay_id": pl.Series(stay_ids, dtype=pl.Int64),
+                    "label": pl.Series([None] * len(stay_ids), dtype=pl.Int32),
+                }
             )
-            results.append({"stay_id": stay_id, "label": int(aki)})
 
-        result_df = pl.DataFrame(results)
-        # Cast types explicitly
-        result_df = result_df.cast({"stay_id": pl.Int64, "label": pl.Int32})
+        # Filter to relevant columns and non-null creatinine rows
+        crea_ts = (
+            timeseries.select("stay_id", "hour", crea_col)
+            .drop_nulls(subset=[crea_col])
+            .sort("stay_id", "hour")
+        )
+
+        # Pre-compute baselines per stay: min creatinine in first baseline_hours
+        baselines = (
+            crea_ts.filter(pl.col("hour") < baseline_hours)
+            .group_by("stay_id")
+            .agg(pl.col(crea_col).min().alias("baseline"))
+        )
+
+        # Post-observation creatinine values
+        post_obs = crea_ts.filter(pl.col("hour") >= obs_hours)
+
+        # Join baselines with post-observation data
+        post_with_baseline = post_obs.join(baselines, on="stay_id", how="inner")
+
+        # --- KDIGO Criterion 1: Relative rise (>= 1.5x baseline within 7 days) ---
+        # The 7-day window is relative to the baseline measurement period.
+        # Baseline is measured in first baseline_hours, so the 7-day window extends
+        # from hour 0 to hour rel_window_hours.
+        rel_aki = (
+            post_with_baseline.filter(pl.col("hour") < rel_window_hours)
+            .filter(pl.col(crea_col) >= pl.col("baseline") * rel_threshold)
+            .select("stay_id")
+            .unique()
+            .with_columns(pl.lit(True).alias("rel_aki"))
+        )
+
+        # --- KDIGO Criterion 2: Absolute rise (>= 0.3 mg/dL within 48h window) ---
+        # Self-join to find pairs within 48h windows
+        abs_aki = self._check_absolute_criterion_vectorized(post_obs, crea_col, abs_threshold)
+
+        # Combine criteria: AKI = 1 if either criterion is met
+        stay_df = pl.DataFrame({"stay_id": pl.Series(stay_ids, dtype=pl.Int64)})
+
+        # Stays with any creatinine data (for null vs 0 distinction)
+        stays_with_crea = crea_ts.select("stay_id").unique()
+
+        # Stays with baseline (needed for evaluation)
+        stays_with_baseline = baselines.select("stay_id").unique()
+
+        # Stays with post-obs data
+        stays_with_post_obs = post_obs.select("stay_id").unique()
+
+        result = (
+            stay_df.join(
+                stays_with_crea.with_columns(pl.lit(True).alias("has_crea")),
+                on="stay_id",
+                how="left",
+            )
+            .join(
+                stays_with_baseline.with_columns(pl.lit(True).alias("has_baseline")),
+                on="stay_id",
+                how="left",
+            )
+            .join(
+                stays_with_post_obs.with_columns(pl.lit(True).alias("has_post_obs")),
+                on="stay_id",
+                how="left",
+            )
+            .join(rel_aki, on="stay_id", how="left")
+            .join(abs_aki, on="stay_id", how="left")
+        )
+
+        # Build label:
+        # - null if no creatinine data or no baseline
+        # - 0 if no post-obs data (survived observation without AKI evidence after)
+        # - 1 if either AKI criterion met
+        # - 0 otherwise
+        result = result.with_columns(
+            pl.when(pl.col("has_crea").is_null() | pl.col("has_baseline").is_null())
+            .then(None)
+            .when(pl.col("has_post_obs").is_null())
+            .then(0)
+            .when(pl.col("rel_aki").is_not_null() | pl.col("abs_aki").is_not_null())
+            .then(1)
+            .otherwise(0)
+            .cast(pl.Int32)
+            .alias("label")
+        )
+
+        result_df = result.select(
+            pl.col("stay_id").cast(pl.Int64),
+            "label",
+        )
 
         n_aki = result_df.filter(pl.col("label") == 1).height
         n_no_aki = result_df.filter(pl.col("label") == 0).height
@@ -94,35 +161,45 @@ class AKILabelBuilder(LabelBuilder):
 
         return result_df
 
-    def _check_kdigo_criteria(
+    def _check_absolute_criterion_vectorized(
         self,
-        crea_df: pl.DataFrame,
+        post_obs: pl.DataFrame,
         crea_col: str,
-        baseline: float,
         abs_threshold: float,
-        rel_threshold: float,
-    ) -> bool:
-        """Check KDIGO Stage 1+ criteria.
+    ) -> pl.DataFrame:
+        """Check KDIGO absolute rise criterion using vectorized operations.
 
-        Returns True if:
-        - Any creatinine rise >= abs_threshold within 48h sliding window, OR
-        - Any creatinine >= rel_threshold * baseline
+        Finds any pair of creatinine values within a 48h window where the later
+        value exceeds the earlier by >= abs_threshold.
+
+        Returns:
+            DataFrame with stay_id column for stays meeting the criterion.
         """
-        values = crea_df[crea_col].to_list()
-        hours = crea_df["hour"].to_list()
+        if len(post_obs) == 0:
+            return pl.DataFrame(
+                {
+                    "stay_id": pl.Series([], dtype=pl.Int64),
+                    "abs_aki": pl.Series([], dtype=pl.Boolean),
+                }
+            )
 
-        # Check relative rise (any value >= 1.5x baseline)
-        for v in values:
-            if v >= rel_threshold * baseline:
-                return True
+        # Self-join within each stay: pair each measurement with later ones
+        left = post_obs.select(
+            pl.col("stay_id"),
+            pl.col("hour").alias("hour_i"),
+            pl.col(crea_col).alias("crea_i"),
+        )
+        right = post_obs.select(
+            pl.col("stay_id"),
+            pl.col("hour").alias("hour_j"),
+            pl.col(crea_col).alias("crea_j"),
+        )
 
-        # Check absolute rise (>= 0.3 within any 48h window)
-        for i in range(len(values)):
-            for j in range(i + 1, len(values)):
-                if hours[j] - hours[i] <= 48:
-                    if values[j] - values[i] >= abs_threshold:
-                        return True
-                else:
-                    break  # hours are sorted, no need to check further
+        # Join on stay_id and filter: j > i, within 48h, rise >= threshold
+        pairs = left.join(right, on="stay_id", how="inner").filter(
+            (pl.col("hour_j") > pl.col("hour_i"))
+            & (pl.col("hour_j") - pl.col("hour_i") <= 48)
+            & (pl.col("crea_j") - pl.col("crea_i") >= abs_threshold)
+        )
 
-        return False
+        return pairs.select("stay_id").unique().with_columns(pl.lit(True).alias("abs_aki"))

@@ -11,6 +11,7 @@ label_params:
   baseline_window_hours: 24
   absolute_rise_threshold: 0.3
   relative_rise_threshold: 1.5
+  relative_window_hours: 168  # 7 days per KDIGO 2012 specification
 primary_metric: auprc
 additional_metrics:
   - auroc

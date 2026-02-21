@@ -16,12 +16,8 @@ task_type: binary
 prediction_window_hours: 24  # Predict mortality in 24h window after observation ends
 observation_window_hours: 48  # Must match seq_length_hours in data config
 gap_hours: 0  # No gap between observation end and prediction start
-# TODO: If gap_hours > 0 is needed, implement handling for deaths during the gap period.
-# Currently, deaths during the gap are labeled as 0 (survived prediction window).
-# Options to consider:
-#   1. Exclude gap deaths (label=null) similar to observation deaths
-#   2. Keep current behavior (label=0) but document clearly
-#   3. Add a separate config option for gap death handling
+# Note: If gap_hours > 0, deaths during the gap period are excluded (label=null)
+# similar to observation-period deaths, since they are ambiguous for prediction.
 
 # Data requirements
 label_sources:

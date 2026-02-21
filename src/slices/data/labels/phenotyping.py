@@ -246,8 +246,10 @@ class PhenotypingLabelBuilder(LabelBuilder):
             lookup_df = pl.DataFrame(lookup_rows)
 
             # Normalize icd_code in diagnoses to stripped strings for join
+            # Cast icd_version to Int64 to match lookup_df type (avoids Int32/Int64 mismatch)
             diag_norm = diagnoses.with_columns(
-                pl.col("icd_code").cast(pl.Utf8).str.strip_chars().alias("icd_code")
+                pl.col("icd_code").cast(pl.Utf8).str.strip_chars().alias("icd_code"),
+                pl.col("icd_version").cast(pl.Int64),
             )
 
             # Join diagnoses with lookup on (icd_code, icd_version) — hash join
