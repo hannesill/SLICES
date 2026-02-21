@@ -127,6 +127,9 @@ class PhenotypingLabelBuilder(LabelBuilder):
         stays = raw_data["stays"]
         diagnoses = raw_data["diagnoses"]
 
+        # Store all_stays for multi-stay detection (handles resume mode correctly)
+        self._all_stays = raw_data.get("all_stays")
+
         if len(stays) == 0:
             return self._empty_result()
 
@@ -163,6 +166,10 @@ class PhenotypingLabelBuilder(LabelBuilder):
         If exclude_multi_stay_admissions is enabled, finds hadm_ids
         with multiple ICU stays and excludes all of them.
 
+        Uses all_stays from raw_data if available (populated by the extractor)
+        to correctly detect multi-stay admissions even in resume mode where
+        the current batch may only contain a subset of stays.
+
         Args:
             stays: Stays DataFrame with stay_id and hadm_id.
 
@@ -174,9 +181,12 @@ class PhenotypingLabelBuilder(LabelBuilder):
         if not exclude_multi or "hadm_id" not in stays.columns:
             return set()
 
+        # Use all_stays if available (for correct multi-stay detection in resume mode)
+        check_df = self._all_stays if self._all_stays is not None else stays
+
         # Find hadm_ids with multiple ICU stays
         multi_stay_hadms = (
-            stays.group_by("hadm_id")
+            check_df.group_by("hadm_id")
             .agg(pl.col("stay_id").count().alias("n_stays"))
             .filter(pl.col("n_stays") > 1)
             .select("hadm_id")
@@ -185,9 +195,10 @@ class PhenotypingLabelBuilder(LabelBuilder):
         if len(multi_stay_hadms) == 0:
             return set()
 
-        # Get all stay_ids for those hadm_ids
-        excluded = stays.join(multi_stay_hadms, on="hadm_id", how="inner")
-        excluded_ids = set(excluded["stay_id"].to_list())
+        # Get stay_ids to exclude from the CURRENT batch only
+        current_stay_ids = set(stays["stay_id"].to_list())
+        excluded = check_df.join(multi_stay_hadms, on="hadm_id", how="inner")
+        excluded_ids = set(excluded["stay_id"].to_list()) & current_stay_ids
 
         logger.info(
             f"Excluding {len(excluded_ids)} stays from {len(multi_stay_hadms)} "
