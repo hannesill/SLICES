@@ -229,7 +229,6 @@ def run_sanity_check(
         decoder_n_heads=4,
         decoder_d_ff=64,
         decoder_dropout=0.0,
-        loss_on_observed_only=True,
         norm_target=False,
     )
     mae = build_ssl_objective(encoder, mae_config)

@@ -1,334 +1,386 @@
 """Masked Autoencoder (MAE) for self-supervised learning on ICU time-series.
 
-Implements the MAE objective: mask portions of input, encode visible tokens,
-decode to reconstruct masked tokens, and compute reconstruction loss.
+Observation-level tokenization variant: each token = one observed (timestep, feature, value)
+triplet. The encoder only sees visible (unmasked) tokens, matching the original MAE design.
 
-Key features:
-- Multiple masking strategies (random, block, timestep, feature)
-- Respects observation mask (doesn't penalize truly missing values)
-- Lightweight decoder with configurable architecture
-- Separate reconstruction loss tracking for masked vs observed positions
+Architecture:
+1. ObservationTransformerEncoder.tokenize() → one token per observed measurement
+2. Random mask: 75% of observation tokens are masked
+3. Encoder processes only visible tokens (25%)
+4. Decoder reassembles full sequence (visible + mask tokens), predicts scalar values
+5. MSE loss on masked token values only
 """
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
 
-from ...data.transforms import MaskingStrategy, create_ssl_mask
 from .base import BaseSSLObjective, SSLConfig
 
 
 @dataclass
 class MAEConfig(SSLConfig):
-    """Configuration for MAE objective.
+    """Configuration for observation-level MAE objective.
 
-    Two-Token System:
-        This implementation uses two learned tokens to handle missing/masked values:
-        - **MISSING_TOKEN**: Replaces genuinely missing positions (obs_mask=False).
-          These positions were never observed in the ICU data.
-        - **MASK_TOKEN**: Replaces SSL-masked positions (obs_mask=True AND ssl_mask=False).
-          These are artificially hidden for self-supervision.
-
-        Both tokens have shape (1, 1, d_input) - one learned scalar per feature.
-        The encoder receives input with these tokens substituted, and reconstruction
-        loss is only computed on MASK_TOKEN positions.
-
-    Note:
-        - norm_target is NOT SUPPORTED and must be False. Data should be
-          normalized during preprocessing instead.
-        - Random masks are used for both training and validation (standard practice).
-        - Block masking is capped to not exceed target mask_ratio significantly.
+    The encoder only sees visible (unmasked) observation tokens.
+    Mask ratio is applied to observation tokens (not timesteps).
     """
 
     name: str = "mae"
 
-    # Masking parameters
-    # TODO: Make mask ratio dynamic during training (randomly sampled between two configured values)
-    mask_ratio: float = 0.15  # Fraction of input to mask (BERT-style default)
-    mask_strategy: MaskingStrategy = "random"  # random, block, timestep, feature
-    min_block_size: int = 3  # For block masking
-    max_block_size: int = 10
+    # Masking
+    mask_ratio: float = 0.75  # Fraction of observation tokens to mask
 
     # Decoder parameters
-    decoder_d_model: int = 128  # Decoder hidden dimension
-    decoder_n_layers: int = 2  # Number of decoder layers
-    decoder_n_heads: int = 4  # Decoder attention heads
-    decoder_d_ff: int = 512  # Decoder feedforward dimension
+    decoder_d_model: int = 128
+    decoder_n_layers: int = 2
+    decoder_n_heads: int = 4
+    decoder_d_ff: int = 512
     decoder_dropout: float = 0.1
-
-    # Loss parameters
-    loss_on_observed_only: bool = True  # Only compute loss on originally observed values
-    norm_target: bool = False  # NOT SUPPORTED - must be False, normalize data in preprocessing
 
 
 class MAEDecoder(nn.Module):
-    """Lightweight decoder for MAE reconstruction.
+    """Lightweight decoder for observation-level MAE.
 
-    Uses a simple transformer decoder to reconstruct masked inputs from
-    encoder representations. The decoder is intentionally smaller than
-    the encoder to prevent trivial solutions.
+    Reassembles encoded visible tokens with learnable mask tokens at masked
+    positions. Adds positional information (feature + temporal) to all tokens
+    before running through lightweight transformer layers. Predicts a scalar
+    value per token.
     """
 
     def __init__(
         self,
         d_encoder: int,
-        d_input: int,
+        n_features: int,
+        max_seq_length: int,
         config: MAEConfig,
     ) -> None:
-        """Initialize MAE decoder.
-
-        Args:
-            d_encoder: Encoder output dimension.
-            d_input: Original input dimension (reconstruction target).
-            config: MAE configuration.
-        """
         super().__init__()
         self.config = config
+        d_dec = config.decoder_d_model
 
         # Project encoder output to decoder dimension
-        self.encoder_proj = nn.Linear(d_encoder, config.decoder_d_model)
+        self.encoder_proj = nn.Linear(d_encoder, d_dec)
 
-        # Decoder transformer layers
+        # Learnable mask token (in decoder space)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_dec))
+        nn.init.normal_(self.mask_token, std=0.02)
+
+        # Positional information for decoder
+        self.feature_embed = nn.Embedding(n_features, d_dec)
+
+        # Sinusoidal time PE for decoder
+        pe = self._build_sinusoidal_pe(max_seq_length, d_dec)
+        self.register_buffer("time_pe", pe)
+
+        # Decoder transformer layers.
+        # PyTorch's TransformerEncoderLayer is used here (not DecoderLayer) because
+        # MAE's decoder uses self-attention over all tokens (visible + mask), not
+        # cross-attention between encoder output and mask tokens.
         decoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.decoder_d_model,
+            d_model=d_dec,
             nhead=config.decoder_n_heads,
             dim_feedforward=config.decoder_d_ff,
             dropout=config.decoder_dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=True,  # Pre-LN
+            norm_first=True,
         )
         self.decoder = nn.TransformerEncoder(
             decoder_layer,
             num_layers=config.decoder_n_layers,
         )
 
-        # Project to reconstruction
-        self.output_proj = nn.Linear(config.decoder_d_model, d_input)
+        # Dropout on input embeddings before decoder transformer
+        self.embed_dropout = nn.Dropout(config.decoder_dropout)
 
-    def forward(self, encoder_output: torch.Tensor) -> torch.Tensor:
-        """Decode encoder output to reconstruct input.
+        # Output: predict scalar value per token
+        self.output_proj = nn.Linear(d_dec, 1)
+
+    @staticmethod
+    def _build_sinusoidal_pe(max_len: int, d_model: int) -> torch.Tensor:
+        position = torch.arange(max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
+        return pe
+
+    def forward(
+        self,
+        encoded_visible: torch.Tensor,
+        ssl_mask: torch.Tensor,
+        token_info: Dict[str, torch.Tensor],
+        max_tokens: int,
+        token_padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Decode: reassemble visible + mask tokens, predict values.
 
         Args:
-            encoder_output: Encoder output of shape (B, T, d_encoder).
+            encoded_visible: (B, n_vis, d_encoder) encoded visible tokens.
+            ssl_mask: (B, max_obs) bool, True = visible, False = masked.
+            token_info: dict with timestep_idx, feature_idx (B, max_obs).
+            max_tokens: total number of token positions (max_obs).
+            token_padding_mask: (B, max_obs) True = valid token, False = padding.
 
         Returns:
-            Reconstructed input of shape (B, T, d_input).
+            (B, max_tokens) predicted scalar value per token position.
         """
-        # Project encoder output
-        x = self.encoder_proj(encoder_output)  # (B, T, d_decoder)
+        B = encoded_visible.shape[0]
+        d_dec = self.config.decoder_d_model
 
-        # Pass through decoder
-        x = self.decoder(x)  # (B, T, d_decoder)
+        # Project visible tokens to decoder space
+        vis_proj = self.encoder_proj(encoded_visible)  # (B, n_vis, d_dec)
 
-        # Project to reconstruction
-        x = self.output_proj(x)  # (B, T, d_input)
+        # Build full decoder input: place visible tokens and mask tokens
+        full_tokens = self.mask_token.expand(B, max_tokens, d_dec).clone()
 
-        return x
+        # Place visible tokens at their original positions.
+        # ssl_mask is (B, max_obs), True at visible positions.
+        # Stable descending argsort on ssl_mask.float() puts visible (1.0) positions
+        # first. This mirrors _extract_visible(), so vis_indices[:, :n_vis] gives
+        # the original positions of the n_vis visible tokens in the same order
+        # they were fed to the encoder.
+        # Padding invariant: padding positions have ssl_mask=True (see
+        # _create_observation_mask), so they sort among visible positions.
+        # But because tokenization places valid tokens before padding and argsort
+        # is stable, valid-visible tokens always precede padding tokens in the
+        # sorted order. We only scatter the first n_vis entries, which are the
+        # actual visible tokens, not padding.
+        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
+        # vis_indices[:, :n_vis] gives the original positions of visible tokens
+        n_vis = vis_proj.shape[1]
+        scatter_idx = vis_indices[:, :n_vis]  # (B, n_vis)
+        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_dec)  # (B, n_vis, d_dec)
+        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj)
+
+        # Add positional information to ALL token positions
+        timestep_idx = token_info["timestep_idx"]  # (B, max_tokens)
+        feature_idx = token_info["feature_idx"]  # (B, max_tokens)
+
+        full_tokens = full_tokens + self.feature_embed(feature_idx)
+        full_tokens = full_tokens + self.time_pe[timestep_idx]
+        full_tokens = self.embed_dropout(full_tokens)
+
+        # Build key_padding_mask for decoder (True = ignore in PyTorch convention)
+        key_padding_mask = ~token_padding_mask  # (B, max_tokens)
+
+        # Run decoder transformer
+        decoded = self.decoder(full_tokens, src_key_padding_mask=key_padding_mask)
+
+        # Predict scalar value per token
+        predictions = self.output_proj(decoded).squeeze(-1)  # (B, max_tokens)
+
+        return predictions
 
 
 class MAEObjective(BaseSSLObjective):
-    """Masked Autoencoder objective for ICU time-series.
+    """Observation-level Masked Autoencoder for ICU time-series.
 
-    Implements the MAE SSL objective:
-    1. Replace genuinely missing positions with MISSING_TOKEN
-    2. Create SSL mask and replace those positions with MASK_TOKEN
-    3. Encode the modified input
-    4. Decode to reconstruct the original input
-    5. Compute reconstruction loss only on MASK_TOKEN positions
+    Flow:
+    1. encoder.tokenize(x, obs_mask) → observation tokens + padding + info
+    2. Random mask: 75% of tokens masked, 25% visible
+    3. encoder.encode(visible_tokens) → encoded visible
+    4. decoder(encoded_visible, mask, info) → predicted values per token
+    5. MSE loss on masked token values
 
-    Two-Token System:
-        This implementation uses two learned tokens to clearly distinguish
-        between different types of "unknown" values:
-
-        - **MISSING_TOKEN**: Replaces genuinely missing positions (obs_mask=False).
-          These were never observed in the ICU. No reconstruction loss is computed
-          on these positions since we don't know the true values.
-
-        - **MASK_TOKEN**: Replaces SSL-masked positions (obs_mask=True AND selected
-          for masking by the SSL objective). Reconstruction loss IS computed on
-          these positions to train the model.
-
-        Both tokens have shape (1, 1, d_input) with one learned scalar per feature.
-        This allows each feature to have its own "missing" and "masked" representation.
-
-    Example:
-        >>> from slices.models.encoders import TransformerEncoder, TransformerConfig
-        >>> enc_config = TransformerConfig(d_input=35, d_model=128, n_layers=4, pooling="none")
-        >>> encoder = TransformerEncoder(enc_config)
-        >>> mae_config = MAEConfig(mask_ratio=0.15)
-        >>> mae = MAEObjective(encoder, mae_config)
-        >>> x = torch.randn(32, 48, 35)
-        >>> obs_mask = torch.rand(32, 48, 35) > 0.3
-        >>> loss, metrics = mae(x, obs_mask)
+    Requires ObservationTransformerEncoder with pooling='none'.
     """
 
     def __init__(self, encoder: nn.Module, config: MAEConfig) -> None:
-        """Initialize MAE objective.
-
-        Args:
-            encoder: Encoder module (e.g., TransformerEncoder).
-            config: MAE configuration.
-        """
         super().__init__(encoder, config)
         self.config: MAEConfig = config
 
-        # Get encoder output dimension
-        if hasattr(encoder, "get_output_dim"):
-            d_encoder = encoder.get_output_dim()
-        else:
-            # Fallback: assume config has d_model
-            d_encoder = encoder.config.d_model
+        # Validate encoder type
+        if not hasattr(encoder, "tokenize") or not hasattr(encoder, "encode"):
+            raise ValueError(
+                "MAE requires an encoder with tokenize() and encode() methods "
+                "(e.g., ObservationTransformerEncoder). Got: "
+                f"{type(encoder).__name__}"
+            )
 
-        # Get input dimension
-        d_input = encoder.config.d_input
+        # Validate pooling
+        encoder_pooling = getattr(encoder.config, "pooling", "none")
+        if encoder_pooling != "none":
+            raise ValueError(
+                "MAE requires encoder with pooling='none' to get per-token "
+                f"representations, but got pooling='{encoder_pooling}'"
+            )
+
+        d_encoder = encoder.get_output_dim()
+        n_features = encoder.config.d_input
+        max_seq_length = encoder.config.max_seq_length
+
+        # No missing_token needed -- observation encoder handles this intrinsically
+        self.missing_token = None
 
         # Create decoder
-        self.decoder = MAEDecoder(d_encoder, d_input, config)
-
-        # Two learned tokens: one per feature dimension
-        # Shape (1, 1, D) broadcasts across batch and time dimensions
-        # MISSING_TOKEN: replaces genuinely missing positions (obs_mask=False)
-        self.missing_token = nn.Parameter(torch.zeros(1, 1, d_input))
-        # MASK_TOKEN: replaces SSL-masked positions (obs_mask=True AND ssl_mask=False)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_input))
-
-        # Initialize with small random values
-        nn.init.normal_(self.missing_token, std=0.02)
-        nn.init.normal_(self.mask_token, std=0.02)
-
-        # Store encoder config for pooling checks
-        self._encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if self._encoder_pooling != "none":
-            raise ValueError(
-                "MAE requires encoder with pooling='none' to get per-timestep "
-                f"representations, but got pooling='{self._encoder_pooling}'"
-            )
+        self.decoder = MAEDecoder(
+            d_encoder=d_encoder,
+            n_features=n_features,
+            max_seq_length=max_seq_length,
+            config=config,
+        )
 
     def forward(
         self,
         x: torch.Tensor,
         obs_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Compute MAE loss using the two-token system.
+        """Compute observation-level MAE loss.
 
         Args:
-            x: Input tensor of shape (B, T, D). May contain imputed values at
-               positions where obs_mask=False.
-            obs_mask: Observation mask of shape (B, T, D) where True indicates
-                     observed values and False indicates missing/imputed.
+            x: Input tensor (B, T, D).
+            obs_mask: Observation mask (B, T, D), True = observed.
 
         Returns:
-            Tuple of:
-            - loss: Scalar loss tensor
-            - metrics: Dict of additional metrics to log
-
-        Note:
-            - Random masks are used for both training and validation (standard practice).
-            - MISSING_TOKEN is placed at genuinely missing positions (obs_mask=False)
-            - MASK_TOKEN is placed at SSL-masked positions (obs_mask=True AND selected for masking)
-            - Loss is only computed on MASK_TOKEN positions
+            (loss, metrics_dict)
         """
         B, T, D = x.shape
+        device = x.device
 
-        # Use random masks for both training and validation
-        # This is standard practice in MAE and makes metrics directly comparable
-        generator = None
+        # 1. Tokenize observed measurements
+        tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
+        # tokens: (B, max_obs, d_model), padding_mask: (B, max_obs)
+        max_obs = tokens.shape[1]
+        true_values = token_info["values"]  # (B, max_obs)
 
-        # Step 1: Replace genuinely missing positions with MISSING_TOKEN
-        # obs_mask: True = observed, False = missing
-        x_input = torch.where(obs_mask, x, self.missing_token.expand(B, T, D))
+        # 2. Create SSL mask on observation tokens
+        # ssl_mask: True = visible, False = masked
+        ssl_mask = self._create_observation_mask(padding_mask, device)
 
-        # Step 2: Create SSL mask (which observed positions to mask for reconstruction)
-        # ssl_mask: True = visible, False = masked for SSL
-        ssl_mask = create_ssl_mask(
-            shape=(B, T, D),
-            mask_ratio=self.config.mask_ratio,
-            strategy=self.config.mask_strategy,
-            obs_mask=obs_mask,  # Only mask observed positions
-            min_block_size=self.config.min_block_size,
-            max_block_size=self.config.max_block_size,
-            device=x.device,
-            generator=generator,
+        # 3. Extract visible tokens
+        visible_tokens, vis_padding = self._extract_visible(tokens, ssl_mask, padding_mask)
+
+        # 4. Encode visible tokens only
+        encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
+
+        # 5. Decode full sequence
+        predictions = self.decoder(
+            encoded_visible=encoded_visible,
+            ssl_mask=ssl_mask,
+            token_info=token_info,
+            max_tokens=max_obs,
+            token_padding_mask=padding_mask,
         )
 
-        # Step 3: Replace SSL-masked positions with MASK_TOKEN
-        # SSL-masked positions are:
-        # - originally observed (obs_mask=True)
-        # - selected for masking (ssl_mask=False)
-        ssl_masked_positions = obs_mask & ~ssl_mask
-        x_input = torch.where(ssl_masked_positions, self.mask_token.expand(B, T, D), x_input)
-
-        # Step 4: Encode (no mask input needed - tokens carry the information)
-        encoder_output = self.encoder(x_input, mask=None, padding_mask=None)  # (B, T, d_model)
-
-        # Step 5: Decode to reconstruct
-        x_recon = self.decoder(encoder_output)  # (B, T, D)
-
-        # Step 6: Compute reconstruction loss (only on MASK_TOKEN positions)
-        loss, metrics = self._compute_reconstruction_loss(x_recon, x, ssl_mask, obs_mask)
+        # 6. Compute loss on masked token values
+        loss, metrics = self._compute_loss(predictions, true_values, ssl_mask, padding_mask)
 
         return loss, metrics
 
-    def _compute_reconstruction_loss(
+    def _create_observation_mask(
         self,
-        x_recon: torch.Tensor,
-        x_target: torch.Tensor,
-        ssl_mask: torch.Tensor,
-        obs_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Compute reconstruction loss on masked positions.
+        padding_mask: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Create random mask on observation tokens.
 
         Args:
-            x_recon: Reconstructed input of shape (B, T, D).
-            x_target: Original input of shape (B, T, D).
-            ssl_mask: SSL mask where False indicates masked positions.
-            obs_mask: Observation mask where True indicates observed values.
+            padding_mask: (B, max_obs) True = valid token.
+            device: Device.
 
         Returns:
-            Tuple of (loss, metrics dict).
+            ssl_mask: (B, max_obs) True = visible, False = masked.
+                      Padding positions are always marked visible (excluded from loss).
         """
-        # Normalize targets if requested (per-sample normalization)
-        if self.config.norm_target:
-            # NOTE: This feature is disabled because the previous implementation
-            # incorrectly normalized x_recon using target statistics after prediction,
-            # creating a mismatch between training signal and model output.
-            # A correct implementation would require architectural changes.
-            raise NotImplementedError(
-                "norm_target=True is not currently supported due to implementation "
-                "issues. Use norm_target=False (default) instead. The input data "
-                "should be normalized during preprocessing."
-            )
+        B, N = padding_mask.shape
 
-        # Compute MSE
-        squared_error = (x_recon - x_target) ** 2  # (B, T, D)
+        # Random values for valid positions
+        rand_vals = torch.rand(B, N, device=device)
 
-        # Determine which positions to include in loss
-        if self.config.loss_on_observed_only:
-            # Loss on masked AND originally observed values
-            # ssl_mask: False = masked for SSL
-            # obs_mask: True = originally observed
-            # We want: masked for SSL AND originally observed
-            loss_mask = (~ssl_mask) & obs_mask
-        else:
-            # Loss on all masked positions (even if originally missing)
-            loss_mask = ~ssl_mask
+        # Only mask valid (non-padding) tokens
+        # For each sample, we want mask_ratio fraction of valid tokens to be masked
+        ssl_mask = (rand_vals >= self.config.mask_ratio) | (~padding_mask)
 
-        # Compute mean loss over valid positions
+        # Ensure at least 1 visible token per sample
+        n_valid = padding_mask.sum(dim=1)  # (B,)
+        n_visible = (ssl_mask & padding_mask).sum(dim=1)  # (B,)
+
+        # If any sample has 0 visible tokens, unmask the first valid one
+        needs_fix = (n_visible == 0) & (n_valid > 0)
+        if needs_fix.any():
+            for b in range(B):
+                if needs_fix[b]:
+                    # Find first valid token
+                    first_valid = padding_mask[b].nonzero(as_tuple=True)[0][0]
+                    ssl_mask[b, first_valid] = True
+
+        return ssl_mask
+
+    def _extract_visible(
+        self,
+        tokens: torch.Tensor,
+        ssl_mask: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Extract visible tokens from full token sequence.
+
+        Args:
+            tokens: (B, max_obs, d_model)
+            ssl_mask: (B, max_obs) True = visible
+            padding_mask: (B, max_obs) True = valid
+
+        Returns:
+            visible_tokens: (B, max_vis, d_model)
+            vis_padding: (B, max_vis) True = valid visible token
+        """
+        B, N, d_model = tokens.shape
+
+        # visible = ssl_mask AND padding_mask (both True)
+        visible_mask = ssl_mask & padding_mask  # (B, N)
+
+        n_visible = visible_mask.sum(dim=1)  # (B,)
+        max_vis = max(int(n_visible.max().item()), 1)
+
+        # Sort so visible tokens come first
+        sort_idx = visible_mask.float().argsort(dim=1, descending=True, stable=True)
+        sort_idx_expanded = sort_idx.unsqueeze(-1).expand(-1, -1, d_model)
+
+        sorted_tokens = tokens.gather(1, sort_idx_expanded)
+        visible_tokens = sorted_tokens[:, :max_vis, :]  # (B, max_vis, d_model)
+
+        # Build padding mask for visible
+        vis_positions = torch.arange(max_vis, device=tokens.device).unsqueeze(0)
+        vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
+
+        return visible_tokens, vis_padding
+
+    def _compute_loss(
+        self,
+        predictions: torch.Tensor,
+        true_values: torch.Tensor,
+        ssl_mask: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute MSE loss on masked token predictions.
+
+        Args:
+            predictions: (B, max_obs) predicted values.
+            true_values: (B, max_obs) original observed values.
+            ssl_mask: (B, max_obs) True = visible, False = masked.
+            padding_mask: (B, max_obs) True = valid token.
+
+        Returns:
+            (loss, metrics_dict)
+        """
+        # Loss only on masked AND valid positions
+        loss_mask = (~ssl_mask) & padding_mask  # (B, max_obs)
+
+        squared_error = (predictions - true_values) ** 2
         loss = (squared_error * loss_mask.float()).sum() / loss_mask.float().sum().clamp(min=1)
 
-        # Compute additional metrics
         with torch.no_grad():
-            # Overall metrics
-            n_total = ssl_mask.numel()
-            n_masked = (~ssl_mask).sum().item()
-            n_observed = obs_mask.sum().item()
-            n_loss_positions = loss_mask.sum().item()
+            B = padding_mask.shape[0]
+            n_total_tokens = padding_mask.sum().item()
+            n_masked = loss_mask.sum().item()
+            n_visible = (ssl_mask & padding_mask).sum().item()
 
-            # Loss on visible (unmasked) positions for monitoring
-            visible_mask = ssl_mask & obs_mask
+            # Visible (unmasked) reconstruction for monitoring
+            visible_mask = ssl_mask & padding_mask
             if visible_mask.sum() > 0:
                 visible_loss = (
                     squared_error * visible_mask.float()
@@ -338,12 +390,15 @@ class MAEObjective(BaseSSLObjective):
 
             metrics = {
                 "mae_loss": loss.detach(),
-                "reconstruction_loss": loss.detach(),  # Alias for consistent naming
+                "reconstruction_loss": loss.detach(),
                 "mae_recon_loss_masked": loss.detach(),
                 "mae_recon_loss_visible": visible_loss,
-                "mae_mask_ratio_actual": n_masked / n_total,
-                "mae_obs_ratio": n_observed / n_total,
-                "mae_loss_positions": n_loss_positions / n_total,
+                "mae_mask_ratio_actual": n_masked / max(n_total_tokens, 1),
+                "mae_obs_ratio": n_total_tokens
+                / max(padding_mask.shape[0] * padding_mask.shape[1], 1),
+                "mae_n_tokens_per_sample": n_total_tokens / B,
+                "mae_n_visible_per_sample": n_visible / B,
+                "mae_n_masked_per_sample": n_masked / B,
             }
 
         return loss, metrics

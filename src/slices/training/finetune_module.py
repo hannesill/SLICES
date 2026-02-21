@@ -20,7 +20,11 @@ import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 
 from slices.eval import MetricConfig, build_metrics
-from slices.models.encoders import EncoderWithMissingToken, build_encoder
+from slices.models.encoders import (
+    EncoderWithMissingToken,
+    ObservationTransformerEncoder,
+    build_encoder,
+)
 from slices.models.heads import TaskHeadConfig, build_task_head
 from slices.training.config_schemas import OptimizerConfig as OptimizerConfigSchema
 from slices.training.config_schemas import SchedulerConfig as SchedulerConfigSchema
@@ -359,6 +363,10 @@ class FineTuneModule(pl.LightningModule):
         if any("embedder" in k or "blocks" in k or "seq_att" in k for k in keys):
             return "smart"
 
+        # Observation transformer has value_proj and feature_embed (not input_proj)
+        if any("value_proj" in k for k in keys) and any("feature_embed" in k for k in keys):
+            return "observation_transformer"
+
         # Standard transformer has input_proj and layers
         if any("input_proj" in k or "layers" in k for k in keys):
             return "transformer"
@@ -372,6 +380,16 @@ class FineTuneModule(pl.LightningModule):
             missing_token: Optional pretrained missing token. If None,
                 a random token will be initialized.
         """
+        # Observation encoders handle missingness intrinsically by only
+        # tokenizing observed values — no missing token wrapper needed.
+        if isinstance(self.encoder, ObservationTransformerEncoder):
+            logger.info(
+                "Skipping EncoderWithMissingToken wrapper for %s "
+                "(handles missingness intrinsically)",
+                type(self.encoder).__name__,
+            )
+            return
+
         d_input = self.encoder.config.d_input
 
         if missing_token is not None:

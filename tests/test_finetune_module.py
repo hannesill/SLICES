@@ -429,8 +429,7 @@ class TestFineTuneModule:
         from slices.models.encoders.smart import SMARTEncoder
         from slices.training import SSLPretrainModule
 
-        # Create a pretrain module with SMART encoder
-        # Note: pooling='none' is required for MAE pretraining
+        # Create a pretrain module with SMART encoder + SMART SSL
         pretrain_config = OmegaConf.create(
             {
                 "encoder": {
@@ -442,12 +441,12 @@ class TestFineTuneModule:
                     "d_ff": 128,
                     "dropout": 0.1,
                     "max_seq_length": 48,
-                    "pooling": "none",  # Required for MAE
+                    "pooling": "none",  # Required for SSL pretraining
                 },
                 "ssl": {
-                    "name": "mae",
-                    "mask_ratio": 0.15,
-                    "mask_strategy": "variable_block",
+                    "name": "smart",
+                    "min_mask_ratio": 0.0,
+                    "max_mask_ratio": 0.75,
                 },
                 "optimizer": {
                     "name": "adamw",
@@ -611,6 +610,53 @@ class TestFineTuneModule:
 
         # All params should be trainable
         assert trainable_params == total_params
+
+
+class TestObservationEncoderNotWrapped:
+    """Test that ObservationTransformerEncoder is NOT wrapped with EncoderWithMissingToken."""
+
+    def test_observation_encoder_not_wrapped(self):
+        """ObservationTransformerEncoder should not be wrapped with EncoderWithMissingToken."""
+        from slices.models.encoders import ObservationTransformerEncoder
+
+        config = OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "observation_transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.1,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.1,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                    "use_missing_token": True,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+            }
+        )
+
+        module = FineTuneModule(config)
+
+        # Encoder should be ObservationTransformerEncoder directly, not wrapped
+        assert isinstance(module.encoder, ObservationTransformerEncoder)
 
 
 class TestFineTuneModuleGradualUnfreeze:
