@@ -309,11 +309,61 @@ class ImputationEvaluator:
         self.decoder.eval()
         return {"train_losses": losses}
 
+    def compute_feature_stds(
+        self,
+        dataloader: DataLoader,
+    ) -> Dict[int, float]:
+        """Compute per-feature standard deviations from ALL observed values.
+
+        These dataset-wide stds are used as the NRMSE denominator, ensuring
+        reproducibility across different eval masks.
+
+        Args:
+            dataloader: DataLoader providing batches with 'timeseries' and 'mask'.
+
+        Returns:
+            Dict mapping feature index to standard deviation.
+        """
+        # Use Welford's online algorithm to avoid storing all values
+        counts: Dict[int, int] = {}
+        means: Dict[int, float] = {}
+        m2s: Dict[int, float] = {}
+
+        with torch.no_grad():
+            for batch in dataloader:
+                timeseries = batch["timeseries"].to(self.device)
+                mask = batch["mask"].to(self.device)
+
+                for d in range(timeseries.shape[2]):
+                    observed = mask[:, :, d].bool()
+                    vals = timeseries[:, :, d][observed].cpu()
+                    if len(vals) == 0:
+                        continue
+
+                    for v in vals.tolist():
+                        n = counts.get(d, 0) + 1
+                        old_mean = means.get(d, 0.0)
+                        delta = v - old_mean
+                        new_mean = old_mean + delta / n
+                        delta2 = v - new_mean
+                        counts[d] = n
+                        means[d] = new_mean
+                        m2s[d] = m2s.get(d, 0.0) + delta * delta2
+
+        stds = {}
+        for d in counts:
+            if counts[d] > 1:
+                stds[d] = (m2s[d] / (counts[d] - 1)) ** 0.5
+            else:
+                stds[d] = 1.0
+        return stds
+
     def evaluate(
         self,
         dataloader: DataLoader,
         mask_strategy: str = "random",
         mask_ratio: float = 0.15,
+        feature_stds: Optional[Dict[int, float]] = None,
     ) -> Dict[str, Any]:
         """Evaluate reconstruction quality.
 
@@ -321,6 +371,9 @@ class ImputationEvaluator:
             dataloader: DataLoader providing batches with 'timeseries' and 'mask'.
             mask_strategy: Masking strategy to use.
             mask_ratio: Fraction of observed values to mask.
+            feature_stds: Pre-computed per-feature standard deviations for NRMSE
+                normalization. If None, computes from ALL observed values in the
+                dataloader (recommended: pass training set stds for consistency).
 
         Returns:
             Dictionary with:
@@ -331,10 +384,16 @@ class ImputationEvaluator:
         self.encoder.eval()
         self.decoder.eval()
 
+        # Compute dataset-wide feature stds if not provided
+        if feature_stds is None:
+            logger.info(
+                "Computing feature stds from dataloader (pass feature_stds for consistency)"
+            )
+            feature_stds = self.compute_feature_stds(dataloader)
+
         # Accumulators for per-feature and overall metrics
         feature_squared_errors: Dict[int, List[float]] = {}
         feature_abs_errors: Dict[int, List[float]] = {}
-        feature_values: Dict[int, List[float]] = {}
 
         with torch.no_grad():
             for batch in dataloader:
@@ -361,11 +420,9 @@ class ImputationEvaluator:
 
                     se = ((recon_vals - orig_vals) ** 2).cpu().tolist()
                     ae = ((recon_vals - orig_vals).abs()).cpu().tolist()
-                    ov = orig_vals.cpu().tolist()
 
                     feature_squared_errors.setdefault(d, []).extend(se)
                     feature_abs_errors.setdefault(d, []).extend(ae)
-                    feature_values.setdefault(d, []).extend(ov)
 
         # Compute metrics
         nrmse_per_feature = {}
@@ -375,11 +432,10 @@ class ImputationEvaluator:
         for d in sorted(feature_squared_errors.keys()):
             se = torch.tensor(feature_squared_errors[d])
             ae = torch.tensor(feature_abs_errors[d])
-            vals = torch.tensor(feature_values[d])
 
             rmse = se.mean().sqrt().item()
-            feature_std = vals.std().item() if len(vals) > 1 else 1.0
-            nrmse = rmse / max(feature_std, 1e-8)
+            feat_std = feature_stds.get(d, 1.0)
+            nrmse = rmse / max(feat_std, 1e-8)
 
             name = (
                 self.feature_names[d]

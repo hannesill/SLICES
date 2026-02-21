@@ -71,6 +71,7 @@ def compute_subgroup_metrics(
     labels: torch.Tensor,
     group_ids: torch.Tensor,
     config: FairnessConfig,
+    threshold: float = 0.5,
 ) -> Dict[str, Dict[str, float]]:
     """Compute metrics for each subgroup.
 
@@ -81,6 +82,7 @@ def compute_subgroup_metrics(
         labels: Ground truth binary labels, shape (N,).
         group_ids: Subgroup identifiers for each sample, shape (N,).
         config: Fairness analysis configuration.
+        threshold: Classification threshold for binarizing predictions.
 
     Returns:
         Nested dictionary: {group_id: {metric_name: value}}.
@@ -99,7 +101,7 @@ def compute_subgroup_metrics(
         g_labels = labels[mask]
 
         group_metrics: Dict[str, float] = {"n_samples": float(n)}
-        group_metrics["positive_rate"] = _positive_rate(g_preds, 0.5)
+        group_metrics["positive_rate"] = _positive_rate(g_preds, threshold)
 
         # TPR and FPR
         positives = g_labels == 1
@@ -107,7 +109,7 @@ def compute_subgroup_metrics(
         n_pos = int(positives.sum().item())
         n_neg = int(negatives.sum().item())
 
-        pred_pos = g_preds >= 0.5
+        pred_pos = g_preds >= threshold
 
         if n_pos > 0:
             group_metrics["tpr"] = float((pred_pos & positives).sum().item()) / n_pos
@@ -182,6 +184,8 @@ def equalized_odds_difference(
 
     tprs: List[float] = []
     fprs: List[float] = []
+    n_groups_with_pos = 0
+    n_groups_with_neg = 0
 
     for g in groups:
         mask = group_ids == g
@@ -196,9 +200,17 @@ def equalized_odds_difference(
         if n_pos > 0:
             tpr = float((g_preds[positives] == 1).sum().item()) / n_pos
             tprs.append(tpr)
+        n_groups_with_pos += 1 if n_pos > 0 else 0
+
         if n_neg > 0:
             fpr = float((g_preds[negatives] == 1).sum().item()) / n_neg
             fprs.append(fpr)
+        n_groups_with_neg += 1 if n_neg > 0 else 0
+
+    # If some groups had undefined TPR/FPR (no positives/negatives),
+    # the comparison is incomplete — return NaN instead of a misleading 0.0
+    if n_groups_with_pos < len(groups) or n_groups_with_neg < len(groups):
+        return float("nan")
 
     tpr_diff = (max(tprs) - min(tprs)) if len(tprs) >= 2 else 0.0
     fpr_diff = (max(fprs) - min(fprs)) if len(fprs) >= 2 else 0.0

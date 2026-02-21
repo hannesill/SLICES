@@ -107,6 +107,23 @@ class FineTuneModule(pl.LightningModule):
             # No pretrained weights, but still wrap encoder for consistency
             self._wrap_encoder_with_missing_token(missing_token=None)
 
+        # Optional projection layer for dimensionality-controlled evaluation.
+        # When comparing encoders with different output dims (e.g., 64 vs 1120),
+        # a shared projection ensures linear probing measures quality, not dim.
+        projection_dim = config.task.get("projection_dim", None)
+        if projection_dim is not None:
+            encoder_dim = self.encoder.get_output_dim()
+            self.projection = nn.Linear(encoder_dim, projection_dim)
+            self._effective_encoder_dim = projection_dim
+            logger.info(
+                "Added projection layer: %d -> %d for fair evaluation",
+                encoder_dim,
+                projection_dim,
+            )
+        else:
+            self.projection = None
+            self._effective_encoder_dim = self.encoder.get_output_dim()
+
         # Build task head
         task_config = self._build_task_config(config)
         self.task_head = build_task_head(task_config)
@@ -161,7 +178,7 @@ class FineTuneModule(pl.LightningModule):
             task_name=task_cfg.get("task_name", "mortality_24h"),
             task_type=task_type,
             n_classes=n_classes,
-            input_dim=self.encoder.get_output_dim(),
+            input_dim=self._effective_encoder_dim,
             hidden_dims=hidden_dims,
             dropout=task_cfg.get("dropout", 0.1),
             activation=task_cfg.get("activation", "relu"),
@@ -496,6 +513,10 @@ class FineTuneModule(pl.LightningModule):
         # Encoder forward (produces pooled representation)
         encoder_out = self.encoder(timeseries, mask=mask)  # (B, d_model)
 
+        # Optional projection to shared dimensionality
+        if self.projection is not None:
+            encoder_out = self.projection(encoder_out)
+
         # Task head forward
         return self.task_head(encoder_out)
 
@@ -657,6 +678,8 @@ class FineTuneModule(pl.LightningModule):
             {"params": list(self.task_head.parameters())},
             {"params": list(self.encoder.parameters())},
         ]
+        if self.projection is not None:
+            param_groups.append({"params": list(self.projection.parameters())})
         optimizer = build_optimizer(param_groups, self.optimizer_config)
 
         result = build_scheduler(optimizer, self.scheduler_config)

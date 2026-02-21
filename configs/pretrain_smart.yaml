@@ -43,6 +43,9 @@ encoder:
 # Base config already has good defaults matching the paper
 
 # Training configuration (SMART paper defaults)
+# NOTE: 25 epochs is the SMART paper default, but MAE uses 500 epochs in
+# pretrain.yaml. For fair benchmark comparison, equalize training budget
+# in gradient steps or wall-clock time rather than raw epochs.
 training:
   max_epochs: 25          # Paper default for pretraining
   batch_size: 256         # Paper default

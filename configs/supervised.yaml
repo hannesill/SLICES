@@ -55,6 +55,9 @@ task:
   dropout: 0.1
   activation: relu
 
+  # Projection dimension for fair comparison across encoders (see finetune.yaml).
+  projection_dim: null
+
 # Training configuration
 training:
   max_epochs: 100  # More epochs for training from scratch
@@ -84,7 +87,7 @@ training:
 
   # Early stopping
   early_stopping_patience: 20  # More patience for training from scratch
-  early_stopping_monitor: val/auprc
+  early_stopping_monitor: val/auroc
   early_stopping_mode: max
 
   # Debug: overfit on N batches (0 = disabled)
