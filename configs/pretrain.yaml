@@ -56,6 +56,7 @@ data:
 # Override pretraining-specific settings:
 encoder:
   d_model: 256  # Larger model for pretraining
+  d_ff: 1024  # 4:1 ratio with d_model (default 256 from transformer.yaml is for d_model=64)
   pooling: none  # Required for MAE - need per-timestep outputs (vs 'mean' for tasks)
 
 # SSL objective configuration overrides (base from configs/ssl/mae.yaml)

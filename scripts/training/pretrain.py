@@ -251,11 +251,19 @@ def main(cfg: DictConfig) -> None:
     trainer.fit(model, datamodule=datamodule)
 
     # =========================================================================
-    # 5. Save Encoder
+    # 5. Save Encoder (from best checkpoint)
     # =========================================================================
     print("\n" + "=" * 80)
     print("5. Saving Encoder")
     print("=" * 80)
+
+    # Load best checkpoint weights before saving encoder
+    checkpoint_callback = callbacks[0]
+    best_ckpt = checkpoint_callback.best_model_path
+    if best_ckpt:
+        print(f"\n  Loading best checkpoint: {best_ckpt}")
+        print(f"  Best val/loss: {checkpoint_callback.best_model_score:.4f}")
+        model = SSLPretrainModule.load_from_checkpoint(best_ckpt)
 
     # Save encoder weights for downstream tasks
     encoder_path = Path(cfg.output_dir) / "encoder.pt"
@@ -272,10 +280,9 @@ def main(cfg: DictConfig) -> None:
     print("Training Complete!")
     print("=" * 80)
 
-    # Get best checkpoint
-    if hasattr(callbacks[0], "best_model_path"):
-        print(f"\n✓ Best checkpoint: {callbacks[0].best_model_path}")
-        print(f"  - Best val/loss: {callbacks[0].best_model_score:.4f}")
+    if best_ckpt:
+        print(f"\n✓ Best checkpoint: {best_ckpt}")
+        print(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
 
     print(f"\n✓ Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")

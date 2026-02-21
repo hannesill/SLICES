@@ -104,14 +104,20 @@ def build_scheduler(
         max_epochs = config.get("max_epochs", 100)
         eta_min = config.get("eta_min", 0.0)
 
+        # Get base_lr to make eta_min absolute (consistent with CosineAnnealingLR).
+        # LambdaLR multiplies the lambda return by base_lr, so we divide eta_min
+        # by base_lr here so the effective minimum LR equals eta_min exactly.
+        base_lr = optimizer.defaults["lr"]
+        eta_min_ratio = eta_min / base_lr if base_lr > 0 else 0.0
+
         def lr_lambda(epoch: int) -> float:
             if epoch < warmup_epochs:
                 return float(epoch + 1) / float(max(1, warmup_epochs))
             else:
                 progress = float(epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
                 return (
-                    eta_min
-                    + (1 - eta_min)
+                    eta_min_ratio
+                    + (1 - eta_min_ratio)
                     * 0.5
                     * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))).item()
                 )
