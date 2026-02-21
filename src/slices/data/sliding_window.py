@@ -134,11 +134,27 @@ class SlidingWindowDataset(Dataset):
                 death_hours[stay_idx] = float(sample["label"].item())
         return death_hours
 
+    def _get_actual_length(self, stay_idx: int) -> int:
+        """Get actual (non-padded) length of a stay using the observation mask.
+
+        Returns the last timestep with at least one observed feature + 1.
+        Falls back to seq_length if mask is all True or unavailable.
+        """
+        mask = self.base_dataset._mask_tensor[stay_idx]  # (seq_len, n_features)
+        # Any feature observed at each timestep
+        any_observed = mask.any(dim=1)  # (seq_len,)
+        observed_indices = any_observed.nonzero(as_tuple=True)[0]
+        if len(observed_indices) == 0:
+            return 0
+        return int(observed_indices[-1].item()) + 1
+
     def _build_window_index(self) -> None:
         """Build mapping from window_idx -> (stay_idx, window_start).
 
         Pre-computes all valid window positions for fast random access.
-        A window is valid if it fits entirely within the sequence length.
+        A window is valid if:
+        - It fits entirely within the sequence length
+        - It contains at least one observed timestep (not entirely zero-padded)
 
         In decompensation mode, windows where death occurs during the
         observation period [window_start, window_start + window_size) are excluded.
@@ -152,6 +168,11 @@ class SlidingWindowDataset(Dataset):
             if max_start < 0:
                 continue
 
+            # Get actual length to skip windows entirely in zero-padded region
+            actual_length = self._get_actual_length(stay_idx)
+            if actual_length == 0:
+                continue
+
             # Get death_hours for decompensation exclusion
             death_hour = None
             if self._death_hours is not None:
@@ -159,6 +180,11 @@ class SlidingWindowDataset(Dataset):
 
             window_start = 0
             while window_start <= max_start:
+                # Skip windows that start at or beyond actual data
+                # (entire window would be in zero-padded region)
+                if window_start >= actual_length:
+                    break
+
                 # In decompensation mode, exclude windows where death occurs
                 # during observation [window_start, window_start + window_size)
                 if death_hour is not None and not math.isinf(death_hour):
@@ -217,7 +243,7 @@ class SlidingWindowDataset(Dataset):
             obs_end = window_start + self.window_size
             pred_end = obs_end + self.decompensation_pred_hours
 
-            if not math.isinf(death_hour) and obs_end <= death_hour < pred_end:
+            if not math.isinf(death_hour) and obs_end <= death_hour <= pred_end:
                 result["label"] = torch.tensor(1.0, dtype=torch.float32)
             else:
                 result["label"] = torch.tensor(0.0, dtype=torch.float32)

@@ -64,6 +64,11 @@ def icu_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         labels = torch.stack([s["label"] for s in batch])  # (B,)
         result["label"] = labels
 
+    # Collate static features if present
+    if "static" in batch[0]:
+        static_keys = batch[0]["static"].keys()
+        result["static"] = {key: [s["static"].get(key) for s in batch] for key in static_keys}
+
     # Stack sliding window metadata if present
     if "window_start" in batch[0]:
         result["window_start"] = torch.tensor([s["window_start"] for s in batch])  # (B,)

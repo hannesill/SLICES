@@ -342,15 +342,9 @@ class ICUDataset(Dataset):
             self.feature_means = torch.tensor(cached_stats["feature_means"], dtype=torch.float32)
             self.feature_stds = torch.tensor(cached_stats["feature_stds"], dtype=torch.float32)
             logger.debug("Using cached normalization statistics")
-        elif self.normalize:
-            # CRITICAL: Require train_indices when normalizing to prevent data leakage
-            # Using all data for normalization statistics would leak val/test information
-            if train_indices is None:
-                raise ValueError(
-                    "train_indices must be provided when normalize=True to prevent data leakage. "
-                    "Pass train_indices from your data splits, or set normalize=False."
-                )
-            # Determine which samples to use for statistics
+        elif train_indices is not None:
+            # Compute feature means (always needed for imputation) and stds (for normalization)
+            # CRITICAL: Use only training samples to prevent data leakage
             train_ts = timeseries_tensor[train_indices]  # (n_train, seq_len, n_features)
             train_masks = masks_tensor[train_indices]
 
@@ -375,40 +369,51 @@ class ICUDataset(Dataset):
                 torch.zeros(self.n_features),
             )
 
-            # Vectorized std computation
-            # Compute squared deviations from mean
-            deviations = torch.where(
-                valid_mask,
-                (flat_ts - self.feature_means.unsqueeze(0)) ** 2,
-                torch.zeros_like(flat_ts),
-            )
-            variance = torch.where(
-                valid_counts > 1,
-                deviations.sum(dim=0) / (valid_counts - 1),  # Bessel's correction
-                torch.ones(self.n_features),
-            )
-            self.feature_stds = torch.sqrt(variance)
+            if self.normalize:
+                # Vectorized std computation
+                # Compute squared deviations from mean
+                deviations = torch.where(
+                    valid_mask,
+                    (flat_ts - self.feature_means.unsqueeze(0)) ** 2,
+                    torch.zeros_like(flat_ts),
+                )
+                variance = torch.where(
+                    valid_counts > 1,
+                    deviations.sum(dim=0) / (valid_counts - 1),  # Bessel's correction
+                    torch.ones(self.n_features),
+                )
+                self.feature_stds = torch.sqrt(variance)
 
-            # Clamp minimum std to avoid division by zero
-            self.feature_stds = torch.clamp(self.feature_stds, min=MIN_STD_THRESHOLD)
+                # Clamp minimum std to avoid division by zero
+                self.feature_stds = torch.clamp(self.feature_stds, min=MIN_STD_THRESHOLD)
 
             # Save computed stats for reproducibility
             self._save_normalization_stats(train_indices)
             logger.debug(f"Computed normalization stats for {self.n_features} features")
+        elif self.normalize:
+            raise ValueError(
+                "train_indices must be provided when normalize=True to prevent data leakage. "
+                "Pass train_indices from your data splits, or set normalize=False."
+            )
 
         # =====================================================================
-        # Step 3: Normalize then zero-fill (vectorized)
+        # Step 3: Normalize then impute missing values (vectorized)
         # =====================================================================
-        logger.debug("[3/3] Applying normalization and zero-fill...")
+        logger.debug("[3/3] Applying normalization and imputation...")
 
-        # Normalize first (NaN positions stay NaN through arithmetic)
         if self.normalize:
+            # Normalize first (NaN positions stay NaN through arithmetic)
             timeseries_tensor = (timeseries_tensor - self.feature_means) / self.feature_stds
-
-        # Zero-fill: replace NaN with 0 in normalized space
-        # After z-score normalization, 0 = feature mean in original space.
-        # This is the most neutral default: "no information, assume population average."
-        timeseries_tensor = torch.nan_to_num(timeseries_tensor, nan=0.0)
+            # After z-score normalization, 0 = feature mean in original space.
+            # This is the most neutral default: "no information, assume population average."
+            timeseries_tensor = torch.nan_to_num(timeseries_tensor, nan=0.0)
+        else:
+            # Without normalization, impute with feature means (not 0).
+            # Zero-filling in original space creates physiologically impossible values
+            # (e.g., 0 heart rate, 0 blood pressure). Feature means are a better default.
+            for f in range(self.n_features):
+                nan_mask = torch.isnan(timeseries_tensor[:, :, f])
+                timeseries_tensor[:, :, f][nan_mask] = self.feature_means[f]
 
         # Keep tensors stacked for memory efficiency and faster access
         # __getitem__ will index directly into these tensors
@@ -740,6 +745,11 @@ class ICUDataset(Dataset):
                     self._timeseries_tensor = self._timeseries_tensor[indices_tensor]
                     self._mask_tensor = self._mask_tensor[indices_tensor]
 
+                    # Filter labels_df and static_df to match (keeps get_label_statistics correct)
+                    kept_stay_ids = pl.Series("stay_id", self.stay_ids)
+                    self.labels_df = self.labels_df.filter(pl.col("stay_id").is_in(kept_stay_ids))
+                    self.static_df = self.static_df.filter(pl.col("stay_id").is_in(kept_stay_ids))
+
                     # Log filtering
                     removal_pct = (len(missing_label_stays) / original_count) * 100
                     _log_label_filtering(
@@ -927,13 +937,16 @@ class ICUDataset(Dataset):
         mask_tensor = torch.from_numpy(mask_arr)
 
         # =====================================================================
-        # Stage 2: NORMALIZED - z-score normalize then zero-fill
+        # Stage 2: NORMALIZED - z-score normalize then impute
         # =====================================================================
         if self.normalize:
             normalized_tensor = (grid_tensor - self.feature_means) / self.feature_stds
+            normalized_tensor = torch.nan_to_num(normalized_tensor, nan=0.0)
         else:
             normalized_tensor = grid_tensor.clone()
-        normalized_tensor = torch.nan_to_num(normalized_tensor, nan=0.0)
+            for f in range(self.n_features):
+                nan_mask = torch.isnan(normalized_tensor[:, f])
+                normalized_tensor[:, f][nan_mask] = self.feature_means[f]
 
         return {
             "grid": {
