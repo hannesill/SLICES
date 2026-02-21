@@ -102,10 +102,12 @@ class MortalityLabelBuilder(LabelBuilder):
 
         if window_hours is None and obs_hours is None:
             # Hospital mortality, no observation window (legacy)
+            # Null hospital_expire_flag means outcome is unknown — keep as null.
+            # ICUDataset's handle_missing_labels='filter' will exclude these stays.
             labels = merged.select(
                 [
                     "stay_id",
-                    pl.col("hospital_expire_flag").fill_null(0).cast(pl.Int32).alias("label"),
+                    pl.col("hospital_expire_flag").cast(pl.Int32).alias("label"),
                 ]
             )
 

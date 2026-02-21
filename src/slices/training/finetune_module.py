@@ -153,6 +153,9 @@ class FineTuneModule(pl.LightningModule):
         # Setup metrics
         self._setup_metrics()
 
+        # Flag for one-time label validation on first batch
+        self._labels_validated = False
+
     def _build_task_config(self, config: DictConfig) -> TaskHeadConfig:
         """Build task head configuration from Hydra config.
 
@@ -520,6 +523,41 @@ class FineTuneModule(pl.LightningModule):
         # Task head forward
         return self.task_head(encoder_out)
 
+    def _validate_labels(self, labels: torch.Tensor) -> None:
+        """One-time check that labels are compatible with the task type.
+
+        For binary/multiclass tasks, labels must be non-negative integers within
+        the valid class range. Detects the common mistake of passing raw
+        death_hours (float) labels into a binary CrossEntropyLoss, which happens
+        when decompensation is used without sliding windows.
+        """
+        if self._labels_validated:
+            return
+        self._labels_validated = True
+
+        if self.task_type not in ("binary", "multiclass"):
+            return
+
+        n_classes = self.task_head.config.get_output_dim()
+        unique_vals = labels.unique()
+
+        # Check for non-integer values (e.g., death_hours floats, inf)
+        has_non_integer = not torch.all(labels == labels.long().float())
+        has_inf = torch.any(torch.isinf(labels))
+        has_out_of_range = torch.any(labels.long() < 0) or torch.any(labels.long() >= n_classes)
+
+        if has_inf or has_non_integer or has_out_of_range:
+            raise ValueError(
+                f"Labels incompatible with task_type='{self.task_type}' "
+                f"(n_classes={n_classes}). "
+                f"Found label values: {unique_vals.tolist()[:10]}. "
+                f"Expected integer labels in [0, {n_classes}). "
+                f"If using decompensation, labels are death_hours (float) and "
+                f"require SlidingWindowDataset to convert them to per-window "
+                f"binary labels. Enable sliding windows in your config: "
+                f"sliding_window.enable=true"
+            )
+
     def _compute_loss_and_metrics(
         self,
         batch: Dict[str, torch.Tensor],
@@ -537,6 +575,9 @@ class FineTuneModule(pl.LightningModule):
         timeseries = batch["timeseries"]  # (B, T, D)
         mask = batch["mask"]  # (B, T, D)
         labels = batch["label"]  # (B,)
+
+        # One-time validation: catch label/task_type mismatches early
+        self._validate_labels(labels)
 
         # Forward pass
         outputs = self(timeseries, mask)
