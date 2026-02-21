@@ -101,6 +101,15 @@ class RicuExtractor(BaseExtractor):
                 df = df.with_columns(
                     pl.col(col_name).replace_strict(mapping, default=None, return_dtype=pl.Float64)
                 )
+                # Fix mask: unseen categorical values mapped to null must have mask=False
+                mask_col = f"{col_name}_mask"
+                if mask_col in df.columns:
+                    df = df.with_columns(
+                        pl.when(pl.col(col_name).is_null() & pl.col(mask_col))
+                        .then(pl.lit(False))
+                        .otherwise(pl.col(mask_col))
+                        .alias(mask_col)
+                    )
 
         # Convert Duration columns to hours (float)
         for col_name in df.columns:

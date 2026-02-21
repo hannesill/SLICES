@@ -352,13 +352,17 @@ class BaseExtractor(ABC):
 
         # Step 2: Extract all raw data sources
         raw_data: Dict[str, pl.DataFrame] = {}
+        all_stays = self.extract_stays()
         for source in required_sources:
             if source == "stays":
-                # Use full stays DataFrame (not filtered by stay_ids)
-                raw_data["stays"] = self.extract_stays().filter(pl.col("stay_id").is_in(stay_ids))
+                raw_data["stays"] = all_stays.filter(pl.col("stay_id").is_in(stay_ids))
             else:
                 # Extract other data sources via abstract method
                 raw_data[source] = self.extract_data_source(source, stay_ids)
+
+        # Provide unfiltered stays so label builders can detect multi-stay
+        # admissions correctly even in resume mode (where stay_ids is a subset)
+        raw_data["all_stays"] = all_stays
 
         # Step 3: Build labels for each task
         all_labels = []
@@ -457,6 +461,17 @@ class BaseExtractor(ABC):
         # Filter to valid hours only
         valid = sparse_timeseries.filter((pl.col("hour") >= 0) & (pl.col("hour") < seq_length))
 
+        # Deduplicate (stay_id, hour) rows — keep last occurrence to match
+        # typical "latest value wins" semantics. Warn if duplicates found.
+        n_before_dedup = len(valid)
+        valid = valid.unique(subset=["stay_id", "hour"], keep="last")
+        n_dupes = n_before_dedup - len(valid)
+        if n_dupes > 0:
+            console.print(
+                f"[yellow]Warning: Removed {n_dupes} duplicate (stay_id, hour) rows "
+                f"from sparse timeseries. This may indicate upstream data issues.[/yellow]"
+            )
+
         # Build the full grid: every (stay_id, hour) combination
         all_stays = pl.DataFrame({"stay_id": stay_ids})
         all_hours = pl.DataFrame({"hour": list(range(seq_length))})
@@ -477,6 +492,14 @@ class BaseExtractor(ABC):
 
         # Left join grid with valid data
         dense = grid.join(valid, on=["stay_id", "hour"], how="left")
+
+        # Verify join didn't expand rows (would indicate residual duplicates)
+        expected_rows = len(stay_ids) * seq_length
+        assert len(dense) == expected_rows, (
+            f"Dense timeseries has {len(dense)} rows but expected "
+            f"{len(stay_ids)} stays x {seq_length} hours = {expected_rows}. "
+            f"This indicates duplicate (stay_id, hour) rows survived deduplication."
+        )
 
         # Fill nulls: NaN for value columns, False for mask columns
         dense = dense.with_columns(

@@ -12,7 +12,9 @@ Usage:
         data.processed_dir=data/processed/mimic-iv
 """
 
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import hydra
 import numpy as np
@@ -20,6 +22,14 @@ import polars as pl
 import yaml
 from omegaconf import DictConfig
 from slices.constants import TEST_RATIO, TRAIN_RATIO, VAL_RATIO
+
+
+def _atomic_yaml_write(path: Path, data: dict) -> None:
+    """Write YAML atomically using temp file + rename."""
+    with NamedTemporaryFile(dir=path.parent, suffix=".yaml", mode="w", delete=False) as tmp:
+        tmp_path = tmp.name
+        yaml.dump(data, tmp, default_flow_style=False)
+    os.replace(tmp_path, path)
 
 
 def compute_patient_splits(
@@ -48,12 +58,23 @@ def compute_patient_splits(
     # Get stay_id -> patient_id mapping
     stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
 
-    # Get unique patients
-    unique_patients = list(set(stay_to_patient.values()))
+    # Get unique patients (sorted for deterministic ordering across Python runs)
+    unique_patients = sorted(set(stay_to_patient.values()))
     n_patients = len(unique_patients)
 
     print(f"  Total patients: {n_patients:,}")
     print(f"  Total stays: {len(stay_ids):,}")
+
+    # Warn if patient_id == stay_id for all stays (e.g. HiRID, SICdb)
+    if n_patients == len(stay_ids) and n_patients > 0:
+        patient_set = set(stay_to_patient.values())
+        stay_set = set(stay_ids)
+        if patient_set == stay_set:
+            print(
+                "  WARNING: patient_id == stay_id for all stays. This dataset likely "
+                "lacks true patient-level identifiers (e.g. HiRID, SICdb). "
+                "Patient-level split cannot prevent leakage from repeat ICU admissions."
+            )
 
     # Shuffle patients deterministically
     rng = np.random.RandomState(seed)
@@ -113,48 +134,50 @@ def compute_normalization_stats(
 ) -> dict:
     """Compute mean and std for each feature on training set only.
 
-    Uses vectorized operations for efficiency.
+    Uses vectorized numpy operations for efficiency.
     """
     n_features = len(feature_names)
+    n_train = len(train_indices)
+
+    # Extract training data into numpy arrays for vectorized computation
+    raw_timeseries = timeseries_df["timeseries"].to_list()
+    raw_masks = timeseries_df["mask"].to_list()
 
     # Accumulators
     sums = np.zeros(n_features)
     sq_sums = np.zeros(n_features)
     counts = np.zeros(n_features)
 
-    # Process each training sample
-    raw_timeseries = timeseries_df["timeseries"].to_list()
-    raw_masks = timeseries_df["mask"].to_list()
-
-    n_train = len(train_indices)
     for progress, idx in enumerate(train_indices):
         if (progress + 1) % 5000 == 0:
             print(f"  Processing {progress + 1:,}/{n_train:,} training samples...")
 
-        ts_data = raw_timeseries[idx]
-        mask_data = raw_masks[idx]
-        actual_len = min(len(ts_data), seq_length)
+        # Convert to numpy arrays for vectorized ops
+        ts_arr = np.array(raw_timeseries[idx][:seq_length], dtype=np.float64)
+        mask_arr = np.array(raw_masks[idx][:seq_length], dtype=bool)
 
-        for t in range(actual_len):
-            for f in range(n_features):
-                val = ts_data[t][f]
-                mask_val = mask_data[t][f]
-                if mask_val and val is not None and not np.isnan(val):
-                    sums[f] += val
-                    sq_sums[f] += val * val
-                    counts[f] += 1
+        # Valid = mask is True AND value is finite
+        valid = mask_arr & np.isfinite(ts_arr)
+
+        # Zero out invalid entries so they don't affect sums
+        ts_valid = np.where(valid, ts_arr, 0.0)
+
+        # Accumulate per-feature sums along time axis
+        counts += valid.sum(axis=0)
+        sums += ts_valid.sum(axis=0)
+        sq_sums += (ts_valid**2).sum(axis=0)
 
     # Compute mean and std
     means = np.zeros(n_features)
     stds = np.ones(n_features)
 
-    for f in range(n_features):
-        if counts[f] > 0:
-            mean = sums[f] / counts[f]
-            variance = (sq_sums[f] - counts[f] * mean * mean) / max(counts[f] - 1, 1)
-            std = np.sqrt(max(variance, 0))
-            means[f] = mean
-            stds[f] = std if std > 1e-6 else 1.0
+    safe_counts = np.maximum(counts, 1)
+    means = sums / safe_counts
+    variance = (sq_sums - counts * means**2) / np.maximum(safe_counts - 1, 1)
+    stds = np.sqrt(np.maximum(variance, 0.0))
+    stds = np.where(stds > 1e-6, stds, 1.0)
+    # Zero out means for features with no observations
+    means = np.where(counts > 0, means, 0.0)
 
     return {
         "feature_means": means.tolist(),
@@ -227,8 +250,7 @@ def main(cfg: DictConfig) -> None:
         "val_patients": splits["val_patients"],
         "test_patients": splits["test_patients"],
     }
-    with open(splits_path, "w") as f:
-        yaml.dump(splits_to_save, f, default_flow_style=False)
+    _atomic_yaml_write(splits_path, splits_to_save)
     print(f"\n  Saved: {splits_path}")
 
     # Compute normalization stats on train set only
@@ -242,8 +264,7 @@ def main(cfg: DictConfig) -> None:
 
     # Save normalization stats
     stats_path = processed_dir / "normalization_stats.yaml"
-    with open(stats_path, "w") as f:
-        yaml.dump(stats, f, default_flow_style=False)
+    _atomic_yaml_write(stats_path, stats)
     print(f"  Saved: {stats_path}")
 
     # Summary

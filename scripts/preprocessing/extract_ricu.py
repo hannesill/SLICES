@@ -25,6 +25,7 @@ from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
+from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 from slices.data.extractors.base import ExtractorConfig
 from slices.data.extractors.ricu import RicuExtractor
 
@@ -39,6 +40,8 @@ def main(cfg: DictConfig) -> None:
             - data.processed_dir: Path for processed output
             - data.feature_set: Feature set name (stored in metadata)
             - data.tasks: List of task names for label extraction
+            - data.seq_length_hours: Override sequence length (default: benchmark constant)
+            - data.min_stay_hours: Override minimum stay length (default: benchmark constant)
     """
     ricu_dir = Path(cfg.data.ricu_output_dir)
 
@@ -56,6 +59,8 @@ def main(cfg: DictConfig) -> None:
         output_dir=str(cfg.data.processed_dir),
         feature_set=cfg.data.feature_set,
         tasks=list(cfg.data.get("tasks", [])) if cfg.data.get("tasks") else [],
+        seq_length_hours=cfg.data.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        min_stay_hours=cfg.data.get("min_stay_hours", MIN_STAY_HOURS),
     )
 
     extractor = RicuExtractor(config)

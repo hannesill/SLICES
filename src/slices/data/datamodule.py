@@ -422,12 +422,23 @@ class ICUDataModule(L.LightningDataModule):
             zip(self._static_df["stay_id"].to_list(), self._static_df["patient_id"].to_list())
         )
 
-        # Get unique patients (only from filtered stays)
-        filtered_patient_ids = {stay_to_patient.get(sid) for sid in stay_ids}
-        filtered_patient_ids.discard(None)  # Remove None if any stay has no patient
-        unique_patients = list(filtered_patient_ids)
+        # Get unique patients (sorted for deterministic ordering across Python runs)
+        filtered_patient_ids = {stay_to_patient[sid] for sid in stay_ids if sid in stay_to_patient}
+        unique_patients = sorted(filtered_patient_ids)
         n_patients = len(unique_patients)
         logger.debug(f"Found {n_patients:,} unique patients")
+
+        # Warn if patient_id == stay_id for all stays (e.g. HiRID, SICdb)
+        # This means the dataset lacks true patient-level IDs, so multiple ICU
+        # stays from the same real patient may leak across splits.
+        if n_patients == len(stay_ids) and n_patients > 0:
+            filtered_stay_set = set(stay_ids)
+            if filtered_patient_ids == filtered_stay_set:
+                logger.warning(
+                    "patient_id == stay_id for all stays. This dataset likely lacks "
+                    "true patient-level identifiers (e.g. HiRID, SICdb). "
+                    "Patient-level split cannot prevent leakage from repeat ICU admissions."
+                )
 
         # Shuffle patients deterministically using seed
         logger.debug(f"Shuffling patients (seed={self.seed})")
