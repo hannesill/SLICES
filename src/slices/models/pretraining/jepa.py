@@ -5,8 +5,8 @@ latent representations of masked tokens instead of raw input values.
 
 Architecture:
 1. ObservationTransformerEncoder.tokenize() → one token per observed measurement
-2. Random mask: 75% of observation tokens are masked
-3. Online encoder processes only visible tokens (25%)
+2. Random mask: 50% of observation tokens are masked (configurable via mask_ratio)
+3. Online encoder processes only visible tokens (50%)
 4. EMA target encoder processes ALL tokens → target representations
 5. Predictor reassembles (visible encoded + mask tokens), predicts target repr
 6. MSE/cosine loss on masked positions in latent space
@@ -35,7 +35,7 @@ class JEPAConfig(SSLConfig):
     name: str = "jepa"
 
     # Masking
-    mask_ratio: float = 0.75
+    mask_ratio: float = 0.5
 
     # Predictor parameters (mirrors MAE decoder for fairness)
     predictor_d_model: int = 128
@@ -313,7 +313,7 @@ class JEPAObjective(BaseSSLObjective):
 
             metrics = {
                 "jepa_loss": loss.detach(),
-                "reconstruction_loss": loss.detach(),
+                "ssl_loss": loss.detach(),
                 "jepa_mask_ratio_actual": n_masked / max(n_total_tokens, 1),
                 "jepa_n_tokens_per_sample": n_total_tokens / B,
                 "jepa_n_visible_per_sample": n_visible / B,

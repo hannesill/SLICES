@@ -28,6 +28,9 @@ experiment_name: supervised
 dataset: mimic      # mimic | eicu | combined
 paradigm: supervised  # always "supervised" for this config
 
+# Experiment sprint (for W&B filtering, e.g. sprint=1)
+sprint: null
+
 # Random seed for reproducibility
 seed: 42
 
@@ -42,6 +45,10 @@ checkpoint_dir: ${output_dir}/checkpoints
 
 # Task configuration inherited from configs/tasks/*.yaml
 # Override with: task=mortality_hospital, task=los_remaining, etc.
+
+# Label fraction for label-efficiency ablations
+# 1.0 = use all training data (default)
+label_fraction: 1.0
 
 # Training configuration
 training:
@@ -72,7 +79,7 @@ training:
 
   # Early stopping
   # Monitor/mode are set automatically by task type in setup_callbacks():
-  #   classification -> val/auroc (max), regression -> val/mse (min)
+  #   classification -> val/auprc (max), regression -> val/mse (min)
   # Override here only if you need a non-default metric.
   early_stopping_patience: 20  # More patience for training from scratch
 

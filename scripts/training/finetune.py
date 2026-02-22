@@ -58,11 +58,11 @@ def setup_callbacks(cfg: DictConfig) -> list:
     if task_type == "regression":
         default_monitor, default_mode = "val/mse", "min"
     else:
-        default_monitor, default_mode = "val/auroc", "max"
+        default_monitor, default_mode = "val/auprc", "max"
     monitor = cfg.training.get("early_stopping_monitor", default_monitor)
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
-    # Convert metric name for filename (val/auroc -> val_auroc)
+    # Convert metric name for filename (val/auprc -> val_auprc)
     metric_filename = monitor.replace("/", "_")
 
     checkpoint_callback = ModelCheckpoint(
@@ -105,7 +105,10 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if not cfg.logging.get("use_wandb", False):
         return None
 
-    tags = list(cfg.logging.get("wandb_tags", [])) or None
+    tags = list(cfg.logging.get("wandb_tags", []))
+    if cfg.get("sprint") is not None:
+        tags.append(f"sprint:{cfg.sprint}")
+    tags = tags or None
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
@@ -144,6 +147,18 @@ def main(cfg: DictConfig) -> None:
             "'pretrain_checkpoint' (full .ckpt file)"
         )
 
+    # Auto-detect paradigm from encoder checkpoint metadata
+    if cfg.checkpoint is not None:
+        ckpt = torch.load(cfg.checkpoint, map_location="cpu", weights_only=True)
+        if isinstance(ckpt, dict) and "ssl_name" in ckpt:
+            detected = ckpt["ssl_name"]
+            if cfg.paradigm != detected:
+                print(f"\n  Auto-detected paradigm from checkpoint: {detected}")
+                OmegaConf.set_struct(cfg, False)
+                cfg.paradigm = detected
+                OmegaConf.set_struct(cfg, True)
+        del ckpt
+
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
 
@@ -162,6 +177,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.get("num_workers", 4),
         seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
     )
 
     # Setup data
@@ -209,6 +225,7 @@ def main(cfg: DictConfig) -> None:
     # Inject d_input from data into encoder config
     OmegaConf.set_struct(cfg, False)
     cfg.encoder.d_input = datamodule.get_feature_dim()
+    cfg.encoder.max_seq_length = datamodule.get_seq_length()
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":

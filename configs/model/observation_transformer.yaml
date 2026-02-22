@@ -14,7 +14,7 @@ name: observation_transformer
 
 # Input/Output dimensions
 d_model: 128
-max_seq_length: 168  # Maximum sequence length in hours (7 days)
+max_seq_length: 168  # Default; overridden at runtime by datamodule.get_seq_length() (48h)
 
 # Transformer architecture
 n_layers: 4

@@ -28,7 +28,10 @@ experiment_name: finetune
 
 # Experiment tracking identifiers
 dataset: mimic  # mimic | eicu | combined
-paradigm: mae   # mae | jepa | contrastive (set to match pretrained encoder)
+paradigm: mae   # Auto-detected from checkpoint; override with paradigm=jepa etc.
+
+# Experiment sprint (for W&B filtering, e.g. sprint=1)
+sprint: null
 
 # Random seed for reproducibility
 seed: 42
@@ -49,6 +52,11 @@ checkpoint_dir: ${output_dir}/checkpoints
 
 # Task configuration inherited from configs/tasks/*.yaml
 # Override with: task=mortality_hospital, task=los_remaining, etc.
+
+# Label fraction for label-efficiency ablations
+# 1.0 = use all training data (default)
+# Lower values (e.g., 0.01, 0.05, 0.1) subsample the training set
+label_fraction: 1.0
 
 # Training configuration
 training:
@@ -84,7 +92,7 @@ training:
 
   # Early stopping
   # Monitor/mode are set automatically by task type in setup_callbacks():
-  #   classification -> val/auroc (max), regression -> val/mse (min)
+  #   classification -> val/auprc (max), regression -> val/mse (min)
   # Override here only if you need a non-default metric.
   early_stopping_patience: 10
 

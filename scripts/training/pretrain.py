@@ -104,7 +104,10 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if not cfg.logging.get("use_wandb", False):
         return None
 
-    tags = list(cfg.logging.get("wandb_tags", [])) or None
+    tags = list(cfg.logging.get("wandb_tags", []))
+    if cfg.get("sprint") is not None:
+        tags.append(f"sprint:{cfg.sprint}")
+    tags = tags or None
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),

@@ -10,7 +10,7 @@ Three masking strategies:
 - feature_block: Mask entire features for the full window
 - temporal_block: Mask contiguous hour blocks across all features
 
-For MAE models: use encoder + decoder to reconstruct.
+For MAE models: extracts encoder weights, uses a linear decoder for probing.
 For non-MAE models: train lightweight linear decoder (d_model -> d_input).
 
 Metrics: NRMSE per feature, MAE overall.
@@ -26,6 +26,66 @@ from torch.utils.data import DataLoader
 logger = logging.getLogger(__name__)
 
 
+class _ObsEncoderTimestepAdapter(nn.Module):
+    """Wraps ObservationTransformerEncoder to output (B, T, d_model).
+
+    The observation-level encoder produces (B, max_obs, d_model) with one
+    token per observed measurement. This adapter scatters encoded tokens
+    back to their original (timestep, feature) positions and averages
+    tokens that share the same timestep, yielding (B, T, d_model).
+    """
+
+    def __init__(self, encoder: nn.Module, seq_length: int) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.seq_length = seq_length
+
+    def get_output_dim(self) -> int:
+        return self.encoder.get_output_dim()
+
+    @property
+    def parameters_list(self):
+        return self.encoder.parameters()
+
+    def parameters(self, recurse: bool = True):
+        return self.encoder.parameters(recurse=recurse)
+
+    def forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
+        B, T, D = x.shape
+        device = x.device
+        d_model = self.encoder.get_output_dim()
+
+        if mask is None:
+            mask = torch.ones(B, T, D, dtype=torch.bool, device=device)
+
+        # Tokenize and encode
+        tokens, padding_mask, token_info = self.encoder.tokenize(x, mask)
+        encoded = self.encoder.encode(tokens, padding_mask)  # (B, max_obs, d_model)
+
+        # Scatter encoded tokens back to timestep positions
+        timestep_idx = token_info["timestep_idx"]  # (B, max_obs)
+        valid = padding_mask.float().unsqueeze(-1)  # (B, max_obs, 1)
+
+        # Mask padding tokens
+        encoded_valid = encoded * valid  # (B, max_obs, d_model)
+
+        # Scatter-add to timestep positions
+        output = torch.zeros(B, T, d_model, device=device)
+        counts = torch.zeros(B, T, 1, device=device)
+
+        t_idx_d = timestep_idx.unsqueeze(-1).expand(-1, -1, d_model)  # (B, max_obs, d_model)
+        t_idx_1 = timestep_idx.unsqueeze(-1)  # (B, max_obs, 1)
+
+        output.scatter_add_(1, t_idx_d, encoded_valid)
+        counts.scatter_add_(1, t_idx_1, valid)
+
+        # Average tokens per timestep (avoid div-by-zero)
+        output = output / counts.clamp(min=1)
+        return output
+
+
 class ImputationEvaluator:
     """Evaluate reconstruction quality of SSL embeddings.
 
@@ -34,8 +94,10 @@ class ImputationEvaluator:
     - feature_block: mask entire features for the full window
     - temporal_block: mask contiguous hour blocks across all features
 
-    For MAE models: use encoder + decoder to reconstruct.
-    For non-MAE models: train lightweight linear decoder (d_model -> d_input).
+    For all models (including MAE): uses a linear decoder that maps per-timestep
+    encoder representations to input features. For observation-level encoders
+    (e.g., ObservationTransformerEncoder), an adapter transparently converts
+    observation tokens back to timestep-level representations.
 
     Metrics: NRMSE per feature, MAE overall.
 
@@ -88,10 +150,15 @@ class ImputationEvaluator:
         device: str = "cpu",
         feature_names: Optional[List[str]] = None,
     ) -> "ImputationEvaluator":
-        """Load MAE encoder + decoder for direct reconstruction.
+        """Load MAE encoder for reconstruction evaluation.
 
-        Loads a full pretraining checkpoint (.ckpt) containing an MAE
-        objective with encoder and decoder.
+        Extracts the encoder from a full MAE pretraining checkpoint and
+        creates a linear decoder for probing reconstruction quality.
+
+        The MAE's native decoder operates in observation-token space which
+        is incompatible with the timestep-level masking used by evaluate().
+        Instead, we wrap the encoder with an adapter that scatters encoded
+        observation tokens back to timestep positions and use a linear decoder.
 
         Args:
             ckpt_path: Path to Lightning pretrain checkpoint (.ckpt).
@@ -99,10 +166,9 @@ class ImputationEvaluator:
             feature_names: Optional feature names for per-feature reporting.
 
         Returns:
-            ImputationEvaluator with MAE encoder and decoder.
+            ImputationEvaluator with MAE encoder (adapted) and linear decoder.
         """
         from slices.models.encoders import build_encoder
-        from slices.models.pretraining.mae import MAEConfig, MAEDecoder
 
         checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
         state_dict = checkpoint["state_dict"]
@@ -111,7 +177,7 @@ class ImputationEvaluator:
         hyper_params = checkpoint["hyper_parameters"]["config"]
         encoder_cfg = dict(hyper_params["encoder"])
         encoder_name = encoder_cfg.pop("name")
-        # Force pooling=none for per-timestep reconstruction
+        # Force pooling=none for per-token output (adapter handles the rest)
         encoder_cfg["pooling"] = "none"
         encoder = build_encoder(encoder_name, encoder_cfg)
 
@@ -119,27 +185,18 @@ class ImputationEvaluator:
         encoder_state_dict = {k[8:]: v for k, v in state_dict.items() if k.startswith("encoder.")}
         encoder.load_state_dict(encoder_state_dict)
 
-        # Rebuild decoder
-        ssl_cfg = hyper_params.get("ssl", {})
-        d_encoder = encoder.get_output_dim()
         d_input = encoder.config.d_input
-        mae_config = MAEConfig(**{k: v for k, v in ssl_cfg.items() if k != "name"})
-        decoder = MAEDecoder(d_encoder, d_input, mae_config)
+        seq_length = encoder.config.max_seq_length
 
-        # Load decoder weights
-        decoder_state_dict = {
-            k.replace("ssl_objective.decoder.", ""): v
-            for k, v in state_dict.items()
-            if k.startswith("ssl_objective.decoder.")
-        }
-        decoder.load_state_dict(decoder_state_dict)
+        # Wrap observation-level encoder for timestep-level output
+        if hasattr(encoder, "tokenize"):
+            encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
 
         encoder = encoder.to(device).eval()
-        decoder = decoder.to(device).eval()
 
         return cls(
             encoder=encoder,
-            decoder=decoder,
+            decoder=None,
             d_input=d_input,
             feature_names=feature_names,
         )
@@ -157,6 +214,9 @@ class ImputationEvaluator:
         Loads an encoder checkpoint (.pt file, v3 format) and creates
         a lightweight decoder for reconstruction evaluation.
 
+        For observation-level encoders (ObservationTransformerEncoder),
+        wraps with an adapter for timestep-level output.
+
         Args:
             ckpt_path: Path to encoder checkpoint (.pt).
             d_input: Input feature dimension.
@@ -173,10 +233,15 @@ class ImputationEvaluator:
         if isinstance(checkpoint, dict) and "encoder_config" in checkpoint:
             encoder_config = dict(checkpoint["encoder_config"])
             encoder_name = encoder_config.pop("name")
-            # Force pooling=none for per-timestep reconstruction
+            # Force pooling=none for per-token/per-timestep reconstruction
             encoder_config["pooling"] = "none"
             encoder = build_encoder(encoder_name, encoder_config)
             encoder.load_state_dict(checkpoint["encoder_state_dict"])
+
+            # Wrap observation-level encoder for timestep-level output
+            seq_length = encoder_config.get("max_seq_length", 168)
+            if hasattr(encoder, "tokenize"):
+                encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
         else:
             raise ValueError(
                 "Checkpoint does not contain encoder_config. "

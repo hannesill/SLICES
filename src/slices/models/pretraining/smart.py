@@ -358,7 +358,7 @@ class SMARTObjective(BaseSSLObjective):
 
             metrics = {
                 "smart_loss": loss.detach(),
-                "reconstruction_loss": loss.detach(),  # Alias for consistent naming
+                "ssl_loss": loss.detach(),
                 "smart_loss_masked": loss.detach(),
                 "smart_loss_visible": visible_loss,
                 "smart_mask_ratio_actual": n_masked / n_total,

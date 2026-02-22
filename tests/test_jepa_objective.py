@@ -193,7 +193,7 @@ class TestJEPAForward:
         assert loss.item() >= 0
         assert not torch.isnan(loss)
         assert "jepa_loss" in metrics
-        assert "reconstruction_loss" in metrics
+        assert "ssl_loss" in metrics
         assert "jepa_mask_ratio_actual" in metrics
         assert "jepa_n_tokens_per_sample" in metrics
         assert "jepa_n_visible_per_sample" in metrics
