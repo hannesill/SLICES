@@ -31,3 +31,11 @@ TEST_RATIO: float = 0.15
 # =============================================================================
 NORMALIZE: bool = True
 PIN_MEMORY: bool = True
+
+# =============================================================================
+# Feature Blocklist
+# =============================================================================
+# RICU concepts that leak downstream task labels and must be excluded from
+# model input. los_hosp / los_icu are updated hourly by RICU and directly
+# reveal the length-of-stay answer.
+FEATURE_BLOCKLIST: frozenset = frozenset({"los_hosp", "los_icu"})
