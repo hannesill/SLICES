@@ -6,7 +6,6 @@ from .aki import AKILabelBuilder
 from .base import LabelBuilder, LabelConfig
 from .los import LOSLabelBuilder
 from .mortality import MortalityLabelBuilder
-from .phenotyping import PhenotypingLabelBuilder
 
 
 class LabelBuilderFactory:
@@ -23,7 +22,6 @@ class LabelBuilderFactory:
         "aki": AKILabelBuilder,
         "los": LOSLabelBuilder,
         "mortality": MortalityLabelBuilder,
-        "phenotyping": PhenotypingLabelBuilder,
     }
 
     @classmethod
