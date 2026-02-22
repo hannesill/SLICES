@@ -235,6 +235,12 @@ mypy src/
 - **Patient-level splits**: No data leakage between train/val/test.
 - **Config-driven ablations**: Change one YAML default to switch paradigm, encoder, or task.
 
+## Extending SLICES
+
+<!-- TODO: Create EXTENDING_SLICES.md documenting how to add new downstream tasks, SSL objectives, encoder architectures, and datasets using the existing factory patterns. -->
+
+The framework uses factory patterns throughout, making it straightforward to add new components. See `EXTENDING_SLICES.md` (coming soon) for details on adding new downstream tasks, SSL objectives, encoder architectures, and datasets.
+
 ## References
 
 - **MIMIC-IV**: Johnson, A. E. W., et al. (2023). MIMIC-IV, a freely accessible electronic health record dataset. *Scientific Data*.

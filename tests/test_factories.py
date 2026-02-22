@@ -320,7 +320,7 @@ class TestTaskHeadFactory:
         """Building multiclass task head should output correct dimensions."""
         config = TaskHeadConfig(
             name="mlp",
-            task_name="phenotype",
+            task_name="multiclass_task",
             task_type="multiclass",
             n_classes=10,
             input_dim=64,

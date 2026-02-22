@@ -1,6 +1,6 @@
 """Label extraction and builders.
 
-This module handles label extraction for downstream tasks (mortality, phenotyping, etc.).
+This module handles label extraction for downstream tasks (mortality, AKI, LOS, etc.).
 Separate from src/slices/models/heads/ which contains model prediction heads for finetuning.
 """
 
@@ -9,7 +9,6 @@ from .base import LabelBuilder, LabelConfig
 from .factory import LabelBuilderFactory
 from .los import LOSLabelBuilder
 from .mortality import MortalityLabelBuilder
-from .phenotyping import PhenotypingLabelBuilder
 
 __all__ = [
     "AKILabelBuilder",
@@ -18,5 +17,4 @@ __all__ = [
     "LabelBuilderFactory",
     "LOSLabelBuilder",
     "MortalityLabelBuilder",
-    "PhenotypingLabelBuilder",
 ]

@@ -687,7 +687,6 @@ class ICUDataset(Dataset):
             logger.debug(f"Extracting labels for task '{self.task_name}'")
 
             # Detect multi-label tasks: look for columns prefixed with "{task_name}_"
-            # e.g., phenotyping_sepsis, phenotyping_respiratory_failure, ...
             multilabel_cols = [
                 col for col in self.labels_df.columns if col.startswith(f"{self.task_name}_")
             ]
@@ -836,7 +835,7 @@ class ICUDataset(Dataset):
         """Compute label statistics for each task.
 
         For single-label tasks, returns {total, positive, negative, prevalence}.
-        For multi-label tasks (detected by prefixed columns like phenotyping_sepsis),
+        For multi-label tasks (detected by prefixed columns like {task_name}_{subtask}),
         returns per-subtask prevalence and an aggregate mean prevalence.
 
         Returns:
@@ -855,7 +854,7 @@ class ICUDataset(Dataset):
                     "prevalence": positive / total if total > 0 else 0.0,
                 }
             else:
-                # Check for multi-label columns (e.g., phenotyping_sepsis, ...)
+                # Check for multi-label columns (e.g., {task_name}_{subtask}, ...)
                 multilabel_cols = [
                     c for c in self.labels_df.columns if c.startswith(f"{task_name}_")
                 ]
