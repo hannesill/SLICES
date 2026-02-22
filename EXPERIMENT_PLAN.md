@@ -22,7 +22,7 @@ Secondary questions addressed through ablations:
 |----------|--------|-------|
 | **Dataset** | MIMIC-IV, eICU, Combined | Combined = pooled pretraining corpus |
 | **Paradigm** | MAE (reconstruction), JEPA (self-distillation), Contrastive, Supervised | Supervised = no pretraining baseline |
-| **Downstream Task** | mortality_24h, mortality_hospital, decompensation, aki_kdigo, los_remaining | 4 classification + 1 regression |
+| **Downstream Task** | mortality_24h, mortality_hospital, aki_kdigo, los_remaining | 3 classification + 1 regression |
 | **Seed** | 42, 123, 456 | 3 seeds for statistical significance |
 
 ### 1.2 Controlled Variables (Held Constant)
@@ -106,7 +106,6 @@ All paradigms use identical finetuning protocol:
 |------|------|---------------|-------------------|
 | mortality_24h | Binary classification | AUPRC | AUROC, Brier score, ECE |
 | mortality_hospital | Binary classification | AUPRC | AUROC, Brier score, ECE |
-| decompensation | Binary classification | AUPRC | AUROC |
 | aki_kdigo | Binary classification | AUPRC | AUROC |
 | los_remaining | Regression | MAE | MSE, R² |
 
@@ -159,25 +158,25 @@ Min subgroup size: 50 patients. Groups below threshold are excluded from fairnes
 | P8 | Combined | JEPA | ObservationTransformer | ssl=jepa model=observation_transformer |
 | P9 | Combined | Contrastive | ObservationTransformer | ssl=contrastive model=observation_transformer |
 
-### 4.2 Phase 2: Downstream Evaluation (60 runs × 3 seeds = 180 runs)
+### 4.2 Phase 2: Downstream Evaluation (48 runs × 3 seeds = 144 runs)
 
-Each of the 9 pretrained encoders is finetuned on 5 downstream tasks (45 SSL finetuning runs).
-Each of the 3 datasets gets a supervised baseline on 5 tasks (15 supervised runs).
+Each of the 9 pretrained encoders is finetuned on 4 downstream tasks (36 SSL finetuning runs).
+Each of the 3 datasets gets a supervised baseline on 4 tasks (12 supervised runs).
 
 **Result Tables** (one per dataset):
 
 #### MIMIC-IV Results
 
-| | mortality_24h | mortality_hospital | decompensation | aki_kdigo | los_remaining |
-|---|---|---|---|---|---|
-| **MAE** | AUPRC ± std | AUPRC ± std | AUPRC ± std | AUPRC ± std | MAE ± std |
-| **JEPA** | | | | | |
-| **Contrastive** | | | | | |
-| **Supervised** | | | | | |
+| | mortality_24h | mortality_hospital | aki_kdigo | los_remaining |
+|---|---|---|---|---|
+| **MAE** | AUPRC ± std | AUPRC ± std | AUPRC ± std | MAE ± std |
+| **JEPA** | | | | |
+| **Contrastive** | | | | |
+| **Supervised** | | | | |
 
 Same table structure for eICU and Combined.
 
-### 4.3 Phase 3: Fairness Evaluation (on all 60 downstream runs)
+### 4.3 Phase 3: Fairness Evaluation (on all 48 downstream runs)
 
 No additional training. Compute fairness metrics on test predictions from Phase 2.
 
@@ -205,8 +204,8 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | Scope | Tasks | Label Fractions | Runs |
 |-------|-------|----------------|------|
 | Full sweep | mortality_24h (anchor task) | 1%, 5%, 10%, 25%, 50%, 100% | 4 paradigms × 3 datasets × 6 fractions = 72 |
-| Trend check | Remaining 4 tasks | 10%, 100% | 4 paradigms × 3 datasets × 4 tasks × 2 fractions = 96 |
-| **Total** | | | **168 runs × 3 seeds = 504 runs** |
+| Trend check | Remaining 3 tasks | 10%, 100% | 4 paradigms × 3 datasets × 3 tasks × 2 fractions = 72 |
+| **Total** | | | **144 runs × 3 seeds = 432 runs** |
 
 **Expected finding**: SSL paradigms should outperform supervised at ≤10% labels. The label fraction at which supervised catches up (crossover point) is a key metric.
 
@@ -220,9 +219,9 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 | Source → Target | Paradigms | Tasks | Runs |
 |-----------------|-----------|-------|------|
-| MIMIC-IV → eICU | MAE, JEPA, Contrastive | All 5 | 15 |
-| eICU → MIMIC-IV | MAE, JEPA, Contrastive | All 5 | 15 |
-| **Total** | | | **30 runs × 3 seeds = 90 runs** |
+| MIMIC-IV → eICU | MAE, JEPA, Contrastive | All 4 | 12 |
+| eICU → MIMIC-IV | MAE, JEPA, Contrastive | All 4 | 12 |
+| **Total** | | | **24 runs × 3 seeds = 72 runs** |
 
 **Baselines for comparison** (from main experiments, no extra runs):
 - In-domain pretraining (pretrain and finetune on same dataset)
@@ -256,12 +255,12 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | Phase | Description | Runs | × 3 seeds | Cumulative |
 |-------|-------------|------|-----------|------------|
 | Phase 1 | Pretraining | 9 | 27 | 27 |
-| Phase 2 | Downstream finetuning | 60 | 180 | 207 |
-| Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 207 |
-| Ablation 5.1 | Label efficiency | 168 | 504 | 711 |
-| Ablation 5.2 | Cross-dataset transfer | 30 | 90 | 801 |
-| Ablation 5.3 | Mask ratio sensitivity | 12 | 36 | 837 |
-| **Total** | | **279** | **837** | |
+| Phase 2 | Downstream finetuning | 48 | 144 | 171 |
+| Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 171 |
+| Ablation 5.1 | Label efficiency | 144 | 432 | 603 |
+| Ablation 5.2 | Cross-dataset transfer | 24 | 72 | 675 |
+| Ablation 5.3 | Mask ratio sensitivity | 12 | 36 | 711 |
+| **Total** | | **237** | **711** | |
 
 ---
 
@@ -274,29 +273,29 @@ Priority ordering for incremental results and early debugging:
 2. Verify: training converges, metrics are reasonable, pipeline end-to-end works
 3. Check gradient step counts across paradigms — adjust epoch budgets if needed
 
-### Sprint 2: First Full Dataset (20 runs)
-4. MIMIC-IV, all 4 paradigms × 5 tasks, seed=42
+### Sprint 2: First Full Dataset (16 runs)
+4. MIMIC-IV, all 4 paradigms × 4 tasks, seed=42
 5. Produces first complete results table for one dataset
 6. Write preliminary results section
 
-### Sprint 3: Generalization (20 runs)
-7. eICU, all 4 paradigms × 5 tasks, seed=42
+### Sprint 3: Generalization (16 runs)
+7. eICU, all 4 paradigms × 4 tasks, seed=42
 8. Cross-dataset comparison possible
 
-### Sprint 4: Scaling (20 runs)
-9. Combined dataset, all 4 paradigms × 5 tasks, seed=42
+### Sprint 4: Scaling (16 runs)
+9. Combined dataset, all 4 paradigms × 4 tasks, seed=42
 10. All three main result tables complete (single seed)
 
-### Sprint 5: Statistical Robustness (120 runs)
+### Sprint 5: Statistical Robustness (96 runs)
 11. Seeds 123 and 456 for all Sprint 2–4 runs
 12. Compute mean ± std, run statistical tests
 
-### Sprint 6: Label Efficiency Ablation (504 runs)
+### Sprint 6: Label Efficiency Ablation (432 runs)
 13. Full sweep on mortality_24h anchor
 14. Trend check on remaining tasks
 15. Generate learning curve plots
 
-### Sprint 7: Transfer Ablation (90 runs)
+### Sprint 7: Transfer Ablation (72 runs)
 16. Cross-dataset transfer experiments
 17. Compare against in-domain baselines
 
@@ -322,7 +321,7 @@ All runs logged to W&B project `slices`.
 Examples:
 - `pretrain_mimic_mae_seed42`
 - `finetune_eicu_jepa_mortality24h_seed123`
-- `supervised_combined_decompensation_seed456`
+- `supervised_combined_aki_kdigo_seed456`
 - `ablation-label_mimic_mae_mortality24h_frac10_seed42`
 - `ablation-transfer_mimic2eicu_contrastive_aki_seed42`
 
