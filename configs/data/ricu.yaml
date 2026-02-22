@@ -33,7 +33,7 @@ ricu_output_dir: data/ricu_output/miiv
 processed_dir: data/processed/miiv
 
 # Parquet root is set to ricu_output_dir (used by ExtractorConfig)
-parquet_root: ${ricu_output_dir}
+parquet_root: ${.ricu_output_dir}
 
 # =============================================================================
 # EXTRACTION SETTINGS
