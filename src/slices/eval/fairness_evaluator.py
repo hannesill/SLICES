@@ -23,6 +23,7 @@ from torchmetrics.classification import BinaryAveragePrecision
 
 from slices.eval.fairness import (
     demographic_parity_difference,
+    disparate_impact_ratio,
     equalized_odds_difference,
 )
 
@@ -280,6 +281,7 @@ class FairnessEvaluator:
         eo_diff = equalized_odds_difference(
             labels[valid_mask], predictions[valid_mask], group_ids[valid_mask]
         )
+        di_ratio = disparate_impact_ratio(predictions[valid_mask], group_ids[valid_mask])
 
         return {
             "per_group_auroc": per_group_auroc,
@@ -290,6 +292,7 @@ class FairnessEvaluator:
             "auprc_gap": auprc_gap,
             "demographic_parity_diff": dp_diff,
             "equalized_odds_diff": eo_diff,
+            "disparate_impact_ratio": di_ratio,
             "n_valid_groups": len(valid_groups),
             "group_sizes": group_sizes,
         }
@@ -394,6 +397,13 @@ class FairnessEvaluator:
                     print(f"  Equalized odds diff: {eo:.4f}")
                 else:
                     print("  Equalized odds diff: N/A (undefined for some groups)")
+                di = metrics.get("disparate_impact_ratio", float("nan"))
+                if isinstance(di, float) and di == di:
+                    print(f"  Disparate impact ratio: {di:.4f}")
+                    if di < 0.8:
+                        print("    -> Below 0.8 threshold (adverse impact)")
+                else:
+                    print("  Disparate impact ratio: N/A")
 
             elif "per_group_mse" in metrics:
                 # Regression report

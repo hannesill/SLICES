@@ -21,6 +21,9 @@ experiment_name: jepa_pretrain
 dataset: mimic  # mimic | eicu | combined
 paradigm: jepa  # mae | jepa | contrastive
 
+# Experiment sprint (for W&B filtering, e.g. sprint=1)
+sprint: null
+
 # Random seed for reproducibility
 seed: 42
 

@@ -4,6 +4,7 @@ This module wraps encoder and SSL objective for end-to-end training with
 Lightning's training loop, logging, checkpointing, and distributed training.
 """
 
+import time
 from typing import Any, Dict, Tuple
 
 import lightning.pytorch as pl
@@ -86,6 +87,13 @@ class SSLPretrainModule(pl.LightningModule):
         self.optimizer_config = config.optimizer
         self.scheduler_config = config.get("scheduler", None)
 
+        # Track wall-clock time for budget equalization
+        self._training_start_time: float = 0.0
+
+    def on_train_start(self) -> None:
+        """Record training start time for wall-clock tracking."""
+        self._training_start_time = time.monotonic()
+
     def forward(
         self,
         timeseries: torch.Tensor,
@@ -141,6 +149,12 @@ class SSLPretrainModule(pl.LightningModule):
                 on_epoch=True,
                 sync_dist=True,
             )
+
+        # Log budget metrics for cross-paradigm equalization
+        self.log("train/gradient_steps", float(self.global_step), on_step=True, on_epoch=False)
+        if self._training_start_time > 0:
+            elapsed = time.monotonic() - self._training_start_time
+            self.log("train/wall_clock_seconds", elapsed, on_step=True, on_epoch=False)
 
         return loss
 
@@ -262,10 +276,13 @@ class SSLPretrainModule(pl.LightningModule):
             missing_token = self.ssl_objective.missing_token
             d_input = self.encoder.config.d_input
 
+        ssl_name = self.config.ssl.name if hasattr(self.config, "ssl") else None
+
         save_encoder_checkpoint(
             encoder=self.encoder,
             encoder_config=encoder_config,
             path=path,
             missing_token=missing_token,
             d_input=d_input,
+            ssl_name=ssl_name,
         )

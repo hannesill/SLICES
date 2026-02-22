@@ -21,7 +21,7 @@ name: transformer
 # Input/Output dimensions
 # d_input is typically set automatically from data config
 d_model: 64  # Model dimension (embedding size)
-max_seq_length: 168  # Maximum sequence length in hours (7 days)
+max_seq_length: 168  # Default; overridden at runtime by datamodule.get_seq_length() (48h)
 
 # Transformer architecture
 n_layers: 2  # Number of transformer encoder layers

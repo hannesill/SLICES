@@ -5,8 +5,8 @@ triplet. The encoder only sees visible (unmasked) tokens, matching the original 
 
 Architecture:
 1. ObservationTransformerEncoder.tokenize() → one token per observed measurement
-2. Random mask: 75% of observation tokens are masked
-3. Encoder processes only visible tokens (25%)
+2. Random mask: 50% of observation tokens are masked (configurable via mask_ratio)
+3. Encoder processes only visible tokens (50%)
 4. Decoder reassembles full sequence (visible + mask tokens), predicts scalar values
 5. MSE loss on masked token values only
 """
@@ -33,7 +33,7 @@ class MAEConfig(SSLConfig):
     name: str = "mae"
 
     # Masking
-    mask_ratio: float = 0.75  # Fraction of observation tokens to mask
+    mask_ratio: float = 0.5  # Fraction of observation tokens to mask
 
     # Decoder parameters
     decoder_d_model: int = 128
@@ -314,7 +314,7 @@ class MAEObjective(BaseSSLObjective):
 
             metrics = {
                 "mae_loss": loss.detach(),
-                "reconstruction_loss": loss.detach(),
+                "ssl_loss": loss.detach(),
                 "mae_recon_loss_masked": loss.detach(),
                 "mae_recon_loss_visible": visible_loss,
                 "mae_mask_ratio_actual": n_masked / max(n_total_tokens, 1),

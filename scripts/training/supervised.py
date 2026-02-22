@@ -14,7 +14,7 @@ Example usage:
     uv run python scripts/training/supervised.py
 
     # Different task
-    uv run python scripts/training/supervised.py task.task_name=mortality_hospital
+    uv run python scripts/training/supervised.py tasks=mortality_hospital
 
     # Resume interrupted training
     uv run python scripts/training/supervised.py ckpt_path=outputs/.../checkpoints/last.ckpt
@@ -58,11 +58,11 @@ def setup_callbacks(cfg: DictConfig) -> list:
     if task_type == "regression":
         default_monitor, default_mode = "val/mse", "min"
     else:
-        default_monitor, default_mode = "val/auroc", "max"
+        default_monitor, default_mode = "val/auprc", "max"
     monitor = cfg.training.get("early_stopping_monitor", default_monitor)
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
-    # Convert metric name for filename (val/auroc -> val_auroc)
+    # Convert metric name for filename (val/auprc -> val_auprc)
     metric_filename = monitor.replace("/", "_")
 
     checkpoint_callback = ModelCheckpoint(
@@ -105,7 +105,10 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if not cfg.logging.get("use_wandb", False):
         return None
 
-    tags = list(cfg.logging.get("wandb_tags", [])) or None
+    tags = list(cfg.logging.get("wandb_tags", []))
+    if cfg.get("sprint") is not None:
+        tags.append(f"sprint:{cfg.sprint}")
+    tags = tags or None
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
@@ -122,15 +125,17 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     return logger
 
 
-def compute_baseline_metrics(datamodule, task_name: str) -> dict:
+def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binary") -> dict:
     """Compute baseline metrics for comparison.
 
-    Computes AUROC for random predictions and majority-class predictions
-    to provide context for the model's performance.
+    For classification tasks, computes AUROC for random predictions and
+    majority-class predictions. For regression tasks, computes mean/median
+    predictor baselines.
 
     Args:
         datamodule: Data module with test set loaded.
         task_name: Name of the task being evaluated.
+        task_type: Type of task ("binary", "multiclass", or "regression").
 
     Returns:
         Dictionary with baseline metrics.
@@ -149,28 +154,41 @@ def compute_baseline_metrics(datamodule, task_name: str) -> dict:
         return baselines
 
     labels_tensor = torch.tensor(labels)
-
-    # Compute class distribution
     n_samples = len(labels_tensor)
-    n_positive = labels_tensor.sum().item()
-    n_negative = n_samples - n_positive
-    positive_ratio = n_positive / n_samples
-
     baselines["test/n_samples"] = n_samples
-    baselines["test/n_positive"] = n_positive
-    baselines["test/n_negative"] = n_negative
-    baselines["test/positive_ratio"] = positive_ratio
 
-    # Random baseline AUROC is always 0.5
-    baselines["baseline/random_auroc"] = 0.5
+    if task_type == "regression":
+        # Regression baselines: mean and median predictor
+        mean_label = labels_tensor.mean().item()
+        median_label = labels_tensor.median().item()
+        baselines["test/label_mean"] = mean_label
+        baselines["test/label_std"] = labels_tensor.std().item()
+        # MSE of mean predictor (best constant predictor under MSE)
+        baselines["baseline/mean_predictor_mse"] = (labels_tensor - mean_label).pow(2).mean().item()
+        # MAE of median predictor (best constant predictor under MAE)
+        baselines["baseline/median_predictor_mae"] = (
+            (labels_tensor - median_label).abs().mean().item()
+        )
+    else:
+        # Classification baselines
+        n_positive = labels_tensor.sum().item()
+        n_negative = n_samples - n_positive
+        positive_ratio = n_positive / n_samples
 
-    # Majority class accuracy
-    majority_class_accuracy = max(positive_ratio, 1 - positive_ratio)
-    baselines["baseline/majority_accuracy"] = majority_class_accuracy
+        baselines["test/n_positive"] = n_positive
+        baselines["test/n_negative"] = n_negative
+        baselines["test/positive_ratio"] = positive_ratio
 
-    # Majority class "AUROC" - if predicting all same class, AUROC is undefined
-    # but we can note what the trivial predictor would achieve
-    baselines["baseline/trivial_auroc"] = 0.5  # Same as random for AUROC
+        # Random baseline AUROC is always 0.5
+        baselines["baseline/random_auroc"] = 0.5
+
+        # Majority class accuracy
+        majority_class_accuracy = max(positive_ratio, 1 - positive_ratio)
+        baselines["baseline/majority_accuracy"] = majority_class_accuracy
+
+        # Majority class "AUROC" - if predicting all same class, AUROC is undefined
+        # but we can note what the trivial predictor would achieve
+        baselines["baseline/trivial_auroc"] = 0.5  # Same as random for AUROC
 
     return baselines
 
@@ -259,6 +277,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.get("num_workers", 4),
         seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
     )
 
     # Setup data
@@ -306,6 +325,7 @@ def main(cfg: DictConfig) -> None:
     # Inject d_input from data into encoder config
     OmegaConf.set_struct(cfg, False)
     cfg.encoder.d_input = datamodule.get_feature_dim()
+    cfg.encoder.max_seq_length = datamodule.get_seq_length()
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
@@ -423,8 +443,9 @@ def main(cfg: DictConfig) -> None:
     test_results = trainer.test(model, datamodule=datamodule)
 
     # Compute baseline metrics
+    task_type = cfg.task.get("task_type", "binary")
     print("\n Computing baseline metrics...")
-    baseline_metrics = compute_baseline_metrics(datamodule, task_name)
+    baseline_metrics = compute_baseline_metrics(datamodule, task_name, task_type)
 
     # =========================================================================
     # 7. Fairness Evaluation (optional)
@@ -503,25 +524,51 @@ def main(cfg: DictConfig) -> None:
 
         # Print baseline comparison
         print("\n Baseline Comparison:")
-        if "baseline/random_auroc" in baseline_metrics:
-            print(f"  - Random AUROC: {baseline_metrics['baseline/random_auroc']:.4f}")
-        if "baseline/majority_accuracy" in baseline_metrics:
-            print(
-                f"  - Majority class accuracy: {baseline_metrics['baseline/majority_accuracy']:.4f}"
-            )
+        if task_type == "regression":
+            if "baseline/mean_predictor_mse" in baseline_metrics:
+                print(
+                    f"  - Mean predictor MSE: "
+                    f"{baseline_metrics['baseline/mean_predictor_mse']:.4f}"
+                )
+            if "baseline/median_predictor_mae" in baseline_metrics:
+                print(
+                    f"  - Median predictor MAE: "
+                    f"{baseline_metrics['baseline/median_predictor_mae']:.4f}"
+                )
+            # Compare model to baselines
+            if (
+                "test/mae" in test_results[0]
+                and "baseline/median_predictor_mae" in baseline_metrics
+            ):
+                model_mae = test_results[0]["test/mae"]
+                baseline_mae = baseline_metrics["baseline/median_predictor_mae"]
+                improvement = baseline_mae - model_mae
+                print(f"\n  Model vs Median Predictor: {improvement:+.4f} MAE")
+                if improvement > 0:
+                    print("  -> Model outperforms trivial baseline")
+                else:
+                    print("  -> WARNING: Model performs at or below trivial baseline!")
+        else:
+            if "baseline/random_auroc" in baseline_metrics:
+                print(f"  - Random AUROC: {baseline_metrics['baseline/random_auroc']:.4f}")
+            if "baseline/majority_accuracy" in baseline_metrics:
+                print(
+                    f"  - Majority class accuracy: "
+                    f"{baseline_metrics['baseline/majority_accuracy']:.4f}"
+                )
 
-        # Compare model to baselines
-        if "test/auroc" in test_results[0] and "baseline/random_auroc" in baseline_metrics:
-            model_auroc = test_results[0]["test/auroc"]
-            random_auroc = baseline_metrics["baseline/random_auroc"]
-            improvement = model_auroc - random_auroc
-            print(f"\n  Model vs Random: +{improvement:.4f} AUROC")
-            if improvement > 0.05:
-                print("  -> Model shows meaningful learning above random baseline")
-            elif improvement > 0:
-                print("  -> Model shows marginal improvement over random")
-            else:
-                print("  -> WARNING: Model performs at or below random baseline!")
+            # Compare model to baselines
+            if "test/auroc" in test_results[0] and "baseline/random_auroc" in baseline_metrics:
+                model_auroc = test_results[0]["test/auroc"]
+                random_auroc = baseline_metrics["baseline/random_auroc"]
+                improvement = model_auroc - random_auroc
+                print(f"\n  Model vs Random: +{improvement:.4f} AUROC")
+                if improvement > 0.05:
+                    print("  -> Model shows meaningful learning above random baseline")
+                elif improvement > 0:
+                    print("  -> Model shows marginal improvement over random")
+                else:
+                    print("  -> WARNING: Model performs at or below random baseline!")
 
     # Log test results and baseline metrics to W&B summary for easy retrieval
     if logger:
