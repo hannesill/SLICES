@@ -11,118 +11,35 @@ Key differences from finetuning:
 
 Example usage:
     # Train supervised baseline on default task (mortality_24h)
-    uv run python scripts/training/supervised.py
+    uv run python scripts/training/supervised.py dataset=miiv
 
     # Different task
-    uv run python scripts/training/supervised.py tasks=mortality_hospital
+    uv run python scripts/training/supervised.py dataset=miiv tasks=mortality_hospital
+
+    # Different dataset
+    uv run python scripts/training/supervised.py dataset=eicu
 
     # Resume interrupted training
-    uv run python scripts/training/supervised.py ckpt_path=outputs/.../checkpoints/last.ckpt
-
-    # With W&B logging
-    uv run python scripts/training/supervised.py logging.use_wandb=true
+    uv run python scripts/training/supervised.py \
+        dataset=miiv ckpt_path=outputs/.../checkpoints/last.ckpt
 """
 
 from pathlib import Path
-from typing import Optional
 
 import hydra
 import lightning.pytorch as pl
 import torch
-from lightning.pytorch.callbacks import (
-    EarlyStopping,
-    LearningRateMonitor,
-    ModelCheckpoint,
-)
-from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 from slices.data.datamodule import ICUDataModule
+from slices.models.encoders import EncoderWithMissingToken
 from slices.training import FineTuneModule
-from slices.training.utils import save_encoder_checkpoint
-
-
-def setup_callbacks(cfg: DictConfig) -> list:
-    """Set up training callbacks.
-
-    Args:
-        cfg: Configuration object.
-
-    Returns:
-        List of Lightning callbacks.
-    """
-    callbacks = []
-
-    # Model checkpointing — use task-type-aware defaults so regression
-    # tasks don't silently monitor a non-existent classification metric.
-    task_type = cfg.task.get("task_type", "binary")
-    if task_type == "regression":
-        default_monitor, default_mode = "val/mse", "min"
-    else:
-        default_monitor, default_mode = "val/auprc", "max"
-    monitor = cfg.training.get("early_stopping_monitor", default_monitor)
-    mode = cfg.training.get("early_stopping_mode", default_mode)
-
-    # Convert metric name for filename (val/auprc -> val_auprc)
-    metric_filename = monitor.replace("/", "_")
-
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename=f"supervised-{{epoch:03d}}-{{{metric_filename}:.4f}}",
-        monitor=monitor,
-        mode=mode,
-        save_top_k=3,
-        save_last=True,
-        verbose=True,
-    )
-    callbacks.append(checkpoint_callback)
-
-    # Early stopping
-    if cfg.training.get("early_stopping_patience", None):
-        early_stopping = EarlyStopping(
-            monitor=monitor,
-            patience=cfg.training.early_stopping_patience,
-            mode=mode,
-            verbose=True,
-        )
-        callbacks.append(early_stopping)
-
-    # Learning rate monitor
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-    callbacks.append(lr_monitor)
-
-    return callbacks
-
-
-def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
-    """Set up experiment logger.
-
-    Args:
-        cfg: Configuration object.
-
-    Returns:
-        Logger instance or None.
-    """
-    if not cfg.logging.get("use_wandb", False):
-        return None
-
-    tags = list(cfg.logging.get("wandb_tags", []))
-    if cfg.get("sprint") is not None:
-        tags.append(f"sprint:{cfg.sprint}")
-    tags = tags or None
-    logger = WandbLogger(
-        project=cfg.logging.wandb_project,
-        entity=cfg.logging.get("wandb_entity", None),
-        name=cfg.logging.get("run_name", None),
-        group=cfg.logging.get("wandb_group", None),
-        tags=tags,
-        save_dir=cfg.output_dir,
-        log_model=False,
-    )
-
-    # Log configuration
-    logger.experiment.config.update(OmegaConf.to_container(cfg, resolve=True))
-
-    return logger
+from slices.training.utils import (
+    run_fairness_evaluation,
+    save_encoder_checkpoint,
+    setup_finetune_callbacks,
+    setup_wandb_logger,
+    validate_data_prerequisites,
+)
 
 
 def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binary") -> dict:
@@ -131,18 +48,9 @@ def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binar
     For classification tasks, computes AUROC for random predictions and
     majority-class predictions. For regression tasks, computes mean/median
     predictor baselines.
-
-    Args:
-        datamodule: Data module with test set loaded.
-        task_name: Name of the task being evaluated.
-        task_type: Type of task ("binary", "multiclass", or "regression").
-
-    Returns:
-        Dictionary with baseline metrics.
     """
     baselines = {}
 
-    # Get test labels
     test_dataset = datamodule.test_dataloader().dataset
     labels = []
     for i in range(len(test_dataset)):
@@ -158,19 +66,15 @@ def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binar
     baselines["test/n_samples"] = n_samples
 
     if task_type == "regression":
-        # Regression baselines: mean and median predictor
         mean_label = labels_tensor.mean().item()
         median_label = labels_tensor.median().item()
         baselines["test/label_mean"] = mean_label
         baselines["test/label_std"] = labels_tensor.std().item()
-        # MSE of mean predictor (best constant predictor under MSE)
         baselines["baseline/mean_predictor_mse"] = (labels_tensor - mean_label).pow(2).mean().item()
-        # MAE of median predictor (best constant predictor under MAE)
         baselines["baseline/median_predictor_mae"] = (
             (labels_tensor - median_label).abs().mean().item()
         )
     else:
-        # Classification baselines
         n_positive = labels_tensor.sum().item()
         n_negative = n_samples - n_positive
         positive_ratio = n_positive / n_samples
@@ -178,37 +82,16 @@ def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binar
         baselines["test/n_positive"] = n_positive
         baselines["test/n_negative"] = n_negative
         baselines["test/positive_ratio"] = positive_ratio
-
-        # Random baseline AUROC is always 0.5
         baselines["baseline/random_auroc"] = 0.5
-
-        # Majority class accuracy
         majority_class_accuracy = max(positive_ratio, 1 - positive_ratio)
         baselines["baseline/majority_accuracy"] = majority_class_accuracy
-
-        # Majority class "AUROC" - if predicting all same class, AUROC is undefined
-        # but we can note what the trivial predictor would achieve
-        baselines["baseline/trivial_auroc"] = 0.5  # Same as random for AUROC
+        baselines["baseline/trivial_auroc"] = 0.5
 
     return baselines
 
 
 def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str) -> Path:
-    """Save encoder weights to a .pt file in v3 checkpoint format.
-
-    Uses the shared save_encoder_checkpoint helper to ensure consistent
-    checkpoint format across all training scripts.
-
-    Args:
-        model: Trained model with encoder.
-        cfg: Hydra configuration with encoder settings.
-        output_dir: Directory to save the weights.
-
-    Returns:
-        Path to saved encoder weights.
-    """
-    from slices.models.encoders import EncoderWithMissingToken
-
+    """Save encoder weights to a .pt file in v3 checkpoint format."""
     encoder_path = Path(output_dir) / "encoder.pt"
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -238,16 +121,11 @@ def save_encoder_weights(model: FineTuneModule, cfg: DictConfig, output_dir: str
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="supervised")
 def main(cfg: DictConfig) -> None:
-    """Run full supervised training from scratch.
-
-    Args:
-        cfg: Hydra configuration object.
-    """
+    """Run full supervised training from scratch."""
     print("=" * 80)
     print("Full Supervised Training (Baseline)")
     print("=" * 80)
 
-    # Print configuration
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
 
@@ -258,6 +136,9 @@ def main(cfg: DictConfig) -> None:
         OmegaConf.set_struct(cfg, False)
         cfg.training.freeze_encoder = False
         OmegaConf.set_struct(cfg, True)
+
+    # Validate data prerequisites
+    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
@@ -280,7 +161,6 @@ def main(cfg: DictConfig) -> None:
         label_fraction=cfg.get("label_fraction", 1.0),
     )
 
-    # Setup data
     datamodule.setup()
 
     print("\n DataModule initialized")
@@ -289,7 +169,6 @@ def main(cfg: DictConfig) -> None:
     print(f"  - Feature dimension: {datamodule.get_feature_dim()}")
     print(f"  - Sequence length: {datamodule.get_seq_length()}")
 
-    # Get split info
     split_info = datamodule.get_split_info()
     print("\n Data splits (patient-level):")
     print(
@@ -300,7 +179,6 @@ def main(cfg: DictConfig) -> None:
         f"  - Test:  {split_info['test_patients']} patients, " f"{split_info['test_stays']} stays"
     )
 
-    # Get label statistics
     label_stats = datamodule.get_label_statistics()
     if task_name in label_stats:
         stats = label_stats[task_name]
@@ -322,7 +200,6 @@ def main(cfg: DictConfig) -> None:
     print("2. Creating Model (Training from Scratch)")
     print("=" * 80)
 
-    # Inject d_input from data into encoder config
     OmegaConf.set_struct(cfg, False)
     cfg.encoder.d_input = datamodule.get_feature_dim()
     cfg.encoder.max_seq_length = datamodule.get_seq_length()
@@ -342,14 +219,12 @@ def main(cfg: DictConfig) -> None:
 
     OmegaConf.set_struct(cfg, True)
 
-    # Create Lightning module WITHOUT pretrained weights
     model = FineTuneModule(
         config=cfg,
-        checkpoint_path=None,  # No pretrained weights
+        checkpoint_path=None,
         pretrain_checkpoint_path=None,
     )
 
-    # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -368,8 +243,8 @@ def main(cfg: DictConfig) -> None:
     print("3. Setting up Trainer")
     print("=" * 80)
 
-    callbacks = setup_callbacks(cfg)
-    logger = setup_logger(cfg)
+    callbacks = setup_finetune_callbacks(cfg, checkpoint_prefix="supervised")
+    logger = setup_wandb_logger(cfg)
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
@@ -404,7 +279,6 @@ def main(cfg: DictConfig) -> None:
     print("4. Starting Training")
     print("=" * 80)
 
-    # Support resuming from checkpoint
     ckpt_path = cfg.get("ckpt_path", None)
     if ckpt_path:
         print(f"\n Resuming from checkpoint: {ckpt_path}")
@@ -418,7 +292,6 @@ def main(cfg: DictConfig) -> None:
     print("5. Saving Encoder Weights")
     print("=" * 80)
 
-    # Load best checkpoint before saving encoder
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
 
     if best_ckpt:
@@ -442,7 +315,6 @@ def main(cfg: DictConfig) -> None:
 
     test_results = trainer.test(model, datamodule=datamodule)
 
-    # Compute baseline metrics
     task_type = cfg.task.get("task_type", "binary")
     print("\n Computing baseline metrics...")
     baseline_metrics = compute_baseline_metrics(datamodule, task_name, task_type)
@@ -450,59 +322,7 @@ def main(cfg: DictConfig) -> None:
     # =========================================================================
     # 7. Fairness Evaluation (optional)
     # =========================================================================
-    fairness_cfg = cfg.get("eval", {}).get("fairness", {})
-    if fairness_cfg.get("enabled", False):
-        print("\n" + "=" * 80)
-        print("7. Fairness Evaluation")
-        print("=" * 80)
-
-        from slices.eval.fairness_evaluator import FairnessEvaluator
-
-        # Collect test predictions
-        model.eval()
-        all_preds, all_labels, all_stay_ids = [], [], []
-        for batch in datamodule.test_dataloader():
-            with torch.no_grad():
-                outputs = model(
-                    batch["timeseries"].to(model.device),
-                    batch["mask"].to(model.device),
-                )
-            probs = outputs["probs"]
-            if probs.dim() > 1 and probs.shape[1] == 2:
-                all_preds.append(probs[:, 1].cpu())
-            else:
-                all_preds.append(probs.cpu())
-            all_labels.append(batch["label"].cpu())
-            all_stay_ids.extend(
-                batch["stay_id"].tolist()
-                if isinstance(batch["stay_id"], torch.Tensor)
-                else batch["stay_id"]
-            )
-
-        predictions = torch.cat(all_preds)
-        labels_tensor = torch.cat(all_labels)
-
-        evaluator = FairnessEvaluator(
-            static_df=datamodule.dataset.static_df,
-            protected_attributes=list(
-                fairness_cfg.get("protected_attributes", ["gender", "age_group"])
-            ),
-            min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
-        )
-        fairness_report = evaluator.evaluate(predictions, labels_tensor, all_stay_ids)
-        evaluator.print_report(fairness_report)
-
-        if logger:
-            for attr, metrics in fairness_report.items():
-                for metric_name, value in metrics.items():
-                    if isinstance(value, (int, float)):
-                        logger.experiment.summary[f"fairness/{attr}/{metric_name}"] = value
-                    elif isinstance(value, dict):
-                        for sub_key, sub_val in value.items():
-                            if isinstance(sub_val, (int, float)):
-                                logger.experiment.summary[
-                                    f"fairness/{attr}/{metric_name}/{sub_key}"
-                                ] = sub_val
+    run_fairness_evaluation(model, datamodule, cfg, logger)
 
     # =========================================================================
     # Summary
@@ -511,12 +331,10 @@ def main(cfg: DictConfig) -> None:
     print("Supervised Training Complete!")
     print("=" * 80)
 
-    # Get best checkpoint info
     if hasattr(callbacks[0], "best_model_path"):
         print(f"\n Best checkpoint: {callbacks[0].best_model_path}")
         print(f"  - Best {callbacks[0].monitor}: {callbacks[0].best_model_score:.4f}")
 
-    # Print test results with baseline comparison
     if test_results:
         print("\n Test Results:")
         for key, value in test_results[0].items():
@@ -535,7 +353,6 @@ def main(cfg: DictConfig) -> None:
                     f"  - Median predictor MAE: "
                     f"{baseline_metrics['baseline/median_predictor_mae']:.4f}"
                 )
-            # Compare model to baselines
             if (
                 "test/mae" in test_results[0]
                 and "baseline/median_predictor_mae" in baseline_metrics
@@ -557,7 +374,6 @@ def main(cfg: DictConfig) -> None:
                     f"{baseline_metrics['baseline/majority_accuracy']:.4f}"
                 )
 
-            # Compare model to baselines
             if "test/auroc" in test_results[0] and "baseline/random_auroc" in baseline_metrics:
                 model_auroc = test_results[0]["test/auroc"]
                 random_auroc = baseline_metrics["baseline/random_auroc"]
@@ -570,7 +386,7 @@ def main(cfg: DictConfig) -> None:
                 else:
                     print("  -> WARNING: Model performs at or below random baseline!")
 
-    # Log test results and baseline metrics to W&B summary for easy retrieval
+    # Log test results and baseline metrics to W&B summary
     if logger:
         if test_results:
             logger.experiment.summary.update(test_results[0])

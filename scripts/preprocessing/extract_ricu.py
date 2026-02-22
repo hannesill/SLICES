@@ -2,21 +2,16 @@
 
 Two-step pipeline:
     # Step 1: R extraction (once per dataset)
-    Rscript scripts/preprocessing/extract_with_ricu.R \
-        --dataset miiv --output_dir data/ricu_output/miiv
+    Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
 
     # Step 2: Python processing -> produces final SLICES format
-    uv run python scripts/preprocessing/extract_ricu.py \
-        data.ricu_output_dir=data/ricu_output/miiv
+    uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
 
-    # Override output path
-    uv run python scripts/preprocessing/extract_ricu.py \
-        data.ricu_output_dir=data/ricu_output/miiv \
-        data.processed_dir=data/processed/miiv
+    # Different dataset
+    uv run python scripts/preprocessing/extract_ricu.py dataset=eicu
 
     # Specify different tasks
-    uv run python scripts/preprocessing/extract_ricu.py \
-        data.ricu_output_dir=data/ricu_output/miiv \
+    uv run python scripts/preprocessing/extract_ricu.py dataset=miiv \
         'data.tasks=[mortality_24h,mortality_hospital]'
 """
 

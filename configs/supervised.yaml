@@ -6,13 +6,16 @@
 #
 # Example usage:
 #   # Train supervised baseline
-#   uv run python scripts/training/supervised.py
+#   uv run python scripts/training/supervised.py dataset=miiv
 #
 #   # Different task
-#   uv run python scripts/training/supervised.py tasks=mortality_hospital
+#   uv run python scripts/training/supervised.py dataset=miiv tasks=mortality_hospital
+#
+#   # Different dataset
+#   uv run python scripts/training/supervised.py dataset=eicu
 #
 #   # Resume from checkpoint
-#   uv run python scripts/training/supervised.py ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
+#   uv run python scripts/training/supervised.py dataset=miiv ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
 
 defaults:
   - data: ricu
@@ -24,9 +27,11 @@ defaults:
 project_name: slices
 experiment_name: supervised
 
-# Experiment tracking identifiers
-dataset: mimic      # mimic | eicu | combined
-paradigm: supervised  # always "supervised" for this config
+# Dataset identifier — drives data paths via ricu.yaml interpolation
+dataset: miiv  # miiv | eicu | combined
+
+# Paradigm — always "supervised" for this config
+paradigm: supervised
 
 # Experiment sprint (for W&B filtering, e.g. sprint=1)
 sprint: null
