@@ -8,8 +8,8 @@ The output files (splits.yaml, normalization_stats.yaml) are required for
 reproducible training runs and prevent data leakage from val/test sets.
 
 Usage:
-    uv run python scripts/preprocessing/prepare_dataset.py \
-        data.processed_dir=data/processed/mimic-iv
+    uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
+    uv run python scripts/preprocessing/prepare_dataset.py dataset=eicu
 """
 
 import os
@@ -188,16 +188,24 @@ def compute_normalization_stats(
     }
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="prepare_dataset")
+@hydra.main(version_base=None, config_path="../../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    """Prepare dataset splits and normalization statistics."""
+    """Prepare dataset splits and normalization statistics.
+
+    Usage:
+        uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
+        uv run python scripts/preprocessing/prepare_dataset.py dataset=eicu
+    """
     print("=" * 70)
-    print("Dataset Preparation")
+    print(f"Dataset Preparation — {cfg.dataset}")
     print("=" * 70)
 
     processed_dir = Path(cfg.data.processed_dir)
     if not processed_dir.exists():
-        raise FileNotFoundError(f"Processed directory not found: {processed_dir}")
+        raise FileNotFoundError(
+            f"Processed directory not found: {processed_dir}\n"
+            f"Run first: uv run python scripts/preprocessing/extract_ricu.py dataset={cfg.dataset}"
+        )
 
     # Load metadata
     print("\n1. Loading metadata...")
@@ -275,7 +283,7 @@ def main(cfg: DictConfig) -> None:
     print("  - splits.yaml")
     print("  - normalization_stats.yaml")
     print("\nYou can now run training:")
-    print(f"  uv run python scripts/training/pretrain.py data.processed_dir={processed_dir}")
+    print(f"  uv run python scripts/training/pretrain.py dataset={cfg.dataset} ssl=mae")
 
 
 if __name__ == "__main__":

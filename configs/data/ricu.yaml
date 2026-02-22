@@ -3,34 +3,27 @@
 # For datasets extracted via the RICU R package. RICU handles concept lookup,
 # unit harmonization, hourly binning, and gap filling across ICU datasets.
 #
-# Pipeline flow:
-#   1. Rscript scripts/preprocessing/extract_with_ricu.R \
-#        --dataset miiv --output_dir data/ricu_output/miiv
-#   2. uv run python scripts/preprocessing/extract_ricu.py data=ricu
-#   3. Processed data (processed_dir) -> pretrain.py / finetune.py / supervised.py
+# Data paths are auto-resolved from the top-level `dataset` field:
+#   dataset=miiv  -> data/ricu_output/miiv, data/processed/miiv
+#   dataset=eicu  -> data/ricu_output/eicu, data/processed/eicu
 #
-# Override via command line:
-#   uv run python scripts/preprocessing/extract_ricu.py \
-#       data=ricu data.ricu_output_dir=data/ricu_output/eicu
+# Pipeline flow:
+#   1. Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
+#   2. uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
+#   3. uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
+#   4. uv run python scripts/training/pretrain.py dataset=miiv ssl=mae
 
 name: ricu
 
 # =============================================================================
-# DATA PATHS
+# DATA PATHS (auto-resolved from top-level dataset field)
 # =============================================================================
 
 # Path to RICU parquet output (produced by extract_with_ricu.R)
-# Expected structure:
-#   ${ricu_output_dir}/ricu_timeseries.parquet
-#   ${ricu_output_dir}/ricu_stays.parquet
-#   ${ricu_output_dir}/ricu_mortality.parquet
-#   ${ricu_output_dir}/ricu_diagnoses.parquet
-#   ${ricu_output_dir}/ricu_metadata.yaml
-ricu_output_dir: data/ricu_output/miiv
+ricu_output_dir: data/ricu_output/${..dataset}
 
 # Path to processed/extracted features (output of extraction, input for training)
-# Contains: timeseries.parquet, static.parquet, labels.parquet, metadata.yaml
-processed_dir: data/processed/miiv
+processed_dir: data/processed/${..dataset}
 
 # Parquet root is set to ricu_output_dir (used by ExtractorConfig)
 parquet_root: ${.ricu_output_dir}

@@ -3,7 +3,7 @@
 # This is the base config for shared defaults. Note that pretrain.yaml,
 # finetune.yaml, and supervised.yaml each define their own top-level Hydra
 # configs and do NOT inherit from this file. This config is used by other
-# entry points (e.g. debug scripts) that need sensible defaults.
+# entry points (e.g. debug scripts, prepare_dataset.py) that need sensible defaults.
 #
 # Included sub-configs:
 #   - data: Data paths, extraction settings, and loading settings (configs/data/ricu.yaml)
@@ -17,6 +17,9 @@ defaults:
 # Project info
 project_name: slices
 
+# Dataset identifier — drives data paths via ricu.yaml interpolation
+dataset: miiv  # miiv | eicu | combined
+
 # General settings
 seed: 42
 
@@ -25,3 +28,9 @@ logging:
   wandb_project: slices
   wandb_entity: null  # Set in environment
   log_every_n_steps: 50
+
+# Hydra configuration (no output dirs for utility scripts)
+hydra:
+  run:
+    dir: .
+  output_subdir: null

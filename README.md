@@ -84,41 +84,47 @@ uv run python -c "from slices.models.pretraining import JEPAObjective, Contrasti
 
 ## Quick Start
 
-### 1. Extract Features
+### 1. Extract & Prepare
 
 ```bash
-uv run python scripts/preprocessing/extract_ricu.py \
-    data.parquet_root=/path/to/ricu-output
+# R extraction (once per dataset)
+Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
+
+# Python processing
+uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
+
+# Compute splits & normalization stats
+uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
 ```
 
 ### 2. Pretrain
 
-Each SSL paradigm has its own entry config with matched training budgets:
+Pick SSL paradigm with `ssl=`. Training budget is matched across thesis paradigms:
 
 ```bash
-# MAE (masked autoencoder — reconstruction baseline)
-uv run python scripts/training/pretrain.py data.parquet_root=/path/to/data
+# MAE (masked autoencoder — reconstruction baseline, default)
+uv run python scripts/training/pretrain.py dataset=miiv ssl=mae
 
 # JEPA (latent-space prediction with EMA target encoder)
-uv run python scripts/training/pretrain.py --config-name pretrain_jepa
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
 
 # Contrastive (SimCLR-style with two masked views)
-uv run python scripts/training/pretrain.py --config-name pretrain_contrastive
+uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
 
 # SMART (sanity check / extensibility demo — not part of thesis experiments)
-uv run python scripts/training/pretrain.py --config-name pretrain_smart
+uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
 ```
 
 ### 3. Fine-tune
 
 ```bash
-uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt
+uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/.../encoder.pt
 ```
 
 ### 4. Supervised Baseline
 
 ```bash
-uv run python scripts/training/supervised.py data.parquet_root=/path/to/data
+uv run python scripts/training/supervised.py dataset=miiv
 ```
 
 ## Project Structure
@@ -151,16 +157,13 @@ SLICES/
 │   ├── training/
 │   │   ├── pretrain_module.py      # SSLPretrainModule (Lightning)
 │   │   ├── finetune_module.py      # FineTuneModule (Lightning)
-│   │   └── utils.py                # Optimizer/scheduler builders
+│   │   └── utils.py                # Shared helpers (optimizer, scheduler, callbacks, logger, validation)
 │   └── eval/
 │       ├── metrics.py              # AUROC, AUPRC, F1, MSE, etc.
 │       ├── fairness.py             # Per-group AUROC, demographic parity
 │       └── imputation.py           # SSL reconstruction quality
 ├── configs/                        # Hydra configs
-│   ├── pretrain.yaml               # MAE pretraining
-│   ├── pretrain_jepa.yaml          # JEPA pretraining
-│   ├── pretrain_contrastive.yaml   # Contrastive pretraining
-│   ├── pretrain_smart.yaml         # SMART pretraining
+│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/smart)
 │   ├── finetune.yaml
 │   ├── supervised.yaml
 │   ├── data/                       # Dataset configs
@@ -175,17 +178,17 @@ SLICES/
 
 ## Configuration
 
-SLICES uses [Hydra](https://hydra.cc/) for configuration. Switch SSL paradigm by changing one config default:
+SLICES uses [Hydra](https://hydra.cc/) for configuration. Switch SSL paradigm with `ssl=`:
 
 ```bash
-# Override SSL objective on the fly
-uv run python scripts/training/pretrain.py ssl=jepa model=observation_transformer
+# Pick paradigm with ssl=
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
 
 # Override hyperparameters
-uv run python scripts/training/pretrain.py --config-name pretrain_jepa ssl.mask_ratio=0.5
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa ssl.mask_ratio=0.75
 
 # Smoke test any config
-uv run python scripts/training/pretrain.py --config-name pretrain_jepa training.overfit_batches=2 --cfg job
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfit_batches=2 --cfg job
 ```
 
 ### Config Groups

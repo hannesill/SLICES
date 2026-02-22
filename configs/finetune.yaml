@@ -5,16 +5,19 @@
 #
 # Example usage:
 #   # Linear probing (frozen encoder, default)
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt
 #
 #   # Full finetuning (train encoder + head)
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.freeze_encoder=false
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.freeze_encoder=false
 #
 #   # Gradual unfreezing (freeze for N epochs, then unfreeze)
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
 #
 #   # Different task
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt tasks=mortality_hospital
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt tasks=mortality_hospital
+#
+#   # Different dataset
+#   uv run python scripts/training/finetune.py dataset=eicu checkpoint=outputs/encoder.pt
 
 defaults:
   - data: ricu
@@ -26,9 +29,11 @@ defaults:
 project_name: slices
 experiment_name: finetune
 
-# Experiment tracking identifiers
-dataset: mimic  # mimic | eicu | combined
-paradigm: mae   # Auto-detected from checkpoint; override with paradigm=jepa etc.
+# Dataset identifier — drives data paths via ricu.yaml interpolation
+dataset: miiv  # miiv | eicu | combined
+
+# Paradigm — auto-detected from checkpoint in finetune.py; override with paradigm=jepa etc.
+paradigm: mae
 
 # Experiment sprint (for W&B filtering, e.g. sprint=1)
 sprint: null
