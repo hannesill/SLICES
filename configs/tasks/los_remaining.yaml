@@ -1,0 +1,13 @@
+# @package task
+# Remaining length of stay prediction (regression)
+# Predict remaining days in ICU after the observation window
+
+task_name: los_remaining
+task_type: regression
+n_classes: null
+head_type: mlp
+hidden_dims: [64]
+dropout: 0.1
+activation: relu
+use_layer_norm: false
+projection_dim: null

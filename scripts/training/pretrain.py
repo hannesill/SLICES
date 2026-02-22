@@ -104,11 +104,13 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if not cfg.logging.get("use_wandb", False):
         return None
 
+    tags = list(cfg.logging.get("wandb_tags", [])) or None
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
         name=cfg.logging.get("run_name", None),
         group=cfg.logging.get("wandb_group", None),
+        tags=tags,
         save_dir=cfg.output_dir,
         log_model=False,  # Don't save model to wandb (too large)
     )
@@ -187,9 +189,10 @@ def main(cfg: DictConfig) -> None:
     print("2. Creating SSL Module")
     print("=" * 80)
 
-    # Inject d_input from data into encoder config
+    # Inject data-dependent dimensions into encoder config
     OmegaConf.set_struct(cfg, False)  # Allow adding new keys
     cfg.encoder.d_input = datamodule.get_feature_dim()
+    cfg.encoder.max_seq_length = datamodule.get_seq_length()
     OmegaConf.set_struct(cfg, True)  # Re-enable struct mode
 
     # Create Lightning module

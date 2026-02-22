@@ -36,6 +36,7 @@ class TaskConfig(BaseModel):
     activation: str = "relu"
     n_classes: Optional[int] = None
     use_layer_norm: bool = False
+    projection_dim: Optional[int] = None
 
     @field_validator("task_type")
     @classmethod
@@ -122,6 +123,7 @@ class SchedulerConfig(BaseModel):
     patience: int = 10
     warmup_epochs: Optional[int] = None
     max_epochs: Optional[int] = None
+    monitor: str = "val/loss"
 
     @field_validator("name")
     @classmethod

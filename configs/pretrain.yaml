@@ -1,34 +1,25 @@
-# SSL Pretraining Configuration
+# MAE SSL Pretraining Configuration
 #
-# This config orchestrates SSL pretraining with configurable encoder
-# architecture and SSL objective. Override any setting via command line:
-#   uv run python scripts/training/pretrain.py encoder.d_model=256 ssl.mask_ratio=0.20
+# Masked Autoencoder for ICU time-series with observation-level tokenization.
+# Same encoder and training budget as JEPA/Contrastive for fair comparison.
 #
-# Switching between models/objectives:
-#   # Default: MAE + Transformer
+# Usage:
 #   uv run python scripts/training/pretrain.py
-#
-#   # SMART encoder + SMART objective (with paper defaults)
-#   uv run python scripts/training/pretrain.py --config-name pretrain_smart
-#
-#   # SMART encoder + SMART objective (from this config)
-#   uv run python scripts/training/pretrain.py model=smart ssl=smart encoder.d_model=32
-#
-#   # Mix and match (e.g., MAE objective with SMART encoder - experimental)
-#   uv run python scripts/training/pretrain.py model=smart ssl=mae encoder.pooling=none
-#
-# Note: This uses similar settings to configs/model/transformer.yaml but with
-# encoder.pooling=none (required for MAE) instead of pooling=mean (for tasks).
+#   uv run python scripts/training/pretrain.py training.max_epochs=100
 
 defaults:
   - data: ricu
-  - model: transformer
+  - model: observation_transformer
   - ssl: mae
   - _self_
 
 # Project info
 project_name: slices
-experiment_name: ssl_pretrain
+experiment_name: mae_pretrain
+
+# Experiment tracking identifiers
+dataset: mimic  # mimic | eicu | combined
+paradigm: mae   # mae | jepa | contrastive
 
 # Random seed for reproducibility
 seed: 42
@@ -52,26 +43,13 @@ data:
   window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
   window_stride: 24              # Stride for overlapping windows (50% overlap)
 
-# Encoder configuration inherited from configs/model/transformer.yaml
-# Override pretraining-specific settings:
+# Encoder overrides (base from configs/model/observation_transformer.yaml: d=128, L=4, H=8)
 encoder:
-  d_model: 256  # Larger model for pretraining
-  d_ff: 1024  # 4:1 ratio with d_model (default 256 from transformer.yaml is for d_model=64)
-  pooling: none  # Required for MAE - need per-timestep outputs (vs 'mean' for tasks)
+  pooling: none  # Required for MAE - need per-token outputs (vs 'mean' for tasks)
 
-# SSL objective configuration overrides (base from configs/ssl/mae.yaml)
-# To switch SSL objective: uv run python scripts/training/pretrain.py ssl=smart model=smart
-ssl:
-  mask_ratio: 0.3  # Override: more aggressive masking for pretraining (default: 0.15)
-  mask_strategy: block  # Override: block masking for temporal structure (default: random)
-  decoder_d_model: 128  # Override: larger decoder for pretraining (default: 64)
+# SSL objective (base from configs/ssl/mae.yaml, mask_ratio=0.5)
 
-# Training configuration
-# NOTE: For fair SSL objective comparison, equalize training budget across
-# methods. MAE (500 epochs) and SMART (25 epochs in pretrain_smart.yaml)
-# have very different defaults from their respective papers. Use gradient
-# steps (max_epochs * steps_per_epoch) or wall-clock time as the budget
-# unit, not raw epochs. Override max_epochs accordingly.
+# Training configuration (same budget as JEPA/Contrastive for fair comparison)
 training:
   max_epochs: 500
   batch_size: 256
@@ -109,8 +87,13 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: ${experiment_name}_s${seed}
-  wandb_group: ${experiment_name}  # Groups multi-seed runs together
+  run_name: pretrain_${dataset}_${paradigm}_seed${seed}
+  wandb_group: pretrain_${dataset}_${paradigm}
+  wandb_tags:
+    - "phase:pretrain"
+    - "dataset:${dataset}"
+    - "paradigm:${paradigm}"
+    - "seed:${seed}"
   log_every_n_steps: 50
 
 # Hydra configuration

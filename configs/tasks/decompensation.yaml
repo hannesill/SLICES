@@ -1,0 +1,13 @@
+# @package task
+# Decompensation prediction (binary classification)
+# Predict if patient will die within 24h from each sliding window
+
+task_name: decompensation
+task_type: binary
+n_classes: null
+head_type: mlp
+hidden_dims: [64]
+dropout: 0.1
+activation: relu
+use_layer_norm: false
+projection_dim: null

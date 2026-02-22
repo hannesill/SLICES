@@ -14,16 +14,21 @@
 #   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
 #
 #   # Different task
-#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt task.task_name=mortality_hospital
+#   uv run python scripts/training/finetune.py checkpoint=outputs/encoder.pt tasks=mortality_hospital
 
 defaults:
   - data: ricu
-  - model: transformer
+  - model: observation_transformer
+  - tasks: mortality_24h
   - _self_
 
 # Project info
 project_name: slices
 experiment_name: finetune
+
+# Experiment tracking identifiers
+dataset: mimic  # mimic | eicu | combined
+paradigm: mae   # mae | jepa | contrastive (set to match pretrained encoder)
 
 # Random seed for reproducibility
 seed: 42
@@ -39,41 +44,11 @@ pretrain_checkpoint: null
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Encoder configuration inherited from configs/model/transformer.yaml
-# NOTE: This should match the pretrained encoder architecture!
-# Override specific settings here if needed (e.g., to match pretraining):
-# encoder:
-#   d_model: 256  # Match pretraining if different
+# Encoder configuration inherited from configs/model/observation_transformer.yaml
+# For SSL finetuning, the v3 checkpoint overrides this with the saved encoder config.
 
-# Task configuration
-task:
-  # Task identifier (matches label column in labels.parquet)
-  task_name: mortality_24h
-
-  # Task type: binary | multiclass | multilabel | regression
-  # - binary: Binary classification (outputs 2 logits for CrossEntropy)
-  # - multiclass: Multi-class classification (requires n_classes)
-  # - multilabel: Multi-label classification (requires n_classes)
-  # - regression: Continuous prediction (outputs 1 value)
-  task_type: binary
-
-  # Number of classes (only for multiclass/multilabel, not for binary/regression)
-  n_classes: null
-
-  # Task head configuration
-  head_type: mlp  # mlp | linear
-  hidden_dims: [64]  # Hidden layer dimensions (empty for linear head)
-  dropout: 0.1
-  activation: relu
-  use_layer_norm: false  # Add LayerNorm in MLP head (set true for SMART paper protocol)
-
-  # Projection dimension for fair linear probing comparison.
-  # Different encoders produce different output dimensions (e.g., Transformer
-  # with mean pooling: d_model=64, SMART with query pooling: V*d_model=1120).
-  # Set this to project all representations to a shared dimensionality before
-  # the task head, so linear probing measures representation quality, not
-  # dimensionality. Set to null to use encoder output directly.
-  projection_dim: null
+# Task configuration inherited from configs/tasks/*.yaml
+# Override with: task=mortality_hospital, task=los_remaining, etc.
 
 # Training configuration
 training:
@@ -108,9 +83,10 @@ training:
   accumulate_grad_batches: 1
 
   # Early stopping
+  # Monitor/mode are set automatically by task type in setup_callbacks():
+  #   classification -> val/auroc (max), regression -> val/mse (min)
+  # Override here only if you need a non-default metric.
   early_stopping_patience: 10
-  early_stopping_monitor: val/auroc
-  early_stopping_mode: max
 
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
@@ -140,8 +116,14 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: ${experiment_name}_${task.task_name}_s${seed}
-  wandb_group: ${experiment_name}_${task.task_name}  # Groups multi-seed runs together
+  run_name: finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
+  wandb_group: finetune_${dataset}_${paradigm}_${task.task_name}
+  wandb_tags:
+    - "phase:finetune"
+    - "dataset:${dataset}"
+    - "paradigm:${paradigm}"
+    - "task:${task.task_name}"
+    - "seed:${seed}"
   log_every_n_steps: 10
 
 # Hydra configuration

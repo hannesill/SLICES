@@ -9,7 +9,7 @@
 #   uv run python scripts/training/supervised.py
 #
 #   # Different task
-#   uv run python scripts/training/supervised.py task.task_name=mortality_hospital
+#   uv run python scripts/training/supervised.py tasks=mortality_hospital
 #
 #   # Resume from checkpoint
 #   uv run python scripts/training/supervised.py ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
@@ -17,11 +17,16 @@
 defaults:
   - data: ricu
   - model: transformer
+  - tasks: mortality_24h
   - _self_
 
 # Project info
 project_name: slices
 experiment_name: supervised
+
+# Experiment tracking identifiers
+dataset: mimic      # mimic | eicu | combined
+paradigm: supervised  # always "supervised" for this config
 
 # Random seed for reproducibility
 seed: 42
@@ -34,29 +39,9 @@ output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
 # Encoder configuration inherited from configs/model/transformer.yaml
-# Override specific settings here if needed:
-# encoder:
-#   d_model: 256  # Example override
 
-# Task configuration
-task:
-  # Task identifier (matches label column in labels.parquet)
-  task_name: mortality_24h
-
-  # Task type: binary | multiclass | multilabel | regression
-  task_type: binary
-
-  # Number of classes (only for multiclass/multilabel)
-  n_classes: null
-
-  # Task head configuration
-  head_type: mlp  # mlp | linear
-  hidden_dims: [64]
-  dropout: 0.1
-  activation: relu
-
-  # Projection dimension for fair comparison across encoders (see finetune.yaml).
-  projection_dim: null
+# Task configuration inherited from configs/tasks/*.yaml
+# Override with: task=mortality_hospital, task=los_remaining, etc.
 
 # Training configuration
 training:
@@ -86,9 +71,10 @@ training:
   accumulate_grad_batches: 1
 
   # Early stopping
+  # Monitor/mode are set automatically by task type in setup_callbacks():
+  #   classification -> val/auroc (max), regression -> val/mse (min)
+  # Override here only if you need a non-default metric.
   early_stopping_patience: 20  # More patience for training from scratch
-  early_stopping_monitor: val/auroc
-  early_stopping_mode: max
 
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
@@ -118,8 +104,14 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: ${experiment_name}_${task.task_name}_s${seed}
-  wandb_group: ${experiment_name}_${task.task_name}  # Groups multi-seed runs together
+  run_name: supervised_${dataset}_${task.task_name}_seed${seed}
+  wandb_group: supervised_${dataset}_${task.task_name}
+  wandb_tags:
+    - "phase:supervised"
+    - "dataset:${dataset}"
+    - "paradigm:supervised"
+    - "task:${task.task_name}"
+    - "seed:${seed}"
   log_every_n_steps: 10
 
 # Hydra configuration
