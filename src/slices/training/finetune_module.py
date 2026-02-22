@@ -527,9 +527,8 @@ class FineTuneModule(pl.LightningModule):
         """One-time check that labels are compatible with the task type.
 
         For binary/multiclass tasks, labels must be non-negative integers within
-        the valid class range. Detects the common mistake of passing raw
-        death_hours (float) labels into a binary CrossEntropyLoss, which happens
-        when decompensation is used without sliding windows.
+        the valid class range. Detects the common mistake of passing float
+        labels into a binary CrossEntropyLoss.
         """
         if self._labels_validated:
             return
@@ -541,7 +540,7 @@ class FineTuneModule(pl.LightningModule):
         n_classes = self.task_head.config.get_output_dim()
         unique_vals = labels.unique()
 
-        # Check for non-integer values (e.g., death_hours floats, inf)
+        # Check for non-integer values (e.g., continuous floats, inf)
         has_non_integer = not torch.all(labels == labels.long().float())
         has_inf = torch.any(torch.isinf(labels))
         has_out_of_range = torch.any(labels.long() < 0) or torch.any(labels.long() >= n_classes)
@@ -552,10 +551,8 @@ class FineTuneModule(pl.LightningModule):
                 f"(n_classes={n_classes}). "
                 f"Found label values: {unique_vals.tolist()[:10]}. "
                 f"Expected integer labels in [0, {n_classes}). "
-                f"If using decompensation, labels are death_hours (float) and "
-                f"require SlidingWindowDataset to convert them to per-window "
-                f"binary labels. Enable sliding windows in your config: "
-                f"sliding_window.enable=true"
+                f"If using a regression task, set task_type='regression' "
+                f"in your config."
             )
 
     def _compute_loss_and_metrics(

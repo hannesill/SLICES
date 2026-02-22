@@ -4,7 +4,6 @@ from typing import Dict, Type
 
 from .aki import AKILabelBuilder
 from .base import LabelBuilder, LabelConfig
-from .decompensation import DeathHoursLabelBuilder
 from .los import LOSLabelBuilder
 from .mortality import MortalityLabelBuilder
 from .phenotyping import PhenotypingLabelBuilder
@@ -22,7 +21,6 @@ class LabelBuilderFactory:
     # Registry mapping task categories to builder classes
     _REGISTRY: Dict[str, Type[LabelBuilder]] = {
         "aki": AKILabelBuilder,
-        "decompensation": DeathHoursLabelBuilder,
         "los": LOSLabelBuilder,
         "mortality": MortalityLabelBuilder,
         "phenotyping": PhenotypingLabelBuilder,

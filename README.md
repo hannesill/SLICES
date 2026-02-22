@@ -52,7 +52,7 @@ All observation-level objectives share the same `ObservationTransformerEncoder` 
 ```
 RICU (R) ──→ Parquet ──→ ICUDataset ──→ SSL Pretraining ──→ Downstream Finetuning
   hourly-binned         dense tensors     MAE / JEPA /       mortality, LOS,
-  feature extraction    + obs masks       Contrastive          AKI, decompensation
+  feature extraction    + obs masks       Contrastive          AKI
   across datasets
 ```
 

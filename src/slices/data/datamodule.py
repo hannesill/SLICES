@@ -3,8 +3,6 @@
 Handles patient-level splits, data loading, and batching for training.
 Ensures no patient appears in multiple splits (prevents data leakage).
 Supports sliding windows for SSL pretraining with longer sequences.
-Auto-detects decompensation tasks and configures sliding windows with
-on-the-fly per-window label computation.
 """
 
 import logging
@@ -27,7 +25,6 @@ from slices.constants import (
 )
 from slices.data.dataset import ICUDataset
 from slices.data.sliding_window import SlidingWindowDataset
-from slices.data.utils import get_package_data_dir
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -83,9 +80,6 @@ class ICUDataModule(L.LightningDataModule):
 
     Implements patient-level splits to prevent data leakage.
     Uses hashing of patient_id for deterministic, reproducible splits.
-
-    Auto-detects decompensation tasks (``window_label_mode: death_hours`` in
-    task YAML) and configures sliding windows with per-window label computation.
 
     Example:
         >>> dm = ICUDataModule(
@@ -168,12 +162,6 @@ class ICUDataModule(L.LightningDataModule):
         self.window_size = window_size
         self.window_stride = window_stride
 
-        # Decompensation-specific parameters (auto-detected in setup)
-        self._decompensation_mode = False
-        self._decompensation_pred_hours: Optional[int] = None
-        self._decompensation_train_stride: Optional[int] = None
-        self._decompensation_eval_stride: Optional[int] = None
-
         # Validate ratios
         total_ratio = train_ratio + val_ratio + test_ratio
         if not np.isclose(total_ratio, 1.0):
@@ -184,50 +172,6 @@ class ICUDataModule(L.LightningDataModule):
         self.train_indices: List[int] = []
         self.val_indices: List[int] = []
         self.test_indices: List[int] = []
-
-    def _detect_decompensation_mode(self) -> None:
-        """Auto-detect decompensation task from task YAML config.
-
-        Checks for ``window_label_mode: death_hours`` in the task's label_params.
-        When detected, configures sliding windows and decompensation parameters.
-        """
-        if self.task_name is None:
-            return
-
-        tasks_dir = get_package_data_dir() / "tasks"
-        task_yaml = tasks_dir / f"{self.task_name}.yaml"
-        if not task_yaml.exists():
-            return
-
-        with open(task_yaml) as f:
-            task_config = yaml.safe_load(f)
-
-        label_params = task_config.get("label_params", {})
-        if label_params.get("window_label_mode") != "death_hours":
-            return
-
-        # Enable decompensation mode
-        self._decompensation_mode = True
-        self._decompensation_pred_hours = task_config.get("prediction_window_hours", 24)
-
-        # Use observation_window_hours as the window size
-        obs_window = task_config.get("observation_window_hours", 48)
-        self.window_size = obs_window
-
-        # Get strides from task config
-        self._decompensation_train_stride = label_params.get("stride_hours", 6)
-        self._decompensation_eval_stride = label_params.get("eval_stride_hours", 1)
-
-        # Auto-enable sliding windows
-        self.enable_sliding_windows = True
-        self.window_stride = self._decompensation_train_stride
-
-        logger.info(
-            f"Decompensation mode detected: obs_window={obs_window}h, "
-            f"pred_hours={self._decompensation_pred_hours}h, "
-            f"train_stride={self._decompensation_train_stride}h, "
-            f"eval_stride={self._decompensation_eval_stride}h"
-        )
 
     def _load_cached_splits(
         self, static_df: pl.DataFrame, stay_ids: List[int]
@@ -608,8 +552,6 @@ class ICUDataModule(L.LightningDataModule):
         Creates patient-level splits BEFORE initializing the dataset to ensure
         normalization statistics are computed only on training data (no leakage).
 
-        Auto-detects decompensation tasks and configures sliding windows.
-
         Args:
             stage: Stage name ('fit', 'validate', 'test', or None).
         """
@@ -619,9 +561,6 @@ class ICUDataModule(L.LightningDataModule):
             return
 
         logger.info("Setting up ICUDataModule")
-
-        # Auto-detect decompensation mode from task YAML
-        self._detect_decompensation_mode()
 
         # CRITICAL: Get splits FIRST before creating dataset
         # This also filters stays with missing labels to ensure index consistency
@@ -675,7 +614,6 @@ class ICUDataModule(L.LightningDataModule):
 
         If sliding windows are enabled, wraps the base dataset with
         SlidingWindowDataset using overlapping windows.
-        For decompensation, uses task-specific stride and pred_hours.
         """
         if self.dataset is None:
             raise RuntimeError("Call setup() before train_dataloader()")
@@ -689,7 +627,6 @@ class ICUDataModule(L.LightningDataModule):
                 window_size=window_size,
                 stride=window_stride,
                 stay_indices=self.train_indices,
-                decompensation_pred_hours=self._decompensation_pred_hours,
             )
             logger.info(
                 f"Train dataloader using sliding windows: {len(train_dataset)} windows "
@@ -713,26 +650,19 @@ class ICUDataModule(L.LightningDataModule):
 
         If sliding windows are enabled, uses NON-overlapping windows
         (stride=window_size) to avoid inflated validation metrics.
-        For decompensation, uses eval_stride for finer-grained evaluation.
         """
         if self.dataset is None:
             raise RuntimeError("Call setup() before val_dataloader()")
 
         if self.enable_sliding_windows:
             window_size = self.window_size or self.dataset.seq_length
-
-            # Decompensation uses eval_stride; default SSL uses non-overlapping
-            if self._decompensation_mode and self._decompensation_eval_stride:
-                val_stride = self._decompensation_eval_stride
-            else:
-                val_stride = window_size  # Non-overlapping
+            val_stride = window_size  # Non-overlapping
 
             val_dataset = SlidingWindowDataset(
                 self.dataset,
                 window_size=window_size,
                 stride=val_stride,
                 stay_indices=self.val_indices,
-                decompensation_pred_hours=self._decompensation_pred_hours,
             )
             logger.info(
                 f"Val dataloader using sliding windows: {len(val_dataset)} windows "
@@ -751,30 +681,11 @@ class ICUDataModule(L.LightningDataModule):
         )
 
     def test_dataloader(self) -> DataLoader:
-        """Return test DataLoader.
-
-        For decompensation, uses sliding windows with eval_stride.
-        """
+        """Return test DataLoader."""
         if self.dataset is None:
             raise RuntimeError("Call setup() before test_dataloader()")
 
-        if self._decompensation_mode:
-            window_size = self.window_size or self.dataset.seq_length
-            eval_stride = self._decompensation_eval_stride or window_size
-
-            test_dataset = SlidingWindowDataset(
-                self.dataset,
-                window_size=window_size,
-                stride=eval_stride,
-                stay_indices=self.test_indices,
-                decompensation_pred_hours=self._decompensation_pred_hours,
-            )
-            logger.info(
-                f"Test dataloader using sliding windows: {len(test_dataset)} windows "
-                f"(window_size={window_size}, stride={eval_stride})"
-            )
-        else:
-            test_dataset = Subset(self.dataset, self.test_indices)
+        test_dataset = Subset(self.dataset, self.test_indices)
 
         return DataLoader(
             test_dataset,
@@ -792,14 +703,9 @@ class ICUDataModule(L.LightningDataModule):
         return self.dataset.n_features
 
     def get_seq_length(self) -> int:
-        """Return sequence length.
-
-        For decompensation, returns the observation window size.
-        """
+        """Return sequence length."""
         if self.dataset is None:
             raise RuntimeError("Call setup() before get_seq_length()")
-        if self._decompensation_mode and self.window_size:
-            return self.window_size
         return self.dataset.seq_length
 
     def get_split_info(self) -> Dict[str, Any]:
