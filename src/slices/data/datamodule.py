@@ -110,6 +110,8 @@ class ICUDataModule(L.LightningDataModule):
         seed: int = 42,
         normalize: bool = NORMALIZE,
         pin_memory: bool = PIN_MEMORY,
+        # Label fraction for semi-supervised / label-efficiency ablations
+        label_fraction: float = 1.0,
         # Sliding window parameters for SSL pretraining
         enable_sliding_windows: bool = False,
         window_size: Optional[int] = None,
@@ -129,6 +131,11 @@ class ICUDataModule(L.LightningDataModule):
             seed: Random seed for reproducible splits.
             normalize: Whether to normalize features.
             pin_memory: Whether to pin memory for faster GPU transfer.
+            label_fraction: Fraction of labeled training data to use (0, 1].
+                Default 1.0 uses all training data. Lower values subsample
+                the training set for label-efficiency ablations (e.g., 0.01
+                for 1% of labels). Val/test sets always use all data.
+                Subsampling is deterministic given the seed.
             enable_sliding_windows: Whether to use sliding windows for training.
                 Useful for SSL pretraining with longer sequences (e.g., 168h).
                 When enabled, train_dataloader uses overlapping windows and
@@ -151,6 +158,10 @@ class ICUDataModule(L.LightningDataModule):
         self.seed = seed
         self.normalize = normalize
         self.pin_memory = pin_memory
+        self.label_fraction = label_fraction
+
+        if not 0.0 < label_fraction <= 1.0:
+            raise ValueError(f"label_fraction must be in (0, 1], got {label_fraction}")
 
         # Sliding window parameters
         self.enable_sliding_windows = enable_sliding_windows
@@ -529,6 +540,33 @@ class ICUDataModule(L.LightningDataModule):
 
         return train_indices, val_indices, test_indices
 
+    def _subsample_train_indices(self, train_indices: List[int]) -> List[int]:
+        """Subsample training indices for label-efficiency ablations.
+
+        Uses a separate RNG seeded with self.seed to ensure deterministic
+        subsampling. Always selects at least 1 sample.
+
+        Args:
+            train_indices: Full list of training indices.
+
+        Returns:
+            Subsampled list of training indices.
+        """
+        n_full = len(train_indices)
+        n_subsample = max(1, int(n_full * self.label_fraction))
+
+        rng = np.random.RandomState(self.seed)
+        subsample_idx = rng.choice(n_full, size=n_subsample, replace=False)
+        subsample_idx.sort()  # Maintain original order
+        subsampled = [train_indices[i] for i in subsample_idx]
+
+        logger.info(
+            f"Label fraction={self.label_fraction}: using {n_subsample:,}/{n_full:,} "
+            f"training samples ({self.label_fraction * 100:.1f}%)"
+        )
+
+        return subsampled
+
     def _save_split_info(self) -> None:
         """Save split information to file for reproducibility."""
         if self.dataset is None:
@@ -589,6 +627,10 @@ class ICUDataModule(L.LightningDataModule):
         # This also filters stays with missing labels to ensure index consistency
         logger.debug("[Step 1/3] Computing patient-level splits")
         self.train_indices, self.val_indices, self.test_indices = self._get_patient_level_splits()
+
+        # Subsample training indices for label-efficiency ablations
+        if self.label_fraction < 1.0:
+            self.train_indices = self._subsample_train_indices(self.train_indices)
 
         # Create dataset with training indices for normalization
         # IMPORTANT: Use handle_missing_labels='raise' because we already filtered

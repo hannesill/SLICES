@@ -84,8 +84,8 @@ class TrainingConfig(BaseModel):
     gradient_clip_val: Optional[float] = 1.0
     accumulate_grad_batches: int = 1
     early_stopping_patience: Optional[int] = 10
-    early_stopping_monitor: str = "val/auroc"
-    early_stopping_mode: str = "max"
+    early_stopping_monitor: Optional[str] = None
+    early_stopping_mode: Optional[str] = None
     overfit_batches: Union[int, float] = 0
 
 

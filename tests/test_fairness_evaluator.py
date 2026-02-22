@@ -258,6 +258,7 @@ class TestEvaluateStructure:
         assert "worst_group_auroc" in gender_report
         assert "demographic_parity_diff" in gender_report
         assert "equalized_odds_diff" in gender_report
+        assert "disparate_impact_ratio" in gender_report
         assert "n_valid_groups" in gender_report
         assert "group_sizes" in gender_report
 

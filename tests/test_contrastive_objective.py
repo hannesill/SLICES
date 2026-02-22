@@ -132,7 +132,7 @@ class TestContrastiveForward:
         assert loss.item() >= 0
         assert not torch.isnan(loss)
         assert "contrastive_loss" in metrics
-        assert "reconstruction_loss" in metrics
+        assert "ssl_loss" in metrics
         assert "contrastive_accuracy" in metrics
         assert "contrastive_pos_similarity" in metrics
         assert "contrastive_temperature" in metrics

@@ -34,7 +34,7 @@ class ContrastiveConfig(SSLConfig):
     name: str = "contrastive"
 
     # Masking
-    mask_ratio: float = 0.75
+    mask_ratio: float = 0.5
 
     # Projection head
     proj_hidden_dim: int = 512
@@ -240,7 +240,7 @@ class ContrastiveObjective(BaseSSLObjective):
 
             metrics = {
                 "contrastive_loss": loss.detach(),
-                "reconstruction_loss": loss.detach(),
+                "ssl_loss": loss.detach(),
                 "contrastive_accuracy": accuracy,
                 "contrastive_pos_similarity": pos_sim,
                 "contrastive_temperature": temperature,

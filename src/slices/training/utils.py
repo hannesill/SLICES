@@ -141,6 +141,7 @@ def save_encoder_checkpoint(
     path: Union[str, Path],
     missing_token: Optional[torch.Tensor] = None,
     d_input: Optional[int] = None,
+    ssl_name: Optional[str] = None,
 ) -> None:
     """Save encoder in v3 checkpoint format.
 
@@ -153,6 +154,8 @@ def save_encoder_checkpoint(
         path: Path to save the checkpoint.
         missing_token: Optional learned missing token tensor.
         d_input: Optional input dimension (for token shape validation).
+        ssl_name: Optional SSL paradigm name (e.g. 'mae', 'jepa', 'contrastive')
+                  for automatic paradigm detection during finetuning.
     """
     checkpoint: Dict[str, Any] = {
         "encoder_state_dict": encoder.state_dict(),
@@ -164,5 +167,8 @@ def save_encoder_checkpoint(
         checkpoint["missing_token"] = missing_token.data.clone()
         if d_input is not None:
             checkpoint["d_input"] = d_input
+
+    if ssl_name is not None:
+        checkpoint["ssl_name"] = ssl_name
 
     torch.save(checkpoint, path)

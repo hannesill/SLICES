@@ -1,7 +1,9 @@
 # Base Configuration
 #
-# This is the base config that other configs inherit from via Hydra defaults.
-# It provides common settings and includes shared sub-configs.
+# This is the base config for shared defaults. Note that pretrain.yaml,
+# finetune.yaml, and supervised.yaml each define their own top-level Hydra
+# configs and do NOT inherit from this file. This config is used by other
+# entry points (e.g. debug scripts) that need sensible defaults.
 #
 # Included sub-configs:
 #   - data: Data paths, extraction settings, and loading settings (configs/data/ricu.yaml)
@@ -17,14 +19,6 @@ project_name: slices
 
 # General settings
 seed: 42
-
-# Training settings (defaults, can be overridden by specific configs)
-training:
-  max_epochs: 100
-  batch_size: 64
-  learning_rate: 1e-4
-  weight_decay: 0.01
-  early_stopping_patience: 10
 
 # Logging
 logging:
