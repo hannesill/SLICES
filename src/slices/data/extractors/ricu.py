@@ -25,6 +25,7 @@ from rich.progress import (
     TextColumn,
 )
 
+from slices.constants import FEATURE_BLOCKLIST
 from slices.data.config_schemas import TimeSeriesConceptConfig
 
 from .base import BaseExtractor, ExtractorConfig
@@ -216,7 +217,7 @@ class RicuExtractor(BaseExtractor):
         # -----------------------------------------------------------------
         # Step 2: Load timeseries (single read, no batching)
         # -----------------------------------------------------------------
-        feature_names = self._metadata["feature_names"]
+        feature_names = [f for f in self._metadata["feature_names"] if f not in FEATURE_BLOCKLIST]
 
         with Progress(
             SpinnerColumn(),

@@ -192,6 +192,8 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
     for (b in 2:n_batches) {
       merged <- merge(merged, batch_results[[b]],
                       by = c("stay_id", "hour"), all = TRUE)
+      batch_results[[b]] <- NULL
+      gc()
     }
   }
   rm(batch_results, wins)
@@ -295,7 +297,6 @@ extract_admin_data <- function(dataset) {
 
 extract_admin_miiv <- function(dataset) {
   icu <- load_table(dataset, "icustays")
-  pat <- load_table(dataset, "patients")
   adm <- load_table(dataset, "admissions")
   if (is.null(icu)) return(NULL)
 
@@ -360,10 +361,31 @@ extract_admin_eicu <- function(dataset) {
   } else {
     names(pat)[1]  # fallback
   }
-  pid_col <- if ("patienthealthsystemstayid" %in% names(pat)) {
-    "patienthealthsystemstayid"
-  } else if ("uniquepid" %in% names(pat)) {
+  pid_col <- if ("uniquepid" %in% names(pat)) {
     "uniquepid"
+  } else if ("patienthealthsystemstayid" %in% names(pat)) {
+    "patienthealthsystemstayid"
+  } else {
+    NA
+  }
+
+  # Reconstruct approximate intime/outtime from eICU offsets.
+  # eICU de-identifies absolute timestamps but provides:
+  #   hospitaladmitoffset: minutes from unit admit to hospital admit (negative)
+  #   unitdischargeoffset: minutes from unit admit to unit discharge (positive)
+  # We anchor intime at a synthetic epoch (2000-01-01) so downstream code can
+  # compute relative durations (e.g., mortality_24h windows).
+  epoch <- as.POSIXct("2000-01-01 00:00:00", tz = "UTC")
+  intime_vals <- if ("hospitaladmitoffset" %in% names(pat)) {
+    # hospitaladmitoffset is typically negative (hospital admit before unit admit)
+    # intime = epoch + hospitaladmitoffset gives hospital admission time
+    # But for ICU-centric tasks, unit admission is the reference point
+    epoch  # Use epoch as unit admission time (offset = 0)
+  } else {
+    NA
+  }
+  outtime_vals <- if ("unitdischargeoffset" %in% names(pat)) {
+    epoch + pat$unitdischargeoffset * 60  # offset is in minutes
   } else {
     NA
   }
@@ -372,8 +394,8 @@ extract_admin_eicu <- function(dataset) {
     stay_id        = pat[[id_col]],
     patient_id     = if (!is.na(pid_col)) pat[[pid_col]] else NA,
     hadm_id        = NA_integer_,
-    intime         = NA,
-    outtime        = NA,
+    intime         = intime_vals,
+    outtime        = outtime_vals,
     first_careunit = if ("unittype" %in% names(pat)) pat$unittype else NA,
     race           = if ("ethnicity" %in% names(pat)) pat$ethnicity else NA,
     admission_type = if ("hospitaladmitsource" %in% names(pat)) {
@@ -449,7 +471,7 @@ extract_mortality_data <- function(dataset, dict) {
   result <- switch(fam,
     miiv  = extract_mortality_miiv(dataset, dict),
     mimic = extract_mortality_mimic(dataset, dict),
-    eicu  = extract_mortality_eicu(dataset),
+    eicu  = extract_mortality_eicu(dataset, dict),
     # For other datasets, fall back to RICU "death" concept
     extract_mortality_generic(dataset, dict)
   )
@@ -545,9 +567,9 @@ extract_mortality_mimic <- function(dataset, dict) {
   df
 }
 
-extract_mortality_eicu <- function(dataset) {
+extract_mortality_eicu <- function(dataset, dict) {
   pat <- load_table(dataset, "patient")
-  if (is.null(pat)) return(extract_mortality_generic(dataset))
+  if (is.null(pat)) return(extract_mortality_generic(dataset, dict))
 
   id_col <- if ("patientunitstayid" %in% names(pat)) {
     "patientunitstayid"
@@ -721,6 +743,14 @@ extract_diagnoses_eicu <- function(dataset) {
   )
   # Drop rows with empty ICD codes
   df <- df[!is.na(df$icd_code) & nchar(trimws(df$icd_code)) > 0, ]
+  # Split comma-separated ICD codes (common in eICU) into separate rows
+  if (nrow(df) > 0 && any(grepl(",", df$icd_code, fixed = TRUE))) {
+    dt <- as.data.table(df)
+    dt <- dt[, .(icd_code = trimws(unlist(strsplit(icd_code, ",", fixed = TRUE)))),
+             by = .(stay_id, icd_version)]
+    dt <- dt[nchar(icd_code) > 0]
+    df <- as.data.frame(dt)
+  }
   df
 }
 
