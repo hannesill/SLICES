@@ -105,11 +105,13 @@ def setup_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if not cfg.logging.get("use_wandb", False):
         return None
 
+    tags = list(cfg.logging.get("wandb_tags", [])) or None
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
         name=cfg.logging.get("run_name", None),
         group=cfg.logging.get("wandb_group", None),
+        tags=tags,
         save_dir=cfg.output_dir,
         log_model=False,
     )
@@ -490,9 +492,8 @@ def main(cfg: DictConfig) -> None:
 
     # Get best checkpoint info
     if hasattr(callbacks[0], "best_model_path"):
-        monitor = cfg.training.get("early_stopping_monitor", "val/auroc")
         print(f"\n Best checkpoint: {callbacks[0].best_model_path}")
-        print(f"  - Best {monitor}: {callbacks[0].best_model_score:.4f}")
+        print(f"  - Best {callbacks[0].monitor}: {callbacks[0].best_model_score:.4f}")
 
     # Print test results with baseline comparison
     if test_results:

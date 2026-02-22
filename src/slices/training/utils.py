@@ -4,6 +4,7 @@ Shared optimizer/scheduler construction for pretrain and finetune modules,
 and a shared checkpoint save helper.
 """
 
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -115,11 +116,8 @@ def build_scheduler(
                 return float(epoch + 1) / float(max(1, warmup_epochs))
             else:
                 progress = float(epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
-                return (
-                    eta_min_ratio
-                    + (1 - eta_min_ratio)
-                    * 0.5
-                    * (1.0 + torch.cos(torch.tensor(progress * 3.141592653589793))).item()
+                return eta_min_ratio + (1 - eta_min_ratio) * 0.5 * (
+                    1.0 + math.cos(progress * math.pi)
                 )
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)

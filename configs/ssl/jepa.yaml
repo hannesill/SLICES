@@ -11,7 +11,7 @@
 name: jepa
 
 # Masking parameters (same as MAE for fair comparison)
-mask_ratio: 0.75  # Fraction of observation tokens to mask
+mask_ratio: 0.5  # Experiment plan default (ablate over 0.3/0.5/0.75)
 
 # Predictor parameters (mirrors MAE decoder for fairness)
 predictor_d_model: 128

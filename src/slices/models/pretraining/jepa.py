@@ -247,6 +247,10 @@ class JEPAObjective(BaseSSLObjective):
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
 
         # 5. Target encoder processes ALL tokens (no masking, no grad)
+        # Keep target encoder in eval mode to disable dropout — Lightning's
+        # model.train() call at epoch start would otherwise re-enable it,
+        # corrupting target representations with stochastic noise.
+        self.target_encoder.eval()
         with torch.no_grad():
             target_tokens, target_padding, _ = self.target_encoder.tokenize(x, obs_mask)
             target_repr = self.target_encoder.encode(

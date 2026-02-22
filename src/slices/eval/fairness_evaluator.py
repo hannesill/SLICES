@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import polars as pl
 import torch
 from torchmetrics import AUROC
+from torchmetrics.classification import BinaryAveragePrecision
 
 from slices.eval.fairness import (
     demographic_parity_difference,
@@ -238,7 +239,9 @@ class FairnessEvaluator:
     ) -> Dict[str, Any]:
         """Compute binary classification fairness metrics."""
         per_group_auroc: Dict[str, float] = {}
+        per_group_auprc: Dict[str, float] = {}
         auroc_values = []
+        auprc_values = []
 
         for g in valid_groups:
             group_mask = group_ids == g
@@ -247,6 +250,7 @@ class FairnessEvaluator:
 
             if g_labels.unique().numel() < 2:
                 per_group_auroc[group_names[g]] = float("nan")
+                per_group_auprc[group_names[g]] = float("nan")
                 continue
 
             auroc_metric = AUROC(task="binary")
@@ -254,7 +258,19 @@ class FairnessEvaluator:
             per_group_auroc[group_names[g]] = auroc_val
             auroc_values.append(auroc_val)
 
+            auprc_metric = BinaryAveragePrecision()
+            auprc_val = auprc_metric(g_preds, g_labels).item()
+            per_group_auprc[group_names[g]] = auprc_val
+            auprc_values.append(auprc_val)
+
         worst_group_auroc = min(auroc_values) if auroc_values else float("nan")
+        worst_group_auprc = min(auprc_values) if auprc_values else float("nan")
+        auroc_gap = (
+            (max(auroc_values) - min(auroc_values)) if len(auroc_values) >= 2 else float("nan")
+        )
+        auprc_gap = (
+            (max(auprc_values) - min(auprc_values)) if len(auprc_values) >= 2 else float("nan")
+        )
 
         valid_mask = torch.zeros_like(group_ids, dtype=torch.bool)
         for g in valid_groups:
@@ -267,7 +283,11 @@ class FairnessEvaluator:
 
         return {
             "per_group_auroc": per_group_auroc,
+            "per_group_auprc": per_group_auprc,
             "worst_group_auroc": worst_group_auroc,
+            "worst_group_auprc": worst_group_auprc,
+            "auroc_gap": auroc_gap,
+            "auprc_gap": auprc_gap,
             "demographic_parity_diff": dp_diff,
             "equalized_odds_diff": eo_diff,
             "n_valid_groups": len(valid_groups),
@@ -344,11 +364,30 @@ class FairnessEvaluator:
                     else:
                         print(f"    {group} (n={size}): {auroc:.4f}")
 
+                print("  Per-group AUPRC:")
+                for group, auprc in metrics.get("per_group_auprc", {}).items():
+                    size = metrics["group_sizes"].get(group, "?")
+                    if isinstance(auprc, float) and auprc != auprc:
+                        print(f"    {group} (n={size}): N/A (single class)")
+                    else:
+                        print(f"    {group} (n={size}): {auprc:.4f}")
+
                 wg = metrics["worst_group_auroc"]
                 if isinstance(wg, float) and wg == wg:  # Not NaN
                     print(f"  Worst-group AUROC: {wg:.4f}")
                 else:
                     print("  Worst-group AUROC: N/A")
+                wg_auprc = metrics.get("worst_group_auprc", float("nan"))
+                if isinstance(wg_auprc, float) and wg_auprc == wg_auprc:
+                    print(f"  Worst-group AUPRC: {wg_auprc:.4f}")
+                else:
+                    print("  Worst-group AUPRC: N/A")
+                auroc_gap = metrics.get("auroc_gap", float("nan"))
+                if isinstance(auroc_gap, float) and auroc_gap == auroc_gap:
+                    print(f"  AUROC gap (max-min): {auroc_gap:.4f}")
+                auprc_gap = metrics.get("auprc_gap", float("nan"))
+                if isinstance(auprc_gap, float) and auprc_gap == auprc_gap:
+                    print(f"  AUPRC gap (max-min): {auprc_gap:.4f}")
                 print(f"  Demographic parity diff: {metrics['demographic_parity_diff']:.4f}")
                 eo = metrics["equalized_odds_diff"]
                 if isinstance(eo, float) and eo == eo:

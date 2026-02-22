@@ -17,6 +17,10 @@ defaults:
 project_name: slices
 experiment_name: contrastive_pretrain
 
+# Experiment tracking identifiers
+dataset: mimic       # mimic | eicu | combined
+paradigm: contrastive  # mae | jepa | contrastive
+
 # Random seed for reproducibility
 seed: 42
 
@@ -31,11 +35,11 @@ data:
   window_size: 48
   window_stride: 24
 
-# Encoder overrides (same as MAE pretrain for fair comparison)
+# Encoder overrides (base from configs/model/observation_transformer.yaml: d=128, L=4, H=8)
 encoder:
-  d_model: 256
-  d_ff: 1024
-  pooling: none  # Required for contrastive
+  pooling: none  # Required for contrastive - need per-token outputs
+
+# SSL objective (base from configs/ssl/contrastive.yaml, mask_ratio=0.5)
 
 # Training configuration (same budget as MAE)
 training:
@@ -67,8 +71,13 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: ${experiment_name}_s${seed}
-  wandb_group: ${experiment_name}
+  run_name: pretrain_${dataset}_${paradigm}_seed${seed}
+  wandb_group: pretrain_${dataset}_${paradigm}
+  wandb_tags:
+    - "phase:pretrain"
+    - "dataset:${dataset}"
+    - "paradigm:${paradigm}"
+    - "seed:${seed}"
   log_every_n_steps: 50
 
 # Hydra configuration

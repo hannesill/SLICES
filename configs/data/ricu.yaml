@@ -49,6 +49,9 @@ categories: null
 tasks:
   - mortality_24h
   - mortality_hospital
+  - decompensation
+  - aki_kdigo
+  - los_remaining
 
 # =============================================================================
 # TRAINING DATA LOADING
