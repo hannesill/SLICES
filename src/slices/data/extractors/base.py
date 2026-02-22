@@ -384,7 +384,7 @@ class BaseExtractor(ABC):
 
             # For single-label tasks, the builder returns a 'label' column
             # that we rename to the task name.
-            # For multi-label tasks (e.g., phenotyping), the builder returns
+            # For multi-label tasks, the builder returns
             # pre-named columns (no 'label' column) — use as-is.
             if "label" in task_labels.columns:
                 task_labels = task_labels.rename({"label": task_config.task_name})
