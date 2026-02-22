@@ -1,11 +1,14 @@
-# MAE SSL Pretraining Configuration
+# SSL Pretraining Configuration
 #
-# Masked Autoencoder for ICU time-series with observation-level tokenization.
-# Same encoder and training budget as JEPA/Contrastive for fair comparison.
+# Unified config for all SSL paradigms. Pick paradigm with ssl= override.
+# Paradigm and experiment_name are auto-derived from ssl.name in pretrain.py.
 #
 # Usage:
-#   uv run python scripts/training/pretrain.py
-#   uv run python scripts/training/pretrain.py training.max_epochs=100
+#   uv run python scripts/training/pretrain.py dataset=miiv              # MAE (default)
+#   uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
+#   uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
+#   uv run python scripts/training/pretrain.py dataset=eicu ssl=mae
+#   uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
 
 defaults:
   - data: ricu
@@ -15,11 +18,9 @@ defaults:
 
 # Project info
 project_name: slices
-experiment_name: mae_pretrain
 
-# Experiment tracking identifiers
-dataset: mimic  # mimic | eicu | combined
-paradigm: mae   # mae | jepa | contrastive
+# Dataset identifier — drives data paths via ricu.yaml interpolation
+dataset: miiv  # miiv | eicu | combined
 
 # Experiment sprint (for W&B filtering, e.g. sprint=1)
 sprint: null
@@ -33,26 +34,21 @@ checkpoint_dir: ${output_dir}/checkpoints
 
 # Data configuration overrides
 # Base settings inherited from configs/data/ricu.yaml
-# Override processed_dir here if needed:
-#   data.processed_dir: data/processed/mimic-iv-custom
 data:
   # Increase workers for pretraining (larger batches)
   num_workers: 8
 
   # Sliding window configuration for longer sequences
   # Enable after re-extracting with longer seq_length_hours (e.g., 168h)
-  # Example: uv run python scripts/preprocessing/extract_ricu.py data.seq_length_hours=168
   enable_sliding_windows: false  # Set true after re-extraction
   window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
   window_stride: 24              # Stride for overlapping windows (50% overlap)
 
 # Encoder overrides (base from configs/model/observation_transformer.yaml: d=128, L=4, H=8)
 encoder:
-  pooling: none  # Required for MAE - need per-token outputs (vs 'mean' for tasks)
+  pooling: none  # Required for SSL - need per-token outputs (vs 'mean' for tasks)
 
-# SSL objective (base from configs/ssl/mae.yaml, mask_ratio=0.5)
-
-# Training configuration (same budget as JEPA/Contrastive for fair comparison)
+# Training configuration (same budget across thesis paradigms for fair comparison)
 training:
   max_epochs: 500
   batch_size: 256
@@ -86,16 +82,17 @@ scheduler:
   eta_min: 1.0e-6
 
 # Logging configuration
+# Note: paradigm is auto-derived from ssl.name; referenced here via ${ssl.name}
 logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: pretrain_${dataset}_${paradigm}_seed${seed}
-  wandb_group: pretrain_${dataset}_${paradigm}
+  run_name: pretrain_${dataset}_${ssl.name}_seed${seed}
+  wandb_group: pretrain_${dataset}_${ssl.name}
   wandb_tags:
     - "phase:pretrain"
     - "dataset:${dataset}"
-    - "paradigm:${paradigm}"
+    - "paradigm:${ssl.name}"
     - "seed:${seed}"
   log_every_n_steps: 50
 
