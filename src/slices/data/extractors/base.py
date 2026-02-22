@@ -331,9 +331,7 @@ class BaseExtractor(ABC):
         3. Uses LabelBuilders to compute labels from raw data
         4. Combines labels into a single DataFrame
 
-        All tasks produce one row per stay. Decompensation stores death_hours
-        as a Float64 column; per-window binary labels are computed at training
-        time by SlidingWindowDataset.
+        All tasks produce one row per stay, with one label column per task.
 
         Args:
             stay_ids: List of ICU stay IDs to extract labels for.
