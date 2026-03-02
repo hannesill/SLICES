@@ -23,6 +23,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from slices.models.encoders import ObservationTransformerEncoder
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,7 +191,9 @@ class ImputationEvaluator:
         seq_length = encoder.config.max_seq_length
 
         # Wrap observation-level encoder for timestep-level output
-        if hasattr(encoder, "tokenize"):
+        # (ObservationTransformerEncoder produces per-observation tokens that
+        # need scatter-back; obs_aware TransformerEncoder already outputs per-timestep)
+        if isinstance(encoder, ObservationTransformerEncoder):
             encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
 
         encoder = encoder.to(device).eval()
@@ -239,8 +243,10 @@ class ImputationEvaluator:
             encoder.load_state_dict(checkpoint["encoder_state_dict"])
 
             # Wrap observation-level encoder for timestep-level output
+            # (ObservationTransformerEncoder produces per-observation tokens;
+            # obs_aware TransformerEncoder already outputs per-timestep)
             seq_length = encoder_config.get("max_seq_length", 168)
-            if hasattr(encoder, "tokenize"):
+            if isinstance(encoder, ObservationTransformerEncoder):
                 encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
         else:
             raise ValueError(

@@ -5,12 +5,17 @@ learning on ICU time-series with missing values and variable-length sequences.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
 
-from slices.models.common import PositionalEncoding, apply_pooling, get_activation
+from slices.models.common import (
+    PositionalEncoding,
+    apply_pooling,
+    build_sinusoidal_pe,
+    get_activation,
+)
 
 from .base import BaseEncoder, EncoderConfig
 
@@ -30,6 +35,7 @@ class TransformerConfig(EncoderConfig):
     use_positional_encoding: bool = True
     pooling: str = "mean"  # Pooling strategy: mean, max, cls, last, none
     prenorm: bool = True  # Pre-LN vs Post-LN transformer
+    obs_aware: bool = False  # Enable observation-aware MLP projection for SSL
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -176,8 +182,20 @@ class TransformerEncoder(BaseEncoder):
         # Validate configuration before creating modules
         self._validate_config()
 
-        # Input projection: (B, T, d_input) -> (B, T, d_model)
-        self.input_proj = nn.Linear(config.d_input, config.d_model)
+        # Input projection — mutually exclusive paths:
+        # obs_aware: concat (values, obs_mask) → MLP → d_model (for SSL pretraining)
+        # standard:  values → Linear → d_model (for finetuning / supervised)
+        if config.obs_aware:
+            self.obs_proj = nn.Sequential(
+                nn.Linear(2 * config.d_input, config.d_ff),
+                nn.GELU(),
+                nn.Linear(config.d_ff, config.d_model),
+            )
+            self.register_buffer(
+                "time_pe", build_sinusoidal_pe(config.max_seq_length, config.d_model)
+            )
+        else:
+            self.input_proj = nn.Linear(config.d_input, config.d_model)
 
         # Optional CLS token for pooling
         if config.pooling == "cls":
@@ -229,6 +247,80 @@ class TransformerEncoder(BaseEncoder):
                 f"Invalid pooling '{self.config.pooling}'. " f"Choose from: {valid_pooling}"
             )
 
+    def tokenize(
+        self,
+        x: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
+        """Convert timestep data into obs-aware tokens.
+
+        Concatenates values and observation mask, projects through obs_proj MLP,
+        and adds sinusoidal time positional encoding.
+
+        Requires obs_aware=True in the encoder config.
+
+        Args:
+            x: Input values of shape (B, T, D).
+            obs_mask: Boolean mask (B, T, D), True = observed.
+
+        Returns:
+            tokens: (B, T, d_model) embedded tokens.
+            padding_mask: (B, T) all True (fixed T, no padding).
+            token_info: dict with timestep_idx, values, obs_mask.
+
+        Raises:
+            RuntimeError: If encoder was not configured with obs_aware=True.
+        """
+        if not self.config.obs_aware:
+            raise RuntimeError(
+                "tokenize() requires obs_aware=True. "
+                "Create the encoder with TransformerConfig(obs_aware=True)."
+            )
+        B, T, D = x.shape
+        device = x.device
+
+        # Concat values + mask -> (B, T, 2D) -> obs_proj -> (B, T, d_model)
+        combined = torch.cat([x, obs_mask.float()], dim=-1)  # (B, T, 2D)
+        tokens = self.obs_proj(combined)  # (B, T, d_model)
+
+        # Add sinusoidal time PE
+        tokens = tokens + self.time_pe[:T].unsqueeze(0)  # (B, T, d_model)
+
+        # Fixed-length: all timesteps valid
+        padding_mask = torch.ones(B, T, dtype=torch.bool, device=device)
+
+        token_info = {
+            "timestep_idx": torch.arange(T, device=device).unsqueeze(0).expand(B, -1),
+            "values": x,
+            "obs_mask": obs_mask,
+        }
+
+        return tokens, padding_mask, token_info
+
+    def encode(
+        self,
+        tokens: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run transformer layers on tokens.
+
+        Args:
+            tokens: (B, N, d_model) token embeddings.
+            padding_mask: (B, N) True = valid, False = padding.
+
+        Returns:
+            (B, N, d_model) encoded tokens.
+        """
+        # Convert to PyTorch convention: True = ignore
+        key_padding_mask = ~padding_mask
+
+        x = tokens
+        for layer in self.layers:
+            x = layer(x, key_padding_mask=key_padding_mask)
+
+        x = self.final_norm(x)
+        return x
+
     def forward(
         self,
         x: torch.Tensor,
@@ -256,8 +348,15 @@ class TransformerEncoder(BaseEncoder):
         """
         B, T, D = x.shape
 
-        # Input projection
-        x = self.input_proj(x)  # (B, T, d_model)
+        # Input projection (mutually exclusive paths)
+        if self.config.obs_aware:
+            if mask is None:
+                mask = torch.ones(B, T, D, dtype=torch.bool, device=x.device)
+            combined = torch.cat([x, mask.float()], dim=-1)  # (B, T, 2D)
+            x = self.obs_proj(combined)  # (B, T, d_model)
+            x = x + self.time_pe[:T].unsqueeze(0)
+        else:
+            x = self.input_proj(x)  # (B, T, d_model)
 
         # Add CLS token if using CLS pooling
         if self.config.pooling == "cls":
@@ -269,8 +368,9 @@ class TransformerEncoder(BaseEncoder):
                 cls_mask = torch.ones(B, 1, dtype=torch.bool, device=x.device)
                 padding_mask = torch.cat([cls_mask, padding_mask], dim=1)  # (B, T+1)
 
-        # Add positional encoding
-        x = self.pos_encoder(x)  # (B, T, d_model) or (B, T+1, d_model)
+        # Add positional encoding (skip for obs_aware — time_pe already added)
+        if not self.config.obs_aware:
+            x = self.pos_encoder(x)  # (B, T, d_model) or (B, T+1, d_model)
 
         # Convert padding mask to PyTorch convention (True = ignore)
         # Our convention: True = valid, False = padding

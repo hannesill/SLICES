@@ -79,3 +79,66 @@ def extract_visible(
     vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
 
     return visible_tokens, vis_padding
+
+
+def create_timestep_mask(
+    batch_size: int,
+    n_timesteps: int,
+    mask_ratio: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Create random mask at timestep level.
+
+    Args:
+        batch_size: Batch size B.
+        n_timesteps: Number of timesteps T.
+        mask_ratio: Fraction of timesteps to mask.
+        device: Device.
+
+    Returns:
+        ssl_mask: (B, T) bool mask, True = visible, False = masked.
+    """
+    rand_vals = torch.rand(batch_size, n_timesteps, device=device)
+    ssl_mask = rand_vals >= mask_ratio  # True = visible
+
+    # Ensure at least 1 visible timestep per sample
+    n_visible = ssl_mask.sum(dim=1)  # (B,)
+    needs_fix = n_visible == 0
+    if needs_fix.any():
+        for b in range(batch_size):
+            if needs_fix[b]:
+                ssl_mask[b, 0] = True
+
+    return ssl_mask
+
+
+def extract_visible_timesteps(
+    tokens: torch.Tensor,
+    ssl_mask: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Extract visible timestep tokens from full sequence.
+
+    Args:
+        tokens: (B, T, d_model)
+        ssl_mask: (B, T) True = visible, False = masked.
+
+    Returns:
+        visible_tokens: (B, max_vis, d_model)
+        vis_padding: (B, max_vis) True = valid visible token
+    """
+    B, T, d_model = tokens.shape
+
+    n_visible = ssl_mask.sum(dim=1)  # (B,)
+    max_vis = max(int(n_visible.max().item()), 1)
+
+    # Argsort: visible (True=1) first
+    sort_idx = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
+    sort_idx_expanded = sort_idx.unsqueeze(-1).expand(-1, -1, d_model)
+
+    sorted_tokens = tokens.gather(1, sort_idx_expanded)
+    visible_tokens = sorted_tokens[:, :max_vis, :]  # (B, max_vis, d_model)
+
+    vis_positions = torch.arange(max_vis, device=tokens.device).unsqueeze(0)
+    vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
+
+    return visible_tokens, vis_padding

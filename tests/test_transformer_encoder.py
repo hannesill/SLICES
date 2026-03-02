@@ -860,5 +860,114 @@ class TestEncoderSimplified:
         assert out.shape == (batch_size, 128)
 
 
+class TestTransformerEncoderObsAware:
+    """Tests for obs_aware TransformerEncoder with tokenize/encode methods."""
+
+    @pytest.fixture
+    def config(self):
+        return TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            max_seq_length=48,
+            pooling="none",
+            obs_aware=True,
+            dropout=0.0,
+        )
+
+    @pytest.fixture
+    def encoder(self, config):
+        return TransformerEncoder(config)
+
+    def test_tokenize_shapes(self, encoder):
+        """Verify tokenize returns (B, T, d_model) output."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.3
+
+        tokens, padding_mask, token_info = encoder.tokenize(x, obs_mask)
+
+        assert tokens.shape == (B, T, 32)
+        assert padding_mask.shape == (B, T)
+        assert padding_mask.all()  # All True for fixed T
+        assert "timestep_idx" in token_info
+        assert "values" in token_info
+        assert "obs_mask" in token_info
+        assert token_info["timestep_idx"].shape == (B, T)
+
+    def test_encode_shapes(self, encoder):
+        """Verify encoding a subset of tokens."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.rand(B, T, D) > 0.3
+
+        tokens, padding_mask, _ = encoder.tokenize(x, obs_mask)
+
+        # Take a subset (simulating visible tokens)
+        n_vis = 4
+        vis_tokens = tokens[:, :n_vis, :]
+        vis_padding = torch.ones(B, n_vis, dtype=torch.bool)
+
+        encoded = encoder.encode(vis_tokens, vis_padding)
+        assert encoded.shape == (B, n_vis, 32)
+
+    def test_forward_obs_aware(self, encoder):
+        """Verify obs_proj used when mask provided, different masks -> different outputs."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        encoder.eval()
+
+        mask_full = torch.ones(B, T, D, dtype=torch.bool)
+        mask_sparse = torch.zeros(B, T, D, dtype=torch.bool)
+        mask_sparse[:, :, :3] = True
+
+        with torch.no_grad():
+            out_full = encoder(x, mask=mask_full)
+            out_sparse = encoder(x, mask=mask_sparse)
+
+        # Different masks should produce different outputs (obs_proj sees mask)
+        assert not torch.allclose(out_full, out_sparse, atol=1e-5)
+
+    def test_backward_compatible(self, encoder):
+        """Verify forward(x) without mask still uses input_proj."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        encoder.eval()
+
+        with torch.no_grad():
+            out = encoder(x)
+
+        assert out.shape == (B, T, 32)  # pooling='none'
+
+    def test_gradient_flow_obs_proj(self, encoder):
+        """Verify gradients flow through obs_proj path."""
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        out = encoder(x, mask=obs_mask)
+        loss = out.sum()
+        loss.backward()
+
+        # obs_proj should have gradients
+        for name, param in encoder.obs_proj.named_parameters():
+            assert param.grad is not None, f"No gradient for obs_proj.{name}"
+            assert param.grad.abs().sum() > 0
+
+    def test_has_tokenize_encode(self):
+        """Obs-aware encoder should have tokenize() and encode() methods."""
+        config = TransformerConfig(
+            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none", obs_aware=True
+        )
+        encoder = TransformerEncoder(config)
+
+        assert hasattr(encoder, "tokenize")
+        assert hasattr(encoder, "encode")
+        assert callable(encoder.tokenize)
+        assert callable(encoder.encode)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

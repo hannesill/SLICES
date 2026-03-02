@@ -1,15 +1,15 @@
 """Contrastive (SimCLR-style) SSL objective for ICU time-series.
 
-Observation-level tokenization variant: uses two different random masks as
+Timestep-level tokenization variant: uses two different random timestep masks as
 two augmented "views" of the same sample, then applies NT-Xent contrastive
 loss on the pooled representations.
 
 Architecture:
-1. ObservationTransformerEncoder.tokenize() → one token per observed measurement
-2. Two independent random masks → two different subsets of tokens (views)
-3. Encoder processes each view separately → per-token representations
-4. Mean-pool over visible tokens → sequence-level embeddings
-5. Projection head → low-dimensional normalized embeddings
+1. TransformerEncoder.tokenize() -> one token per timestep (B, T, d_model)
+2. Two independent random masks -> two different subsets of timestep tokens (views)
+3. Encoder processes each view separately -> per-token representations
+4. Mean-pool over visible tokens -> sequence-level embeddings
+5. Projection head -> low-dimensional normalized embeddings
 6. NT-Xent loss: positive pairs = same sample's two views
 
 Key difference from MAE: discriminative (not reconstructive), global (not local).
@@ -24,12 +24,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_observation_mask, extract_visible
+from .masking import create_timestep_mask, extract_visible_timesteps
 
 
 @dataclass
 class ContrastiveConfig(SSLConfig):
-    """Configuration for observation-level contrastive objective."""
+    """Configuration for timestep-level contrastive objective."""
 
     name: str = "contrastive"
 
@@ -78,27 +78,27 @@ class ProjectionHead(nn.Module):
 
 
 class ContrastiveObjective(BaseSSLObjective):
-    """Observation-level contrastive (SimCLR-style) SSL for ICU time-series.
+    """Timestep-level contrastive (SimCLR-style) SSL for ICU time-series.
 
     Flow:
-    1. encoder.tokenize(x, obs_mask) → observation tokens
-    2. Two independent random masks → two views
-    3. For each view: extract_visible → encode → mean_pool → (B, d_model)
-    4. projection_head(pooled) → z1, z2 (B, proj_dim), L2-normalized
+    1. encoder.tokenize(x, obs_mask) -> timestep tokens
+    2. Two independent random timestep masks -> two views
+    3. For each view: extract_visible -> encode -> mean_pool -> (B, d_model)
+    4. projection_head(pooled) -> z1, z2 (B, proj_dim), L2-normalized
     5. NT-Xent loss: match positive pairs across views
 
-    Requires ObservationTransformerEncoder with pooling='none'.
+    Requires encoder with tokenize()/encode() and pooling='none'.
     """
 
     def __init__(self, encoder: nn.Module, config: ContrastiveConfig) -> None:
         super().__init__(encoder, config)
         self.config: ContrastiveConfig = config
 
-        # Validate encoder type
-        if not hasattr(encoder, "tokenize") or not hasattr(encoder, "encode"):
+        # Validate encoder has obs-aware tokenization
+        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
             raise ValueError(
-                "Contrastive requires an encoder with tokenize() and encode() "
-                "methods (e.g., ObservationTransformerEncoder). Got: "
+                "Contrastive requires an encoder with obs_aware=True "
+                "(e.g., TransformerEncoder with obs_aware=True). Got: "
                 f"{type(encoder).__name__}"
             )
 
@@ -140,17 +140,18 @@ class ContrastiveObjective(BaseSSLObjective):
 
         # 1. Tokenize (shared between both views)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
-        # 2. Two independent random masks
-        ssl_mask_1 = create_observation_mask(padding_mask, self.config.mask_ratio, device)
-        ssl_mask_2 = create_observation_mask(padding_mask, self.config.mask_ratio, device)
 
-        # 3. View 1: extract → encode → mean pool
-        vis_tokens_1, vis_padding_1 = extract_visible(tokens, ssl_mask_1, padding_mask)
+        # 2. Two independent random timestep masks
+        ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+
+        # 3. View 1: extract -> encode -> mean pool
+        vis_tokens_1, vis_padding_1 = extract_visible_timesteps(tokens, ssl_mask_1)
         encoded_1 = self.encoder.encode(vis_tokens_1, vis_padding_1)
         pooled_1 = self._mean_pool(encoded_1, vis_padding_1)  # (B, d_model)
 
-        # 4. View 2: extract → encode → mean pool
-        vis_tokens_2, vis_padding_2 = extract_visible(tokens, ssl_mask_2, padding_mask)
+        # 4. View 2: extract -> encode -> mean pool
+        vis_tokens_2, vis_padding_2 = extract_visible_timesteps(tokens, ssl_mask_2)
         encoded_2 = self.encoder.encode(vis_tokens_2, vis_padding_2)
         pooled_2 = self._mean_pool(encoded_2, vis_padding_2)  # (B, d_model)
 
@@ -159,7 +160,7 @@ class ContrastiveObjective(BaseSSLObjective):
         z2 = self.projection_head(pooled_2)  # (B, proj_dim)
 
         # 6. NT-Xent loss
-        loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2, padding_mask)
+        loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2)
 
         return loss, metrics
 
@@ -188,16 +189,14 @@ class ContrastiveObjective(BaseSSLObjective):
         z2: torch.Tensor,
         ssl_mask_1: torch.Tensor,
         ssl_mask_2: torch.Tensor,
-        padding_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute NT-Xent (Normalized Temperature-scaled Cross Entropy) loss.
 
         Args:
             z1: (B, proj_dim) L2-normalized projections from view 1.
             z2: (B, proj_dim) L2-normalized projections from view 2.
-            ssl_mask_1: (B, max_obs) mask for view 1 (for metrics).
-            ssl_mask_2: (B, max_obs) mask for view 2 (for metrics).
-            padding_mask: (B, max_obs) padding mask (for metrics).
+            ssl_mask_1: (B, T) mask for view 1 (for metrics).
+            ssl_mask_2: (B, T) mask for view 2 (for metrics).
 
         Returns:
             (loss, metrics_dict)
@@ -231,12 +230,12 @@ class ContrastiveObjective(BaseSSLObjective):
             # Positive pair similarities (before temperature scaling)
             pos_sim = F.cosine_similarity(z1, z2, dim=-1).mean()
 
-            # Token statistics
-            n_total = padding_mask.sum().item()
-            n_vis_1 = (ssl_mask_1 & padding_mask).sum().item()
-            n_vis_2 = (ssl_mask_2 & padding_mask).sum().item()
-            n_masked_1 = ((~ssl_mask_1) & padding_mask).sum().item()
-            n_masked_2 = ((~ssl_mask_2) & padding_mask).sum().item()
+            # Timestep statistics
+            T = ssl_mask_1.shape[1]
+            n_vis_1 = ssl_mask_1.sum().item()
+            n_vis_2 = ssl_mask_2.sum().item()
+            n_masked_1 = (~ssl_mask_1).sum().item()
+            n_masked_2 = (~ssl_mask_2).sum().item()
 
             metrics = {
                 "contrastive_loss": loss.detach(),
@@ -244,7 +243,7 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_accuracy": accuracy,
                 "contrastive_pos_similarity": pos_sim,
                 "contrastive_temperature": temperature,
-                "contrastive_n_tokens_per_sample": n_total / B,
+                "contrastive_n_timesteps": T,
                 "contrastive_n_visible_view1": n_vis_1 / B,
                 "contrastive_n_visible_view2": n_vis_2 / B,
                 "contrastive_n_masked_view1": n_masked_1 / B,
