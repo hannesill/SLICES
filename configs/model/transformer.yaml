@@ -45,3 +45,7 @@ use_positional_encoding: true  # Add sinusoidal positional encoding
 # - last: Use last valid timestep
 # - none: Return per-timestep embeddings (required for MAE pretraining)
 pooling: mean
+
+# Observation-aware mode: concat (values, obs_mask) -> MLP -> d_model
+# Enable for SSL pretraining; disabled by default for supervised baselines
+obs_aware: false

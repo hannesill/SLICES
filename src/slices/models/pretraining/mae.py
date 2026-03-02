@@ -1,39 +1,40 @@
 """Masked Autoencoder (MAE) for self-supervised learning on ICU time-series.
 
-Observation-level tokenization variant: each token = one observed (timestep, feature, value)
-triplet. The encoder only sees visible (unmasked) tokens, matching the original MAE design.
+Timestep-level tokenization variant: each token = one timestep with all D features.
+The encoder only sees visible (unmasked) timestep tokens, matching the original MAE design.
 
 Architecture:
-1. ObservationTransformerEncoder.tokenize() → one token per observed measurement
-2. Random mask: 50% of observation tokens are masked (configurable via mask_ratio)
-3. Encoder processes only visible tokens (50%)
-4. Decoder reassembles full sequence (visible + mask tokens), predicts scalar values
-5. MSE loss on masked token values only
+1. TransformerEncoder.tokenize() -> one token per timestep (B, T, d_model)
+2. Random mask: 50% of timestep tokens are masked (configurable via mask_ratio)
+3. Encoder processes only visible tokens
+4. Decoder reassembles full sequence (visible + mask tokens), predicts D features per timestep
+5. MSE loss on observed features at masked timesteps only
 """
 
-import math
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
 
+from slices.models.common import build_sinusoidal_pe
+
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_observation_mask, extract_visible
+from .masking import create_timestep_mask, extract_visible_timesteps
 
 
 @dataclass
 class MAEConfig(SSLConfig):
-    """Configuration for observation-level MAE objective.
+    """Configuration for timestep-level MAE objective.
 
-    The encoder only sees visible (unmasked) observation tokens.
-    Mask ratio is applied to observation tokens (not timesteps).
+    The encoder only sees visible (unmasked) timestep tokens.
+    Mask ratio is applied to timesteps (not individual observations).
     """
 
     name: str = "mae"
 
     # Masking
-    mask_ratio: float = 0.5  # Fraction of observation tokens to mask
+    mask_ratio: float = 0.5  # Fraction of timesteps to mask
 
     # Decoder parameters
     decoder_d_model: int = 128
@@ -44,12 +45,12 @@ class MAEConfig(SSLConfig):
 
 
 class MAEDecoder(nn.Module):
-    """Lightweight decoder for observation-level MAE.
+    """Lightweight decoder for timestep-level MAE.
 
     Reassembles encoded visible tokens with learnable mask tokens at masked
-    positions. Adds positional information (feature + temporal) to all tokens
-    before running through lightweight transformer layers. Predicts a scalar
-    value per token.
+    timestep positions. Adds temporal positional information to all tokens
+    before running through lightweight transformer layers. Predicts D features
+    per timestep.
     """
 
     def __init__(
@@ -70,17 +71,10 @@ class MAEDecoder(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, d_dec))
         nn.init.normal_(self.mask_token, std=0.02)
 
-        # Positional information for decoder
-        self.feature_embed = nn.Embedding(n_features, d_dec)
-
         # Sinusoidal time PE for decoder
-        pe = self._build_sinusoidal_pe(max_seq_length, d_dec)
-        self.register_buffer("time_pe", pe)
+        self.register_buffer("time_pe", build_sinusoidal_pe(max_seq_length, d_dec))
 
-        # Decoder transformer layers.
-        # PyTorch's TransformerEncoderLayer is used here (not DecoderLayer) because
-        # MAE's decoder uses self-attention over all tokens (visible + mask), not
-        # cross-attention between encoder output and mask tokens.
+        # Decoder transformer layers
         decoder_layer = nn.TransformerEncoderLayer(
             d_model=d_dec,
             nhead=config.decoder_n_heads,
@@ -98,37 +92,26 @@ class MAEDecoder(nn.Module):
         # Dropout on input embeddings before decoder transformer
         self.embed_dropout = nn.Dropout(config.decoder_dropout)
 
-        # Output: predict scalar value per token
-        self.output_proj = nn.Linear(d_dec, 1)
-
-    @staticmethod
-    def _build_sinusoidal_pe(max_len: int, d_model: int) -> torch.Tensor:
-        position = torch.arange(max_len).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
-        return pe
+        # Output: predict D features per timestep
+        self.output_proj = nn.Linear(d_dec, n_features)
 
     def forward(
         self,
         encoded_visible: torch.Tensor,
         ssl_mask: torch.Tensor,
         token_info: Dict[str, torch.Tensor],
-        max_tokens: int,
-        token_padding_mask: torch.Tensor,
+        n_timesteps: int,
     ) -> torch.Tensor:
-        """Decode: reassemble visible + mask tokens, predict values.
+        """Decode: reassemble visible + mask tokens, predict feature values.
 
         Args:
             encoded_visible: (B, n_vis, d_encoder) encoded visible tokens.
-            ssl_mask: (B, max_obs) bool, True = visible, False = masked.
-            token_info: dict with timestep_idx, feature_idx (B, max_obs).
-            max_tokens: total number of token positions (max_obs).
-            token_padding_mask: (B, max_obs) True = valid token, False = padding.
+            ssl_mask: (B, T) bool, True = visible, False = masked.
+            token_info: dict with timestep_idx (B, T).
+            n_timesteps: total number of timesteps T.
 
         Returns:
-            (B, max_tokens) predicted scalar value per token position.
+            (B, T, D) predicted feature values per timestep.
         """
         B = encoded_visible.shape[0]
         d_dec = self.config.decoder_d_model
@@ -136,70 +119,52 @@ class MAEDecoder(nn.Module):
         # Project visible tokens to decoder space
         vis_proj = self.encoder_proj(encoded_visible)  # (B, n_vis, d_dec)
 
-        # Build full decoder input: place visible tokens and mask tokens
-        full_tokens = self.mask_token.expand(B, max_tokens, d_dec).clone()
+        # Build full decoder input: mask tokens everywhere, then scatter visible
+        full_tokens = self.mask_token.expand(B, n_timesteps, d_dec).clone()
 
-        # Place visible tokens at their original positions.
-        # ssl_mask is (B, max_obs), True at visible positions.
-        # Stable descending argsort on ssl_mask.float() puts visible (1.0) positions
-        # first. This mirrors extract_visible(), so vis_indices[:, :n_vis] gives
-        # the original positions of the n_vis visible tokens in the same order
-        # they were fed to the encoder.
-        # Padding invariant: padding positions have ssl_mask=True (see
-        # create_observation_mask), so they sort among visible positions.
-        # But because tokenization places valid tokens before padding and argsort
-        # is stable, valid-visible tokens always precede padding tokens in the
-        # sorted order. We only scatter the first n_vis entries, which are the
-        # actual visible tokens, not padding.
+        # Scatter visible tokens to their original positions
         vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        # vis_indices[:, :n_vis] gives the original positions of visible tokens
         n_vis = vis_proj.shape[1]
         scatter_idx = vis_indices[:, :n_vis]  # (B, n_vis)
-        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_dec)  # (B, n_vis, d_dec)
+        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_dec)
         full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
 
-        # Add positional information to ALL token positions
-        timestep_idx = token_info["timestep_idx"]  # (B, max_tokens)
-        feature_idx = token_info["feature_idx"]  # (B, max_tokens)
-
-        full_tokens = full_tokens + self.feature_embed(feature_idx)
+        # Add time PE to all positions
+        timestep_idx = token_info["timestep_idx"]  # (B, T)
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        # Build key_padding_mask for decoder (True = ignore in PyTorch convention)
-        key_padding_mask = ~token_padding_mask  # (B, max_tokens)
+        # Run decoder transformer (no padding mask needed, all T positions valid)
+        decoded = self.decoder(full_tokens)
 
-        # Run decoder transformer
-        decoded = self.decoder(full_tokens, src_key_padding_mask=key_padding_mask)
-
-        # Predict scalar value per token
-        predictions = self.output_proj(decoded).squeeze(-1)  # (B, max_tokens)
+        # Predict D features per timestep
+        predictions = self.output_proj(decoded)  # (B, T, D)
 
         return predictions
 
 
 class MAEObjective(BaseSSLObjective):
-    """Observation-level Masked Autoencoder for ICU time-series.
+    """Timestep-level Masked Autoencoder for ICU time-series.
 
     Flow:
-    1. encoder.tokenize(x, obs_mask) → observation tokens + padding + info
-    2. Random mask: 75% of tokens masked, 25% visible
-    3. encoder.encode(visible_tokens) → encoded visible
-    4. decoder(encoded_visible, mask, info) → predicted values per token
-    5. MSE loss on masked token values
+    1. encoder.tokenize(x, obs_mask) -> timestep tokens + padding + info
+    2. Random mask: mask_ratio of timesteps masked
+    3. encoder.encode(visible_tokens) -> encoded visible
+    4. decoder(encoded_visible, mask, info) -> predicted values (B, T, D)
+    5. MSE loss on observed features at masked timesteps
 
-    Requires ObservationTransformerEncoder with pooling='none'.
+    Requires encoder with tokenize()/encode() and pooling='none'.
     """
 
     def __init__(self, encoder: nn.Module, config: MAEConfig) -> None:
         super().__init__(encoder, config)
         self.config: MAEConfig = config
 
-        # Validate encoder type
-        if not hasattr(encoder, "tokenize") or not hasattr(encoder, "encode"):
+        # Validate encoder has obs-aware tokenization
+        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
             raise ValueError(
-                "MAE requires an encoder with tokenize() and encode() methods "
-                "(e.g., ObservationTransformerEncoder). Got: "
+                "MAE requires an encoder with obs_aware=True "
+                "(e.g., TransformerEncoder with obs_aware=True). Got: "
                 f"{type(encoder).__name__}"
             )
 
@@ -215,7 +180,6 @@ class MAEObjective(BaseSSLObjective):
         n_features = encoder.config.d_input
         max_seq_length = encoder.config.max_seq_length
 
-        # No missing_token needed -- observation encoder handles this intrinsically
         self.missing_token = None
 
         # Create decoder
@@ -231,7 +195,7 @@ class MAEObjective(BaseSSLObjective):
         x: torch.Tensor,
         obs_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Compute observation-level MAE loss.
+        """Compute timestep-level MAE loss.
 
         Args:
             x: Input tensor (B, T, D).
@@ -243,18 +207,15 @@ class MAEObjective(BaseSSLObjective):
         B, T, D = x.shape
         device = x.device
 
-        # 1. Tokenize observed measurements
+        # 1. Tokenize timesteps
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
-        # tokens: (B, max_obs, d_model), padding_mask: (B, max_obs)
-        max_obs = tokens.shape[1]
-        true_values = token_info["values"]  # (B, max_obs)
+        # tokens: (B, T, d_model)
 
-        # 2. Create SSL mask on observation tokens
-        # ssl_mask: True = visible, False = masked
-        ssl_mask = create_observation_mask(padding_mask, self.config.mask_ratio, device)
+        # 2. Create SSL mask on timesteps
+        ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
 
         # 3. Extract visible tokens
-        visible_tokens, vis_padding = extract_visible(tokens, ssl_mask, padding_mask)
+        visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
 
         # 4. Encode visible tokens only
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
@@ -264,12 +225,11 @@ class MAEObjective(BaseSSLObjective):
             encoded_visible=encoded_visible,
             ssl_mask=ssl_mask,
             token_info=token_info,
-            max_tokens=max_obs,
-            token_padding_mask=padding_mask,
-        )
+            n_timesteps=T,
+        )  # (B, T, D)
 
-        # 6. Compute loss on masked token values
-        loss, metrics = self._compute_loss(predictions, true_values, ssl_mask, padding_mask)
+        # 6. Compute loss on observed features at masked timesteps
+        loss, metrics = self._compute_loss(predictions, x, ssl_mask, obs_mask)
 
         return loss, metrics
 
@@ -278,37 +238,38 @@ class MAEObjective(BaseSSLObjective):
         predictions: torch.Tensor,
         true_values: torch.Tensor,
         ssl_mask: torch.Tensor,
-        padding_mask: torch.Tensor,
+        obs_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Compute MSE loss on masked token predictions.
+        """Compute MSE loss on observed features at masked timesteps.
 
         Args:
-            predictions: (B, max_obs) predicted values.
-            true_values: (B, max_obs) original observed values.
-            ssl_mask: (B, max_obs) True = visible, False = masked.
-            padding_mask: (B, max_obs) True = valid token.
+            predictions: (B, T, D) predicted feature values.
+            true_values: (B, T, D) original input values.
+            ssl_mask: (B, T) True = visible, False = masked.
+            obs_mask: (B, T, D) True = observed.
 
         Returns:
             (loss, metrics_dict)
         """
-        # Loss only on masked AND valid positions
-        loss_mask = (~ssl_mask) & padding_mask  # (B, max_obs)
+        # Loss mask: masked timesteps AND observed features -> (B, T, D)
+        loss_mask = (~ssl_mask).unsqueeze(-1) & obs_mask
 
         squared_error = (predictions - true_values) ** 2
         loss = (squared_error * loss_mask.float()).sum() / loss_mask.float().sum().clamp(min=1)
 
         with torch.no_grad():
-            B = padding_mask.shape[0]
-            n_total_tokens = padding_mask.sum().item()
-            n_masked = loss_mask.sum().item()
-            n_visible = (ssl_mask & padding_mask).sum().item()
+            B, T, D = true_values.shape
+            n_timesteps = T
+            n_masked_timesteps = (~ssl_mask).sum().item()
+            n_visible_timesteps = ssl_mask.sum().item()
+            n_loss_positions = loss_mask.sum().item()
 
-            # Visible (unmasked) reconstruction for monitoring
-            visible_mask = ssl_mask & padding_mask
-            if visible_mask.sum() > 0:
+            # Visible reconstruction for monitoring
+            visible_loss_mask = ssl_mask.unsqueeze(-1) & obs_mask
+            if visible_loss_mask.sum() > 0:
                 visible_loss = (
-                    squared_error * visible_mask.float()
-                ).sum() / visible_mask.float().sum()
+                    squared_error * visible_loss_mask.float()
+                ).sum() / visible_loss_mask.float().sum()
             else:
                 visible_loss = torch.tensor(0.0, device=loss.device)
 
@@ -317,12 +278,11 @@ class MAEObjective(BaseSSLObjective):
                 "ssl_loss": loss.detach(),
                 "mae_recon_loss_masked": loss.detach(),
                 "mae_recon_loss_visible": visible_loss,
-                "mae_mask_ratio_actual": n_masked / max(n_total_tokens, 1),
-                "mae_obs_ratio": n_total_tokens
-                / max(padding_mask.shape[0] * padding_mask.shape[1], 1),
-                "mae_n_tokens_per_sample": n_total_tokens / B,
-                "mae_n_visible_per_sample": n_visible / B,
-                "mae_n_masked_per_sample": n_masked / B,
+                "mae_mask_ratio_actual": n_masked_timesteps / max(B * n_timesteps, 1),
+                "mae_n_timesteps": n_timesteps,
+                "mae_n_visible_per_sample": n_visible_timesteps / B,
+                "mae_n_masked_per_sample": n_masked_timesteps / B,
+                "mae_n_loss_positions": n_loss_positions,
             }
 
         return loss, metrics
