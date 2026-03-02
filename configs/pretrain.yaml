@@ -12,7 +12,7 @@
 
 defaults:
   - data: ricu
-  - model: observation_transformer
+  - model: transformer
   - ssl: mae
   - _self_
 
@@ -44,9 +44,14 @@ data:
   window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
   window_stride: 24              # Stride for overlapping windows (50% overlap)
 
-# Encoder overrides (base from configs/model/observation_transformer.yaml: d=128, L=4, H=8)
+# Encoder overrides for SSL pretraining
 encoder:
   pooling: none  # Required for SSL - need per-token outputs (vs 'mean' for tasks)
+  obs_aware: true  # Enable obs-aware MLP projection for SSL
+  d_model: 128
+  n_layers: 4
+  n_heads: 8
+  d_ff: 512
 
 # Training configuration (same budget across thesis paradigms for fair comparison)
 training:

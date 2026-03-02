@@ -21,7 +21,7 @@
 
 defaults:
   - data: ricu
-  - model: observation_transformer
+  - model: transformer
   - tasks: mortality_24h
   - _self_
 

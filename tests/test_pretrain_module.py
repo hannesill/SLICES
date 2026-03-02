@@ -21,7 +21,7 @@ def minimal_config():
     return OmegaConf.create(
         {
             "encoder": {
-                "name": "observation_transformer",
+                "name": "transformer",
                 "d_input": 9,
                 "d_model": 32,
                 "n_layers": 1,
@@ -33,6 +33,8 @@ def minimal_config():
                 "prenorm": True,
                 "activation": "gelu",
                 "layer_norm_eps": 1e-5,
+                "obs_aware": True,
+                "use_positional_encoding": True,
             },
             "ssl": {
                 "name": "mae",
@@ -65,10 +67,10 @@ class TestSSLPretrainModuleInitialization:
 
     def test_encoder_type(self, minimal_config):
         """Test that encoder is correct type."""
-        from slices.models.encoders import ObservationTransformerEncoder
+        from slices.models.encoders import TransformerEncoder
 
         module = SSLPretrainModule(minimal_config)
-        assert isinstance(module.encoder, ObservationTransformerEncoder)
+        assert isinstance(module.encoder, TransformerEncoder)
 
     def test_ssl_objective_type(self, minimal_config):
         """Test that SSL objective is correct type."""
@@ -115,7 +117,7 @@ class TestSSLPretrainModuleForward:
         loss, metrics = module(timeseries, mask)
 
         assert torch.isfinite(loss)
-        assert "mae_obs_ratio" in metrics
+        assert "mae_n_loss_positions" in metrics
 
 
 class TestSSLPretrainModuleTraining:
@@ -311,7 +313,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "observation_transformer",
+                    "name": "transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -323,6 +325,8 @@ class TestLRWarmup:
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
+                    "obs_aware": True,
+                    "use_positional_encoding": True,
                 },
                 "ssl": {
                     "name": "mae",
@@ -370,7 +374,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "observation_transformer",
+                    "name": "transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -382,6 +386,8 @@ class TestLRWarmup:
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
+                    "obs_aware": True,
+                    "use_positional_encoding": True,
                 },
                 "ssl": {
                     "name": "mae",
@@ -440,7 +446,7 @@ class TestLRWarmup:
         config = OmegaConf.create(
             {
                 "encoder": {
-                    "name": "observation_transformer",
+                    "name": "transformer",
                     "d_input": 9,
                     "d_model": 32,
                     "n_layers": 1,
@@ -452,6 +458,8 @@ class TestLRWarmup:
                     "prenorm": True,
                     "activation": "gelu",
                     "layer_norm_eps": 1e-5,
+                    "obs_aware": True,
+                    "use_positional_encoding": True,
                 },
                 "ssl": {
                     "name": "mae",

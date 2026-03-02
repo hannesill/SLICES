@@ -24,6 +24,7 @@ from slices.models.encoders import (
     EncoderWithMissingToken,
     ObservationTransformerEncoder,
     SMARTEncoder,
+    TransformerEncoder,
     build_encoder,
 )
 from slices.models.heads import TaskHeadConfig, build_task_head
@@ -415,11 +416,22 @@ class FineTuneModule(pl.LightningModule):
         # - ObservationTransformerEncoder: only tokenizes observed values
         # - SMARTEncoder: MLPEmbedder jointly embeds (value, mask) pairs,
         #   so it needs to see original values with the mask bit
+        # - TransformerEncoder with obs_aware=True: obs_proj handles
+        #   missingness via concatenated (values, obs_mask) input
         if isinstance(self.encoder, (ObservationTransformerEncoder, SMARTEncoder)):
             logger.info(
                 "Skipping EncoderWithMissingToken wrapper for %s "
                 "(handles missingness intrinsically)",
                 type(self.encoder).__name__,
+            )
+            return
+
+        if isinstance(self.encoder, TransformerEncoder) and getattr(
+            self.encoder.config, "obs_aware", False
+        ):
+            logger.info(
+                "Skipping EncoderWithMissingToken wrapper for obs_aware "
+                "TransformerEncoder (forward() handles mask via obs_proj)"
             )
             return
 
