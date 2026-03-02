@@ -351,19 +351,19 @@ class TestSSLObjectiveFactory:
 
     def test_build_ssl_objective_mae(self):
         """build_ssl_objective should create MAEObjective correctly."""
-        from slices.models.encoders import (
-            ObservationTransformerConfig,
-            ObservationTransformerEncoder,
-        )
+        from slices.models.encoders import TransformerConfig, TransformerEncoder
 
-        encoder_config = ObservationTransformerConfig(
+        encoder_config = TransformerConfig(
             d_input=35,
             d_model=64,
             n_layers=2,
             n_heads=4,
+            d_ff=256,
             pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        encoder = ObservationTransformerEncoder(encoder_config)
+        encoder = TransformerEncoder(encoder_config)
 
         mae_config = MAEConfig(
             name="mae",
@@ -398,19 +398,19 @@ class TestSSLObjectiveFactory:
 
     def test_built_ssl_objective_forward_pass(self):
         """Built SSL objective should perform forward pass correctly."""
-        from slices.models.encoders import (
-            ObservationTransformerConfig,
-            ObservationTransformerEncoder,
-        )
+        from slices.models.encoders import TransformerConfig, TransformerEncoder
 
-        encoder_config = ObservationTransformerConfig(
+        encoder_config = TransformerConfig(
             d_input=35,
             d_model=64,
             n_layers=2,
             n_heads=4,
+            d_ff=256,
             pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        encoder = ObservationTransformerEncoder(encoder_config)
+        encoder = TransformerEncoder(encoder_config)
 
         mae_config = MAEConfig(
             name="mae",

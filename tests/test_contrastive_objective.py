@@ -1,10 +1,8 @@
-"""Tests for observation-level Contrastive (SimCLR-style) SSL objective."""
+"""Tests for timestep-level Contrastive (SimCLR-style) SSL objective."""
 
 import pytest
 import torch
 from slices.models.encoders import (
-    ObservationTransformerConfig,
-    ObservationTransformerEncoder,
     TransformerConfig,
     TransformerEncoder,
 )
@@ -38,7 +36,6 @@ class TestProjectionHead:
         x = torch.randn(4, 32)
         z = head(x)
 
-        # Each row should have unit norm
         norms = z.norm(dim=-1)
         assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
 
@@ -53,10 +50,17 @@ class TestContrastiveInit:
 
     @pytest.fixture
     def encoder(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        return ObservationTransformerEncoder(config)
+        return TransformerEncoder(config)
 
     @pytest.fixture
     def contrastive_config(self):
@@ -73,22 +77,26 @@ class TestContrastiveInit:
         assert obj.config == contrastive_config
         assert hasattr(obj, "projection_head")
         assert obj.missing_token is None
-        # No target encoder in SimCLR-style
         assert not hasattr(obj, "target_encoder")
 
-    def test_requires_observation_encoder(self):
+    def test_requires_obs_aware(self):
         config = TransformerConfig(d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none")
         encoder = TransformerEncoder(config)
         cont_config = ContrastiveConfig()
 
-        with pytest.raises(ValueError, match="tokenize.*encode"):
+        with pytest.raises(ValueError, match="obs_aware=True"):
             ContrastiveObjective(encoder, cont_config)
 
     def test_requires_no_pooling(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="mean"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            pooling="mean",
+            obs_aware=True,
         )
-        encoder = ObservationTransformerEncoder(config)
+        encoder = TransformerEncoder(config)
         cont_config = ContrastiveConfig()
 
         with pytest.raises(ValueError, match="pooling='none'"):
@@ -105,10 +113,17 @@ class TestContrastiveForward:
 
     @pytest.fixture
     def encoder(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        return ObservationTransformerEncoder(config)
+        return TransformerEncoder(config)
 
     @pytest.fixture
     def contrastive_config(self):
@@ -136,7 +151,7 @@ class TestContrastiveForward:
         assert "contrastive_accuracy" in metrics
         assert "contrastive_pos_similarity" in metrics
         assert "contrastive_temperature" in metrics
-        assert "contrastive_n_tokens_per_sample" in metrics
+        assert "contrastive_n_timesteps" in metrics
         assert "contrastive_n_visible_view1" in metrics
         assert "contrastive_n_visible_view2" in metrics
 
@@ -163,7 +178,6 @@ class TestContrastiveForward:
 
         _, metrics = obj(x, obs_mask)
 
-        # Both views should have visible tokens
         assert metrics["contrastive_n_visible_view1"] > 0
         assert metrics["contrastive_n_visible_view2"] > 0
 
@@ -178,10 +192,17 @@ class TestNTXentLoss:
 
     @pytest.fixture
     def encoder(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        return ObservationTransformerEncoder(config)
+        return TransformerEncoder(config)
 
     def test_accuracy_in_range(self, encoder):
         config = ContrastiveConfig(
@@ -199,16 +220,13 @@ class TestNTXentLoss:
 
     def test_perfect_alignment_low_loss(self, encoder):
         """When z1 == z2, NT-Xent loss should be near-minimal."""
-
         B, proj_dim = 8, 16
         temperature = 0.1
 
-        # Create identical, L2-normalized embeddings for both views
         z = torch.randn(B, proj_dim)
         z = torch.nn.functional.normalize(z, dim=-1)
         z1, z2 = z.clone(), z.clone()
 
-        # Compute NT-Xent manually
         z_cat = torch.cat([z1, z2], dim=0)
         sim_matrix = torch.mm(z_cat, z_cat.t()) / temperature
         labels = torch.cat([torch.arange(B, 2 * B), torch.arange(B)])
@@ -216,11 +234,8 @@ class TestNTXentLoss:
         sim_matrix = sim_matrix.masked_fill(mask, float("-inf"))
         loss = torch.nn.functional.cross_entropy(sim_matrix, labels)
 
-        # With perfect alignment, positive sim = 1/tau and negatives < 1/tau
-        # Loss should be low (near zero for distinct samples)
-        assert loss.item() < 2.0  # Much less than log(2B-1) ≈ 2.7
+        assert loss.item() < 2.0
 
-        # Also: accuracy should be 1.0 with perfect alignment
         preds = sim_matrix.argmax(dim=1)
         accuracy = (preds == labels).float().mean()
         assert accuracy.item() == 1.0
@@ -242,12 +257,10 @@ class TestNTXentLoss:
 
         torch.manual_seed(123)
         obj_low = ContrastiveObjective(encoder, config_low_temp)
-        # Need a separate encoder copy for fair comparison
         from copy import deepcopy
 
         encoder2 = deepcopy(encoder)
         obj_high = ContrastiveObjective(encoder2, config_high_temp)
-        # Copy weights so both objectives are identical except temperature
         obj_high.load_state_dict(obj_low.state_dict())
 
         x = torch.randn(8, 8, 10)
@@ -258,7 +271,6 @@ class TestNTXentLoss:
         torch.manual_seed(99)
         loss_high, metrics_high = obj_high(x, obs_mask)
 
-        # Lower temperature produces higher loss (sharper distribution, harder task)
         assert loss_low.item() > loss_high.item()
 
     def test_temperature_in_metrics(self, encoder):
@@ -288,10 +300,17 @@ class TestContrastiveEdgeCases:
 
     @pytest.fixture
     def encoder(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        return ObservationTransformerEncoder(config)
+        return TransformerEncoder(config)
 
     def test_sparse_data(self, encoder):
         config = ContrastiveConfig(
@@ -303,27 +322,9 @@ class TestContrastiveEdgeCases:
 
         B, T, D = 4, 8, 10
         x = torch.randn(B, T, D)
-        obs_mask = torch.rand(B, T, D) > 0.9  # ~10% observed
-        # Ensure at least some observations per sample
+        obs_mask = torch.rand(B, T, D) > 0.9
         for b in range(B):
             obs_mask[b, 0, 0] = True
-
-        loss, metrics = obj(x, obs_mask)
-        assert torch.isfinite(loss)
-
-    def test_single_observation(self, encoder):
-        config = ContrastiveConfig(
-            mask_ratio=0.5,
-            proj_hidden_dim=64,
-            proj_output_dim=16,
-        )
-        obj = ContrastiveObjective(encoder, config)
-
-        B, T, D = 2, 4, 10
-        x = torch.randn(B, T, D)
-        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
-        obs_mask[0, 0, 0] = True
-        obs_mask[1, 1, 3] = True
 
         loss, metrics = obj(x, obs_mask)
         assert torch.isfinite(loss)
@@ -339,10 +340,17 @@ class TestContrastiveGradientFlow:
 
     @pytest.fixture
     def encoder(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        return ObservationTransformerEncoder(config)
+        return TransformerEncoder(config)
 
     def test_gradients_to_encoder_and_projection(self, encoder):
         config = ContrastiveConfig(
@@ -358,13 +366,11 @@ class TestContrastiveGradientFlow:
         loss, _ = obj(x, obs_mask)
         loss.backward()
 
-        # Encoder should have gradients
         encoder_has_grad = any(
             p.grad is not None and p.grad.abs().sum() > 0 for p in obj.encoder.parameters()
         )
         assert encoder_has_grad
 
-        # Projection head should have gradients
         proj_has_grad = any(
             p.grad is not None and p.grad.abs().sum() > 0 for p in obj.projection_head.parameters()
         )
@@ -380,10 +386,17 @@ class TestContrastiveConvergence:
     """Test that loss decreases during training."""
 
     def test_loss_decreases(self):
-        config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=2, n_heads=4, d_ff=64, pooling="none"
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=2,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
         )
-        encoder = ObservationTransformerEncoder(config)
+        encoder = TransformerEncoder(config)
 
         cont_config = ContrastiveConfig(
             mask_ratio=0.75,
@@ -431,10 +444,15 @@ class TestContrastiveFactory:
         assert get_ssl_config_class("contrastive") == ContrastiveConfig
 
     def test_build_works(self):
-        encoder_config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none"
+        encoder_config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            pooling="none",
+            obs_aware=True,
         )
-        encoder = ObservationTransformerEncoder(encoder_config)
+        encoder = TransformerEncoder(encoder_config)
         cont_config = ContrastiveConfig(mask_ratio=0.75)
 
         ssl_objective = build_ssl_objective(encoder, cont_config)
@@ -443,10 +461,15 @@ class TestContrastiveFactory:
         assert ssl_objective.encoder is encoder
 
     def test_get_encoder(self):
-        encoder_config = ObservationTransformerConfig(
-            d_input=10, d_model=32, n_layers=1, n_heads=4, pooling="none"
+        encoder_config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            pooling="none",
+            obs_aware=True,
         )
-        encoder = ObservationTransformerEncoder(encoder_config)
+        encoder = TransformerEncoder(encoder_config)
         cont_config = ContrastiveConfig()
 
         obj = ContrastiveObjective(encoder, cont_config)

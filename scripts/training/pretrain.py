@@ -29,9 +29,9 @@ from slices.training.utils import (
 
 # SSL -> compatible model encoder mappings
 _SSL_MODEL_COMPAT = {
-    "mae": {"observation_transformer"},
-    "jepa": {"observation_transformer"},
-    "contrastive": {"observation_transformer"},
+    "mae": {"transformer"},
+    "jepa": {"transformer"},
+    "contrastive": {"transformer"},
     "smart": {"smart"},
 }
 
