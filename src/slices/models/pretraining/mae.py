@@ -156,7 +156,7 @@ class MAEDecoder(nn.Module):
         n_vis = vis_proj.shape[1]
         scatter_idx = vis_indices[:, :n_vis]  # (B, n_vis)
         scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_dec)  # (B, n_vis, d_dec)
-        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj)
+        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
 
         # Add positional information to ALL token positions
         timestep_idx = token_info["timestep_idx"]  # (B, max_tokens)
