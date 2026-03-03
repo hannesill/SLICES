@@ -56,7 +56,7 @@ encoder:
 # Training configuration (same budget across thesis paradigms for fair comparison)
 training:
   max_epochs: 500
-  batch_size: 64
+  batch_size: 256
 
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
@@ -65,7 +65,7 @@ training:
 
   # Regularization
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 4  # effective batch_size = 64 * 4 = 256
+  accumulate_grad_batches: 1  # single batch, no accumulation
 
   # Early stopping
   early_stopping_patience: 10
