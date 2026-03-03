@@ -17,6 +17,7 @@ from pathlib import Path
 
 import hydra
 import lightning.pytorch as pl
+import torch
 from omegaconf import DictConfig, OmegaConf
 from slices.data.config_schemas import DataConfig
 from slices.data.datamodule import ICUDataModule
@@ -198,7 +199,8 @@ def main(cfg: DictConfig) -> None:
     if best_ckpt:
         print(f"\n  Loading best checkpoint: {best_ckpt}")
         print(f"  Best val/loss: {checkpoint_callback.best_model_score:.4f}")
-        model = SSLPretrainModule.load_from_checkpoint(best_ckpt)
+        best_state = torch.load(best_ckpt, map_location="cpu", weights_only=False)
+        model.load_state_dict(best_state["state_dict"])
 
     encoder_path = Path(cfg.output_dir) / "encoder.pt"
     encoder_path.parent.mkdir(parents=True, exist_ok=True)

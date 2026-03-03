@@ -604,7 +604,7 @@ def load_embeddings_from_file(
             raise ImportError("PyTorch is required to load .pt files.")
         import torch
 
-        data = torch.load(path, map_location="cpu")
+        data = torch.load(path, map_location="cpu", weights_only=True)
         if isinstance(data, dict):
             embeddings = _to_numpy(data["embeddings"])
             stay_ids = _to_numpy(data.get("stay_ids")) if "stay_ids" in data else None
