@@ -55,7 +55,8 @@ encoder:
 
 # Training configuration (same budget across thesis paradigms for fair comparison)
 training:
-  max_epochs: 500
+  max_epochs: 100
+  min_epochs: 10  # >= warmup_epochs; prevents early stopping during LR warmup
   batch_size: 256
 
   # Compute settings
@@ -82,7 +83,7 @@ optimizer:
 # Optional learning rate scheduler
 scheduler:
   name: warmup_cosine  # cosine | step | plateau | warmup_cosine
-  warmup_epochs: 50
+  warmup_epochs: 10
   max_epochs: ${training.max_epochs}
   eta_min: 1.0e-6
 
