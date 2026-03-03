@@ -111,7 +111,7 @@ def extract_embeddings_from_checkpoint(
         # Lightning checkpoint format
         from slices.training import SSLPretrainModule
 
-        model = SSLPretrainModule.load_from_checkpoint(checkpoint_path)
+        model = SSLPretrainModule.load_from_checkpoint(checkpoint_path, weights_only=False)
         encoder = model.encoder
     else:
         raise ValueError(f"Unknown checkpoint format. Keys: {checkpoint.keys()}")
