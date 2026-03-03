@@ -177,6 +177,7 @@ class JEPAObjective(BaseSSLObjective):
             )
 
         d_encoder = encoder.get_output_dim()
+        self.d_encoder = d_encoder
         max_seq_length = encoder.config.max_seq_length
 
         self.missing_token = None
@@ -264,6 +265,9 @@ class JEPAObjective(BaseSSLObjective):
         """
         # Loss only on masked timesteps
         loss_mask = ~ssl_mask  # (B, T)
+
+        # Normalize targets to prevent scale/shift collapse
+        target = F.layer_norm(target, [self.d_encoder])
 
         if self.config.loss_type == "mse":
             element_loss = F.mse_loss(predicted, target, reduction="none")

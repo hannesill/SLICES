@@ -13,11 +13,14 @@ name: jepa
 # Masking parameters (same as MAE for fair comparison)
 mask_ratio: 0.5  # Experiment plan default (ablate over 0.3/0.5/0.75)
 
-# Predictor parameters (mirrors MAE decoder for fairness)
-predictor_d_model: 128
+# Predictor parameters — bottlenecked relative to encoder (50% d_model).
+# Unlike MAE decoder (which reconstructs raw features, d_model→D), JEPA predictor
+# predicts in latent space (d_model→d_model). The bottleneck forces information
+# routing through the online encoder's context representations.
+predictor_d_model: 64
 predictor_n_layers: 2
 predictor_n_heads: 4
-predictor_d_ff: 512
+predictor_d_ff: 256
 predictor_dropout: 0.1
 
 # Momentum encoder parameters
