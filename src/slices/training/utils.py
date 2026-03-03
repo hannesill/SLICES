@@ -160,7 +160,7 @@ def setup_pretrain_callbacks(cfg: DictConfig) -> list:
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename="ssl-{epoch:03d}-{val_loss:.4f}",
+        filename="ssl-{epoch:03d}-{val/loss:.4f}",
         monitor="val/loss",
         mode="min",
         save_top_k=3,
@@ -200,11 +200,9 @@ def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune
     monitor = cfg.training.get("early_stopping_monitor", default_monitor)
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
-    metric_filename = monitor.replace("/", "_")
-
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename=f"{checkpoint_prefix}-{{epoch:03d}}-{{{metric_filename}:.4f}}",
+        filename=f"{checkpoint_prefix}-{{epoch:03d}}-{{{monitor}:.4f}}",
         monitor=monitor,
         mode=mode,
         save_top_k=3,
