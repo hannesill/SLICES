@@ -10,8 +10,10 @@
 
 name: jepa
 
-# Masking parameters (same as MAE for fair comparison)
+# Masking parameters
 mask_ratio: 0.5  # Experiment plan default (ablate over 0.3/0.5/0.75)
+mask_strategy: block  # "block" for contiguous segments, "random" for per-timestep
+mask_n_blocks: 3  # Number of contiguous blocks (only for block strategy)
 
 # Predictor parameters — bottlenecked relative to encoder (50% d_model).
 # Unlike MAE decoder (which reconstructs raw features, d_model→D), JEPA predictor
@@ -26,7 +28,7 @@ predictor_dropout: 0.1
 # Momentum encoder parameters
 # Target encoder updated via EMA: target = m * target + (1-m) * online
 # Momentum increases linearly from base to final during training
-momentum_base: 0.996
+momentum_base: 0.999
 momentum_final: 1.0
 
 # Loss type: mse or cosine

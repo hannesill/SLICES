@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from slices.models.common import build_sinusoidal_pe
 
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_timestep_mask, extract_visible_timesteps
+from .masking import create_block_timestep_mask, create_timestep_mask, extract_visible_timesteps
 
 
 @dataclass
@@ -37,6 +37,8 @@ class JEPAConfig(SSLConfig):
 
     # Masking
     mask_ratio: float = 0.5
+    mask_strategy: str = "block"  # "random" or "block"
+    mask_n_blocks: int = 3  # Number of contiguous blocks (only for block strategy)
 
     # Predictor parameters (mirrors MAE decoder for fairness)
     predictor_d_model: int = 128
@@ -46,7 +48,7 @@ class JEPAConfig(SSLConfig):
     predictor_dropout: float = 0.1
 
     # Momentum encoder
-    momentum_base: float = 0.996
+    momentum_base: float = 0.999
     momentum_final: float = 1.0
 
     # Loss
@@ -218,7 +220,12 @@ class JEPAObjective(BaseSSLObjective):
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
 
         # 2. Create SSL mask on timesteps
-        ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        if self.config.mask_strategy == "block":
+            ssl_mask = create_block_timestep_mask(
+                B, T, self.config.mask_ratio, device, n_blocks=self.config.mask_n_blocks
+            )
+        else:
+            ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
 
         # 3. Extract visible tokens
         visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
@@ -266,6 +273,33 @@ class JEPAObjective(BaseSSLObjective):
         # Loss only on masked timesteps
         loss_mask = ~ssl_mask  # (B, T)
 
+        # Collapse monitoring metrics (computed on raw target before normalization)
+        with torch.no_grad():
+            B, T = ssl_mask.shape
+            n_masked = loss_mask.sum().item()
+            n_visible = ssl_mask.sum().item()
+
+            # Flatten to (B*T, d_encoder) for batch-level statistics
+            target_flat = target.reshape(-1, self.d_encoder)
+
+            # Std of each feature dim across all positions — collapse → 0
+            target_repr_std = target_flat.std(dim=0).mean().item()
+
+            # Mean pairwise cosine similarity (sampled for efficiency)
+            # Sample up to 256 vectors to keep cost O(1)
+            n_vecs = target_flat.shape[0]
+            if n_vecs > 256:
+                idx = torch.randperm(n_vecs, device=target_flat.device)[:256]
+                sampled = target_flat[idx]
+            else:
+                sampled = target_flat
+            sampled_norm = F.normalize(sampled, dim=-1)
+            cos_matrix = sampled_norm @ sampled_norm.T
+            # Exclude diagonal (self-similarity = 1)
+            n_sampled = sampled_norm.shape[0]
+            mask_diag = ~torch.eye(n_sampled, dtype=torch.bool, device=cos_matrix.device)
+            target_repr_mean_cos = cos_matrix[mask_diag].mean().item()
+
         # Normalize targets to prevent scale/shift collapse
         target = F.layer_norm(target, [self.d_encoder])
 
@@ -281,10 +315,6 @@ class JEPAObjective(BaseSSLObjective):
         loss = (element_loss * loss_mask.float()).sum() / loss_mask.float().sum().clamp(min=1)
 
         with torch.no_grad():
-            B, T = ssl_mask.shape
-            n_masked = loss_mask.sum().item()
-            n_visible = ssl_mask.sum().item()
-
             metrics = {
                 "jepa_loss": loss.detach(),
                 "ssl_loss": loss.detach(),
@@ -293,6 +323,8 @@ class JEPAObjective(BaseSSLObjective):
                 "jepa_n_visible_per_sample": n_visible / B,
                 "jepa_n_masked_per_sample": n_masked / B,
                 "jepa_momentum": self._current_momentum,
+                "jepa_target_repr_std": target_repr_std,
+                "jepa_target_repr_mean_cos": target_repr_mean_cos,
             }
 
         return loss, metrics
