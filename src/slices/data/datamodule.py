@@ -258,6 +258,10 @@ class ICUDataModule(L.LightningDataModule):
             self.test_ratio,
         )
 
+        # Free temporary data used only during setup — Dataset holds its own copies
+        del self._static_df, self._labels_df
+        del self._all_stay_ids, self._filtered_stay_ids, self._excluded_stay_ids
+
         logger.info(
             f"DataModule setup complete: "
             f"Train={len(self.train_indices):,}, Val={len(self.val_indices):,}, "

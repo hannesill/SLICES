@@ -61,7 +61,7 @@ training:
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto  # auto | 1 | [0,1] | etc.
-  precision: bf16-mixed  # 32 | 16-mixed | bf16-mixed
+  precision: 32  # 32 | 16-mixed | bf16-mixed
 
   # Regularization
   gradient_clip_val: 1.0

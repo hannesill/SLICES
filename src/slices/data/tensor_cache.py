@@ -221,7 +221,7 @@ def load_cached_tensors(
 
     try:
         logger.debug(f"Loading cached tensors from {cache_path.name}")
-        cached = torch.load(cache_path, weights_only=True)
+        cached = torch.load(cache_path, weights_only=True, mmap=True)
 
         # Validate cache metadata
         if cached.get("n_features") != n_features:
