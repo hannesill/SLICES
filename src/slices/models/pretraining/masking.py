@@ -112,6 +112,85 @@ def create_timestep_mask(
     return ssl_mask
 
 
+def create_block_timestep_mask(
+    batch_size: int,
+    n_timesteps: int,
+    mask_ratio: float,
+    device: torch.device,
+    n_blocks: int = 3,
+) -> torch.Tensor:
+    """Create contiguous block mask at timestep level.
+
+    Masks n_blocks contiguous segments that together cover approximately
+    mask_ratio of the sequence. Forces the model to predict from distant
+    context rather than interpolate from adjacent visible timesteps.
+
+    Strategy: divides the sequence into n_blocks equal zones, then places one
+    randomly-sized masked block within each zone. Block sizes are drawn from a
+    Dirichlet-like split of the total masked budget. Fully vectorized — no
+    Python loops over batch elements.
+
+    Args:
+        batch_size: Batch size B.
+        n_timesteps: Number of timesteps T.
+        mask_ratio: Fraction of timesteps to mask.
+        device: Device.
+        n_blocks: Number of contiguous blocks to mask (default 3).
+
+    Returns:
+        ssl_mask: (B, T) bool mask, True = visible, False = masked.
+    """
+    n_masked_total = max(int(n_timesteps * mask_ratio), 1)
+    n_masked_total = min(n_masked_total, n_timesteps - 1)
+
+    # Split total masked budget into n_blocks random lengths per sample.
+    # Use Dirichlet-like splitting: draw n_blocks uniform values, normalize,
+    # then scale to sum to n_masked_total. Add 1 to each to ensure min length 1.
+    raw = torch.rand(batch_size, n_blocks)  # CPU for speed
+    raw = raw / raw.sum(dim=1, keepdim=True)  # normalize to sum=1
+    # Reserve 1 per block, distribute the rest proportionally
+    extra = n_masked_total - n_blocks
+    if extra > 0:
+        block_lengths = 1 + (raw * extra).int()
+        # Fix rounding: adjust last block to hit exact total
+        block_lengths[:, -1] = n_masked_total - block_lengths[:, :-1].sum(dim=1)
+    else:
+        # Edge case: fewer masked timesteps than blocks — give 1 to first blocks
+        block_lengths = torch.zeros(batch_size, n_blocks, dtype=torch.int)
+        block_lengths[:, :n_masked_total] = 1
+
+    # Clamp to valid range
+    block_lengths = block_lengths.clamp(min=0, max=n_timesteps)
+
+    # Divide sequence into n_blocks equal zones. Each block is placed randomly
+    # within its zone, avoiding cross-zone overlap by construction.
+    zone_size = n_timesteps // n_blocks
+    zone_starts = torch.arange(n_blocks) * zone_size  # (n_blocks,)
+
+    # Random offset within each zone (vectorized over batch)
+    # Max offset = zone_size - block_length (so block fits within zone)
+    max_offsets = zone_size - block_lengths  # (B, n_blocks)
+    max_offsets = max_offsets.clamp(min=0)
+    offsets = (torch.rand(batch_size, n_blocks) * (max_offsets.float() + 1)).int()
+    offsets = offsets.clamp(max=max_offsets)
+
+    # Compute absolute start positions: zone_start + offset
+    starts = zone_starts.unsqueeze(0) + offsets  # (B, n_blocks)
+
+    # Build mask: create time indices and compare with block ranges
+    # (B, n_blocks, T) — True where timestep t falls in block k
+    t = torch.arange(n_timesteps).unsqueeze(0).unsqueeze(0)  # (1, 1, T)
+    starts_3d = starts.unsqueeze(2)  # (B, n_blocks, 1)
+    ends_3d = (starts + block_lengths).unsqueeze(2)  # (B, n_blocks, 1)
+    in_block = (t >= starts_3d) & (t < ends_3d)  # (B, n_blocks, T)
+
+    # Union across blocks -> masked positions
+    masked = in_block.any(dim=1)  # (B, T)
+    ssl_mask = (~masked).to(device=device)
+
+    return ssl_mask
+
+
 def extract_visible_timesteps(
     tokens: torch.Tensor,
     ssl_mask: torch.Tensor,
