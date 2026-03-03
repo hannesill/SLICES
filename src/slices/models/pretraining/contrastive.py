@@ -1,19 +1,27 @@
 """Contrastive (SimCLR-style) SSL objective for ICU time-series.
 
 Timestep-level tokenization variant: uses two different random timestep masks as
-two augmented "views" of the same sample, then applies NT-Xent contrastive
-loss on the pooled representations.
+two augmented "views" of the same sample, then applies NT-Xent contrastive loss.
+
+Supports two modes:
+- **temporal** (default): Positive pairs are formed from timesteps visible in
+  both views (~25% at mask_ratio=0.5). Each overlapping timestep has two
+  independently contextualized representations (different self-attention
+  contexts) that form a natural positive pair.  All other tokens across the
+  batch are negatives.  NT-Xent operates on a (2N x 2N) matrix where
+  N = number of overlap tokens.
+- **instance**: Original SimCLR-style — mean-pool each view to a single
+  sequence-level embedding, then NT-Xent on a (2B x 2B) matrix.
 
 Architecture:
 1. TransformerEncoder.tokenize() -> one token per timestep (B, T, d_model)
 2. Two independent random masks -> two different subsets of timestep tokens (views)
 3. Encoder processes each view separately -> per-token representations
-4. Mean-pool over visible tokens -> sequence-level embeddings
-5. Projection head -> low-dimensional normalized embeddings
-6. NT-Xent loss: positive pairs = same sample's two views
+4. temporal: scatter to (B,T,d) -> gather overlap tokens -> project -> NT-Xent
+   instance: mean-pool -> project -> NT-Xent
 
-Key difference from MAE: discriminative (not reconstructive), global (not local).
-Key difference from JEPA: global invariance (not local positional prediction).
+Key difference from MAE: discriminative (not reconstructive).
+Key difference from JEPA: invariance (not positional prediction).
 """
 
 from dataclasses import dataclass
@@ -33,6 +41,9 @@ class ContrastiveConfig(SSLConfig):
 
     name: str = "contrastive"
 
+    # Mode: "temporal" (per-timestep overlap pairs) or "instance" (mean-pool)
+    mode: str = "temporal"
+
     # Masking
     mask_ratio: float = 0.5
 
@@ -42,6 +53,12 @@ class ContrastiveConfig(SSLConfig):
 
     # Temperature for NT-Xent
     temperature: float = 0.1
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("temporal", "instance"):
+            raise ValueError(
+                f"ContrastiveConfig.mode must be 'temporal' or 'instance', " f"got '{self.mode}'"
+            )
 
 
 class ProjectionHead(nn.Module):
@@ -78,14 +95,10 @@ class ProjectionHead(nn.Module):
 
 
 class ContrastiveObjective(BaseSSLObjective):
-    """Timestep-level contrastive (SimCLR-style) SSL for ICU time-series.
+    """Timestep-level contrastive SSL for ICU time-series.
 
-    Flow:
-    1. encoder.tokenize(x, obs_mask) -> timestep tokens
-    2. Two independent random timestep masks -> two views
-    3. For each view: extract_visible -> encode -> mean_pool -> (B, d_model)
-    4. projection_head(pooled) -> z1, z2 (B, proj_dim), L2-normalized
-    5. NT-Xent loss: match positive pairs across views
+    Supports temporal mode (per-timestep overlap pairs) and instance mode
+    (mean-pool, SimCLR-style).  See module docstring for details.
 
     Requires encoder with tokenize()/encode() and pooling='none'.
     """
@@ -145,22 +158,29 @@ class ContrastiveObjective(BaseSSLObjective):
         ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
         ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
 
-        # 3. View 1: extract -> encode -> mean pool
+        # 3. Encode both views
         vis_tokens_1, vis_padding_1 = extract_visible_timesteps(tokens, ssl_mask_1)
         encoded_1 = self.encoder.encode(vis_tokens_1, vis_padding_1)
-        pooled_1 = self._mean_pool(encoded_1, vis_padding_1)  # (B, d_model)
 
-        # 4. View 2: extract -> encode -> mean pool
         vis_tokens_2, vis_padding_2 = extract_visible_timesteps(tokens, ssl_mask_2)
         encoded_2 = self.encoder.encode(vis_tokens_2, vis_padding_2)
-        pooled_2 = self._mean_pool(encoded_2, vis_padding_2)  # (B, d_model)
 
-        # 5. Project to contrastive space
-        z1 = self.projection_head(pooled_1)  # (B, proj_dim)
-        z2 = self.projection_head(pooled_2)  # (B, proj_dim)
+        if self.config.mode == "temporal":
+            # 4a. Scatter encoded tokens back to full (B, T, d) grid
+            full_1 = self._scatter_to_full(encoded_1, ssl_mask_1, T)
+            full_2 = self._scatter_to_full(encoded_2, ssl_mask_2, T)
 
-        # 6. NT-Xent loss
-        loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2)
+            # 5a. Temporal NT-Xent on overlapping timesteps
+            loss, metrics = self._temporal_nt_xent_loss(full_1, full_2, ssl_mask_1, ssl_mask_2)
+        else:
+            # 4b. Instance mode: mean-pool -> project -> instance NT-Xent
+            pooled_1 = self._mean_pool(encoded_1, vis_padding_1)
+            pooled_2 = self._mean_pool(encoded_2, vis_padding_2)
+
+            z1 = self.projection_head(pooled_1)  # (B, proj_dim)
+            z2 = self.projection_head(pooled_2)  # (B, proj_dim)
+
+            loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2)
 
         return loss, metrics
 
@@ -182,6 +202,133 @@ class ContrastiveObjective(BaseSSLObjective):
         summed = (encoded * mask_expanded).sum(dim=1)  # (B, d_model)
         counts = padding_mask.sum(dim=1, keepdim=True).clamp(min=1).float()  # (B, 1)
         return summed / counts
+
+    @staticmethod
+    def _scatter_to_full(
+        encoded: torch.Tensor,
+        ssl_mask: torch.Tensor,
+        n_timesteps: int,
+    ) -> torch.Tensor:
+        """Scatter visible encoded tokens back to full (B, T, d) tensor.
+
+        Uses the same argsort-scatter pattern as the MAE decoder and JEPA
+        predictor to place encoded visible tokens at their original temporal
+        positions, with zeros at masked positions.
+
+        Args:
+            encoded: (B, n_vis, d_enc) encoded visible tokens.
+            ssl_mask: (B, T) True = visible.
+            n_timesteps: Total number of timesteps T.
+
+        Returns:
+            (B, T, d_enc) with encoded tokens at visible positions, zeros elsewhere.
+        """
+        B, n_vis, d_enc = encoded.shape
+        device = encoded.device
+
+        full = torch.zeros(B, n_timesteps, d_enc, device=device, dtype=encoded.dtype)
+
+        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
+        scatter_idx = vis_indices[:, :n_vis].unsqueeze(-1).expand(-1, -1, d_enc)
+        full.scatter_(1, scatter_idx, encoded)
+
+        return full
+
+    def _temporal_nt_xent_loss(
+        self,
+        full_1: torch.Tensor,
+        full_2: torch.Tensor,
+        ssl_mask_1: torch.Tensor,
+        ssl_mask_2: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute temporal NT-Xent loss on overlapping timestep tokens.
+
+        Timesteps visible in both views have two independently contextualized
+        representations (from different self-attention contexts). These form
+        natural positive pairs. All other tokens in the batch are negatives.
+
+        Args:
+            full_1: (B, T, d_enc) scattered encoded tokens from view 1.
+            full_2: (B, T, d_enc) scattered encoded tokens from view 2.
+            ssl_mask_1: (B, T) True = visible in view 1.
+            ssl_mask_2: (B, T) True = visible in view 2.
+
+        Returns:
+            (loss, metrics_dict)
+        """
+        B = ssl_mask_1.shape[0]
+        T = ssl_mask_1.shape[1]
+        temperature = self.config.temperature
+
+        overlap = ssl_mask_1 & ssl_mask_2  # (B, T)
+        N = int(overlap.sum().item())
+
+        # Edge case: not enough overlap tokens for contrastive learning
+        if N < 2:
+            loss = full_1.sum() * 0.0  # zero with grad connectivity
+            with torch.no_grad():
+                metrics = {
+                    "contrastive_loss": loss.detach(),
+                    "ssl_loss": loss.detach(),
+                    "contrastive_accuracy": torch.tensor(0.0),
+                    "contrastive_pos_similarity": torch.tensor(0.0),
+                    "contrastive_temperature": temperature,
+                    "contrastive_n_timesteps": T,
+                    "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
+                    "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
+                    "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
+                    "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
+                    "contrastive_n_overlap_tokens": 0,
+                    "contrastive_n_overlap_per_sample": 0.0,
+                }
+            return loss, metrics
+
+        # Gather overlap tokens — boolean indexing in row-major order ensures
+        # full_1[overlap] and full_2[overlap] are aligned (same batch, time pairs)
+        tokens_1 = full_1[overlap]  # (N, d_enc)
+        tokens_2 = full_2[overlap]  # (N, d_enc)
+
+        # Project per-token through shared projection head
+        z1 = self.projection_head(tokens_1)  # (N, proj_dim)
+        z2 = self.projection_head(tokens_2)  # (N, proj_dim)
+
+        # NT-Xent on (2N, 2N) similarity matrix
+        z = torch.cat([z1, z2], dim=0)  # (2N, proj_dim)
+        sim_matrix = torch.mm(z, z.t()) / temperature  # (2N, 2N)
+
+        labels = torch.cat(
+            [
+                torch.arange(N, 2 * N, device=z.device),
+                torch.arange(N, device=z.device),
+            ]
+        )
+
+        mask = torch.eye(2 * N, dtype=torch.bool, device=z.device)
+        sim_matrix = sim_matrix.masked_fill(mask, float("-inf"))
+
+        loss = F.cross_entropy(sim_matrix, labels)
+
+        with torch.no_grad():
+            preds = sim_matrix.argmax(dim=1)
+            accuracy = (preds == labels).float().mean()
+            pos_sim = F.cosine_similarity(z1, z2, dim=-1).mean()
+
+            metrics = {
+                "contrastive_loss": loss.detach(),
+                "ssl_loss": loss.detach(),
+                "contrastive_accuracy": accuracy,
+                "contrastive_pos_similarity": pos_sim,
+                "contrastive_temperature": temperature,
+                "contrastive_n_timesteps": T,
+                "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
+                "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
+                "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
+                "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
+                "contrastive_n_overlap_tokens": N,
+                "contrastive_n_overlap_per_sample": N / B,
+            }
+
+        return loss, metrics
 
     def _nt_xent_loss(
         self,

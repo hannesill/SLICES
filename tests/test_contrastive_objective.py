@@ -1,4 +1,4 @@
-"""Tests for timestep-level Contrastive (SimCLR-style) SSL objective."""
+"""Tests for timestep-level Contrastive SSL objective (temporal + instance modes)."""
 
 import pytest
 import torch
@@ -65,6 +65,7 @@ class TestContrastiveInit:
     @pytest.fixture
     def contrastive_config(self):
         return ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -86,6 +87,10 @@ class TestContrastiveInit:
 
         with pytest.raises(ValueError, match="obs_aware=True"):
             ContrastiveObjective(encoder, cont_config)
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="must be 'temporal' or 'instance'"):
+            ContrastiveConfig(mode="bad")
 
     def test_requires_no_pooling(self):
         config = TransformerConfig(
@@ -128,6 +133,7 @@ class TestContrastiveForward:
     @pytest.fixture
     def contrastive_config(self):
         return ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -206,6 +212,7 @@ class TestNTXentLoss:
 
     def test_accuracy_in_range(self, encoder):
         config = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -243,12 +250,14 @@ class TestNTXentLoss:
     def test_temperature_effect_on_loss(self, encoder):
         """Lower temperature should sharpen the distribution, increasing loss magnitude."""
         config_low_temp = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
             temperature=0.01,
         )
         config_high_temp = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -276,6 +285,7 @@ class TestNTXentLoss:
     def test_temperature_in_metrics(self, encoder):
         temp = 0.07
         config = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -314,6 +324,7 @@ class TestContrastiveEdgeCases:
 
     def test_sparse_data(self, encoder):
         config = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.5,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -354,6 +365,7 @@ class TestContrastiveGradientFlow:
 
     def test_gradients_to_encoder_and_projection(self, encoder):
         config = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -399,6 +411,7 @@ class TestContrastiveConvergence:
         encoder = TransformerEncoder(config)
 
         cont_config = ContrastiveConfig(
+            mode="instance",
             mask_ratio=0.75,
             proj_hidden_dim=64,
             proj_output_dim=16,
@@ -426,6 +439,203 @@ class TestContrastiveConvergence:
         assert (
             final_loss < initial_loss
         ), f"Loss should decrease: initial={initial_loss:.4f}, final={final_loss:.4f}"
+
+
+# =============================================================================
+# Temporal mode tests
+# =============================================================================
+
+
+class TestTemporalContrastive:
+    """Tests for temporal contrastive mode (per-timestep overlap pairs)."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
+        )
+        return TransformerEncoder(config)
+
+    @pytest.fixture
+    def temporal_config(self):
+        return ContrastiveConfig(
+            mode="temporal",
+            mask_ratio=0.5,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            temperature=0.1,
+        )
+
+    def test_scatter_to_full_shape_and_zeros(self, encoder, temporal_config):
+        """_scatter_to_full produces correct shape with zeros at masked positions."""
+        from slices.models.pretraining.contrastive import ContrastiveObjective
+
+        B, T, d_enc = 4, 8, 32
+        # Create a mask with exactly 4 visible per sample
+        ssl_mask = torch.zeros(B, T, dtype=torch.bool)
+        ssl_mask[:, :4] = True  # first 4 timesteps visible
+
+        encoded = torch.randn(B, 4, d_enc)
+        full = ContrastiveObjective._scatter_to_full(encoded, ssl_mask, T)
+
+        assert full.shape == (B, T, d_enc)
+        # Masked positions (indices 4-7) should be zero
+        assert (full[:, 4:, :] == 0).all()
+        # Visible positions should be non-zero (with high probability)
+        assert full[:, :4, :].abs().sum() > 0
+
+    def test_scatter_to_full_gradient_flow(self):
+        """Gradients flow through scatter into torch.zeros back to the source tensor."""
+        from slices.models.pretraining.contrastive import ContrastiveObjective
+
+        B, T, d = 2, 6, 4
+        ssl_mask = torch.zeros(B, T, dtype=torch.bool)
+        ssl_mask[:, :3] = True  # 3 visible per sample
+
+        encoded = torch.randn(B, 3, d, requires_grad=True)
+        full = ContrastiveObjective._scatter_to_full(encoded, ssl_mask, T)
+
+        # Sum visible positions only — gradient should reach encoded
+        loss = full[ssl_mask].sum()
+        loss.backward()
+
+        assert encoded.grad is not None
+        assert encoded.grad.abs().sum() > 0
+        # Each visible encoded token contributes d elements to the sum,
+        # so each gradient element should be 1.0
+        assert torch.allclose(encoded.grad, torch.ones_like(encoded.grad))
+
+    def test_scatter_to_full_roundtrip(self, encoder, temporal_config):
+        """Scatter should place tokens back at the correct original positions."""
+        from slices.models.pretraining.contrastive import ContrastiveObjective
+        from slices.models.pretraining.masking import (
+            create_timestep_mask,
+            extract_visible_timesteps,
+        )
+
+        B, T, d = 4, 8, 32
+        tokens = torch.randn(B, T, d)
+
+        torch.manual_seed(42)
+        ssl_mask = create_timestep_mask(B, T, 0.5, tokens.device)
+
+        vis_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
+        full = ContrastiveObjective._scatter_to_full(vis_tokens, ssl_mask, T)
+
+        # At visible positions, scattered values should match original tokens
+        for b in range(B):
+            for t in range(T):
+                if ssl_mask[b, t]:
+                    assert torch.allclose(full[b, t], tokens[b, t], atol=1e-6)
+
+    def test_forward_returns_loss_and_overlap_metrics(self, encoder, temporal_config):
+        obj = ContrastiveObjective(encoder, temporal_config)
+
+        B, T, D = 8, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        loss, metrics = obj(x, obs_mask)
+
+        assert loss.shape == ()
+        assert loss.item() >= 0
+        assert not torch.isnan(loss)
+
+        # Standard metrics
+        assert "contrastive_loss" in metrics
+        assert "ssl_loss" in metrics
+        assert "contrastive_accuracy" in metrics
+        assert "contrastive_pos_similarity" in metrics
+
+        # Temporal-specific overlap metrics
+        assert "contrastive_n_overlap_tokens" in metrics
+        assert "contrastive_n_overlap_per_sample" in metrics
+        assert metrics["contrastive_n_overlap_tokens"] > 0
+
+    def test_gradient_flow_temporal(self, encoder, temporal_config):
+        """Gradients flow to encoder and projection head in temporal mode."""
+        obj = ContrastiveObjective(encoder, temporal_config)
+
+        x = torch.randn(8, 8, 10)
+        obs_mask = torch.ones(8, 8, 10, dtype=torch.bool)
+
+        loss, _ = obj(x, obs_mask)
+        loss.backward()
+
+        encoder_has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0 for p in obj.encoder.parameters()
+        )
+        assert encoder_has_grad
+
+        proj_has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0 for p in obj.projection_head.parameters()
+        )
+        assert proj_has_grad
+
+    def test_convergence_temporal(self):
+        """Loss decreases during training in temporal mode."""
+        enc_config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=2,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
+        )
+        encoder = TransformerEncoder(enc_config)
+
+        cont_config = ContrastiveConfig(
+            mode="temporal",
+            mask_ratio=0.5,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            temperature=0.1,
+        )
+        obj = ContrastiveObjective(encoder, cont_config)
+        optimizer = torch.optim.Adam(obj.parameters(), lr=1e-3)
+
+        torch.manual_seed(42)
+        B, T, D = 8, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        initial_loss = None
+        for step in range(30):
+            optimizer.zero_grad()
+            loss, _ = obj(x, obs_mask)
+            loss.backward()
+            optimizer.step()
+
+            if initial_loss is None:
+                initial_loss = loss.item()
+
+        final_loss = loss.item()
+        assert (
+            final_loss < initial_loss
+        ), f"Loss should decrease: initial={initial_loss:.4f}, final={final_loss:.4f}"
+
+    def test_overlap_count_reasonable(self, encoder, temporal_config):
+        """With mask_ratio=0.5, ~25% of timesteps should overlap."""
+        obj = ContrastiveObjective(encoder, temporal_config)
+
+        B, T, D = 64, 48, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        _, metrics = obj(x, obs_mask)
+
+        # Expected overlap per sample ≈ 0.5 * 0.5 * 48 = 12
+        avg_overlap = metrics["contrastive_n_overlap_per_sample"]
+        assert 4 < avg_overlap < 24, f"Unexpected overlap: {avg_overlap}"
 
 
 # =============================================================================
