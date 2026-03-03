@@ -154,6 +154,7 @@ def main(cfg: DictConfig) -> None:
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
+        min_epochs=cfg.training.get("min_epochs", None),
         accelerator=cfg.training.get("accelerator", "auto"),
         devices=cfg.training.get("devices", "auto"),
         precision=cfg.training.get("precision", 32),
