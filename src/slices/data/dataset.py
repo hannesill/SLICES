@@ -275,6 +275,10 @@ class ICUDataset(Dataset):
                 self._excluded_stay_ids,
             )
 
+        # Free raw DataFrame — only _timeseries_tensor and _mask_tensor needed from here.
+        # get_preprocessing_stages() reloads from parquet on demand.
+        del self.timeseries_df
+
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
 
@@ -572,9 +576,8 @@ class ICUDataset(Dataset):
     def get_preprocessing_stages(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:
         """Get intermediate preprocessing stages for a single sample.
 
-        This method re-runs the preprocessing pipeline for a specific sample,
-        capturing the tensor at each stage. Useful for debugging to see exactly
-        what transformations are applied to the data.
+        Reloads raw data from Parquet on demand (the in-memory DataFrame
+        is freed after tensor loading to save ~3-5 GB RAM). Debug only.
 
         The stages are:
             - grid: Raw 2D tensor (seq_length, n_features) with NaN for missing
@@ -600,8 +603,14 @@ class ICUDataset(Dataset):
         """
         stay_id = self.stay_ids[idx]
 
-        # Get raw nested list data from original DataFrame
-        row = self.timeseries_df.filter(pl.col("stay_id") == stay_id).row(0, named=True)
+        # Reload from parquet (timeseries_df freed after init)
+        timeseries_df = pl.read_parquet(self.data_dir / "timeseries.parquet")
+        if self._excluded_stay_ids:
+            timeseries_df = timeseries_df.filter(
+                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
+            )
+
+        row = timeseries_df.filter(pl.col("stay_id") == stay_id).row(0, named=True)
         raw_ts = row["timeseries"]
         raw_mask = row["mask"]
 
