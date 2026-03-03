@@ -126,7 +126,7 @@ class JEPAPredictor(nn.Module):
         n_vis = vis_proj.shape[1]
         scatter_idx = vis_indices[:, :n_vis]
         scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_pred)
-        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj)
+        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
 
         # Add time PE
         timestep_idx = token_info["timestep_idx"]
