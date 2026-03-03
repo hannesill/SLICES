@@ -192,6 +192,68 @@ def get_tensor_cache_path(
     return cache_dir / f"tensors_{cache_key}.pt"
 
 
+def _try_load_cache(
+    cache_path: Path, n_features: int, seq_length: int, normalize: bool
+) -> Optional[Dict[str, Any]]:
+    """Try to load and validate a tensor cache file.
+
+    Args:
+        cache_path: Path to the cache file.
+        n_features: Expected number of features.
+        seq_length: Expected sequence length.
+        normalize: Expected normalize flag.
+
+    Returns:
+        Dictionary with cached tensors if valid, None otherwise.
+    """
+    if not cache_path.exists():
+        return None
+
+    try:
+        logger.debug(f"Loading cached tensors from {cache_path.name}")
+        cached = torch.load(cache_path, weights_only=True, mmap=True)
+
+        # Validate cache metadata
+        if cached.get("n_features") != n_features:
+            logger.debug("Cached tensors have different feature count, recomputing")
+            return None
+        if cached.get("seq_length") != seq_length:
+            logger.debug("Cached tensors have different sequence length, recomputing")
+            return None
+        if cached.get("normalize") != normalize:
+            logger.debug("Cached tensors have different normalize flag, recomputing")
+            return None
+
+        # Validate tensor shapes (support both old list and new stacked format)
+        # NOTE: cannot use `x or y` here — `or` calls bool() on tensors, which
+        # raises RuntimeError for multi-element tensors.
+        timeseries = cached.get("timeseries_tensor")
+        if timeseries is None:
+            timeseries = cached.get("timeseries_tensors")
+        masks = cached.get("mask_tensor")
+        if masks is None:
+            masks = cached.get("mask_tensors")
+        if timeseries is None or masks is None:
+            logger.debug("Cached tensors missing data, recomputing")
+            return None
+
+        # Convert old list format to stacked if needed
+        if isinstance(timeseries, list):
+            logger.debug("Converting cached tensors from list to stacked format")
+            timeseries = torch.stack(timeseries)
+            masks = torch.stack(masks)
+            cached["timeseries_tensor"] = timeseries
+            cached["mask_tensor"] = masks
+
+        n_samples = timeseries.shape[0] if hasattr(timeseries, "shape") else len(timeseries)
+        logger.info(f"Loaded {n_samples:,} cached samples")
+        return cached
+
+    except Exception as e:
+        logger.debug(f"Failed to load cached tensors: {e}, recomputing")
+        return None
+
+
 def load_cached_tensors(
     data_dir: Path,
     normalize: bool,
@@ -216,46 +278,7 @@ def load_cached_tensors(
     cache_path = get_tensor_cache_path(
         data_dir, normalize, seq_length, n_features, train_indices, excluded_stay_ids
     )
-    if not cache_path.exists():
-        return None
-
-    try:
-        logger.debug(f"Loading cached tensors from {cache_path.name}")
-        cached = torch.load(cache_path, weights_only=True, mmap=True)
-
-        # Validate cache metadata
-        if cached.get("n_features") != n_features:
-            logger.debug("Cached tensors have different feature count, recomputing")
-            return None
-        if cached.get("seq_length") != seq_length:
-            logger.debug("Cached tensors have different sequence length, recomputing")
-            return None
-        if cached.get("normalize") != normalize:
-            logger.debug("Cached tensors have different normalize flag, recomputing")
-            return None
-
-        # Validate tensor shapes (support both old list and new stacked format)
-        timeseries = cached.get("timeseries_tensor") or cached.get("timeseries_tensors")
-        masks = cached.get("mask_tensor") or cached.get("mask_tensors")
-        if timeseries is None or masks is None:
-            logger.debug("Cached tensors missing data, recomputing")
-            return None
-
-        # Convert old list format to stacked if needed
-        if isinstance(timeseries, list):
-            logger.debug("Converting cached tensors from list to stacked format")
-            timeseries = torch.stack(timeseries)
-            masks = torch.stack(masks)
-            cached["timeseries_tensor"] = timeseries
-            cached["mask_tensor"] = masks
-
-        n_samples = timeseries.shape[0] if hasattr(timeseries, "shape") else len(timeseries)
-        logger.info(f"Loaded {n_samples:,} cached samples")
-        return cached
-
-    except Exception as e:
-        logger.debug(f"Failed to load cached tensors: {e}, recomputing")
-        return None
+    return _try_load_cache(cache_path, n_features, seq_length, normalize)
 
 
 def save_cached_tensors(
