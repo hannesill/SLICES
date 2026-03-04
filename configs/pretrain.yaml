@@ -56,7 +56,6 @@ encoder:
 # Training configuration (same budget across thesis paradigms for fair comparison)
 training:
   max_epochs: 100
-  min_epochs: 10  # >= warmup_epochs; prevents early stopping during LR warmup
   batch_size: 256
 
   # Compute settings
@@ -68,8 +67,10 @@ training:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1  # single batch, no accumulation
 
-  # Early stopping
-  early_stopping_patience: 10
+  # No early stopping for pretraining: self-distillation methods (JEPA) have
+  # rising val loss as representations get richer, making val loss unreliable
+  # as a stopping criterion. Fixed-schedule training follows I-JEPA, DINO, BYOL.
+  early_stopping_patience: null
 
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
