@@ -231,7 +231,26 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 **Note**: Supervised has no transfer story — this asymmetry is itself a finding.
 
-### 5.3 Mask Ratio Sensitivity
+### 5.3 Learning Rate Sensitivity
+
+**Question**: Are paradigm rankings robust to the shared learning rate, or does one paradigm benefit disproportionately from the chosen LR?
+
+**Motivation**: A controlled comparison uses shared hyperparameters to isolate the SSL objective as the only variable. A reviewer could argue this is unfair if one paradigm's optimal LR differs significantly. This ablation validates the shared-hyperparameter design.
+
+**Design**: Pretrain with LR ∈ {5e-4, 1e-3, 2e-3} on MIMIC-IV, finetune on mortality_24h.
+
+| Learning Rate | Paradigms | Dataset | Task | Runs |
+|---------------|-----------|---------|------|------|
+| 5e-4 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 |
+| 1e-3 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 (from main experiments) |
+| 2e-3 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 |
+| **Total** | | | | **6 new pretraining + 6 new finetuning = 12 runs × 3 seeds = 36 runs** |
+
+**Note**: The LR=1e-3 runs are reused from the main experiments (P1–P3). Only 5e-4 and 2e-3 require additional pretraining. This ablation runs as Sprint 1b (before the main experiment matrix) to validate the shared LR choice early.
+
+**Visualization**: Line plot of downstream AUPRC vs pretraining LR, one line per paradigm. Stable rankings across LRs validate the controlled comparison design.
+
+### 5.4 Mask Ratio Sensitivity
 
 **Question**: How sensitive are SSL paradigms to the masking ratio?
 
@@ -259,8 +278,9 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 171 |
 | Ablation 5.1 | Label efficiency | 144 | 432 | 603 |
 | Ablation 5.2 | Cross-dataset transfer | 24 | 72 | 675 |
-| Ablation 5.3 | Mask ratio sensitivity | 12 | 36 | 711 |
-| **Total** | | **237** | **711** | |
+| Ablation 5.3 | LR sensitivity | 12 | 36 | 711 |
+| Ablation 5.4 | Mask ratio sensitivity | 12 | 36 | 747 |
+| **Total** | | **249** | **747** | |
 
 ---
 
@@ -273,36 +293,48 @@ Priority ordering for incremental results and early debugging:
 2. Verify: training converges, metrics are reasonable, pipeline end-to-end works
 3. Check gradient step counts across paradigms — adjust epoch budgets if needed
 
+### Sprint 1b: Hyperparameter Sensitivity Check (6 pretrain + 6 finetune)
+4. Validate shared hyperparameter choices before committing to full experiment matrix
+5. MIMIC-IV, 3 SSL paradigms × 2 extra LRs (5e-4, 2e-3), mortality_24h only, seed=42
+6. Sprint 1 runs at LR=1e-3 serve as the third data point — no duplication needed
+7. Finetune each on mortality_24h to check if paradigm ranking shifts across LRs
+8. **Decision gate**: If rankings are stable → proceed with shared LR=1e-3. If one paradigm is LR-sensitive → adjust shared LR or document the sensitivity before expensive sprints.
+
 ### Sprint 2: First Full Dataset (16 runs)
-4. MIMIC-IV, all 4 paradigms × 4 tasks, seed=42
-5. Produces first complete results table for one dataset
-6. Write preliminary results section
+9. MIMIC-IV, all 4 paradigms × 4 tasks, seed=42
+10. Produces first complete results table for one dataset
+11. Write preliminary results section
 
 ### Sprint 3: Generalization (16 runs)
-7. eICU, all 4 paradigms × 4 tasks, seed=42
-8. Cross-dataset comparison possible
+12. eICU, all 4 paradigms × 4 tasks, seed=42
+13. Cross-dataset comparison possible
 
 ### Sprint 4: Scaling (16 runs)
-9. Combined dataset, all 4 paradigms × 4 tasks, seed=42
-10. All three main result tables complete (single seed)
+14. Combined dataset, all 4 paradigms × 4 tasks, seed=42
+15. All three main result tables complete (single seed)
 
 ### Sprint 5: Statistical Robustness (96 runs)
-11. Seeds 123 and 456 for all Sprint 2–4 runs
-12. Compute mean ± std, run statistical tests
+16. Seeds 123 and 456 for all Sprint 2–4 runs
+17. Compute mean ± std, run statistical tests
 
 ### Sprint 6: Label Efficiency Ablation (432 runs)
-13. Full sweep on mortality_24h anchor
-14. Trend check on remaining tasks
-15. Generate learning curve plots
+18. Full sweep on mortality_24h anchor
+19. Trend check on remaining tasks
+20. Generate learning curve plots
 
 ### Sprint 7: Transfer Ablation (72 runs)
-16. Cross-dataset transfer experiments
-17. Compare against in-domain baselines
+21. Cross-dataset transfer experiments
+22. Compare against in-domain baselines
 
-### Sprint 8: Fairness Analysis (0 extra runs)
-18. Compute fairness metrics on all Phase 2 test predictions
-19. Enable `eval.fairness.enabled=true` and rerun evaluation
-20. Generate fairness tables and disparity plots
+### Sprint 8: Mask Ratio + LR Ablations (72 runs)
+23. LR sensitivity runs (if not already completed in Sprint 1b with extra seeds)
+24. Mask ratio sensitivity runs
+25. Seeds 123 and 456 for Sprint 1b LR runs
+
+### Sprint 9: Fairness Analysis (0 extra runs)
+26. Compute fairness metrics on all Phase 2 test predictions
+27. Enable `eval.fairness.enabled=true` and rerun evaluation
+28. Generate fairness tables and disparity plots
 
 ---
 
@@ -384,4 +416,5 @@ Examples:
 | Unequal training budgets across paradigms | Track gradient steps; normalize if >2x difference |
 | Class imbalance affects metrics | Use AUPRC as primary; report class ratios; sensitivity analysis with class_weight="balanced" |
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
+| Shared hyperparameters unfair to one paradigm | LR sensitivity ablation (Sprint 1b) validates that rankings are robust to shared LR choice |
 | Reviewer requests 5 seeds | Add 2 seeds only to contested comparisons (minor revision) |
