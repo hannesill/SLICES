@@ -38,16 +38,20 @@ Secondary questions addressed through ablations:
 | Finetuning epochs | 50 (patience=10) | Same budget |
 | Weight decay | 0.01 | Same regularization |
 
-### 1.3 Paradigm-Intrinsic Differences (Documented, Not Controlled)
+### 1.3 Shared Encoder Architecture
 
-These differences are inherent to each paradigm and are themselves a contribution:
+All three SSL paradigms share the same encoder architecture, removing tokenization as a confounding variable:
 
-| Paradigm | Tokenization | Encoder | Rationale |
-|----------|-------------|---------|-----------|
-| MAE | Observation-level (1 token per observed value) | ObservationTransformer (d=128, L=4, H=8) | Avoids "mostly zeros" on sparse data |
-| JEPA | Observation-level (1 token per observed value) | ObservationTransformer (d=128, L=4, H=8) | Predicts in latent space; shares encoder with MAE |
-| Contrastive | Observation-level (1 token per observed value) | ObservationTransformer (d=128, L=4, H=8) | Two masked views; shares encoder with MAE |
-| Supervised | Timestep-level | Transformer (d=64, L=2, H=4) | Different encoder (no paradigm constraints) |
+| Paradigm | Tokenization | Encoder | Masking | Rationale |
+|----------|-------------|---------|---------|-----------|
+| MAE | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Random timestep masking | Reconstruct masked timestep features |
+| JEPA | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Block masking (3 contiguous segments) | Predict in latent space; block masking prevents trivial interpolation |
+| Contrastive | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Two random masked views | Align representations of different views |
+| Supervised | Timestep-level | Transformer (d=64, L=2, H=4) | N/A | Different encoder (no paradigm constraints) |
+
+**Obs-aware tokenization**: Each timestep token is produced by an MLP projection of `concat(values, obs_mask)` → `d_model`. This encodes both the observed values and the missingness pattern, avoiding the "mostly zeros" problem of naively feeding sparse timestep vectors through a linear projection. With ~22 observed features per timestep on average, the MLP maps ~44 non-zero inputs (22 values + 22 mask bits) to 128-dim tokens — no information bottleneck.
+
+**Design rationale**: An earlier observation-level design (1 token per observed value, using `ObservationTransformerEncoder`) produced ~1660 tokens per sample at 20% observation density, causing O(N²) attention to exceed L4 GPU memory. Timestep-level tokenization reduces this to 48 tokens (~35× reduction) while preserving all information through the obs-aware MLP. This also strengthens the controlled comparison by making all SSL paradigms share identical tokenization.
 
 ---
 
@@ -57,15 +61,16 @@ These differences are inherent to each paradigm and are themselves a contributio
 
 | Setting | MAE | JEPA | Contrastive |
 |---------|-----|------|-------------|
-| Epochs | 500 | 500 | 500 |
+| Epochs | 100 | 100 | 100 |
 | Batch size | 256 | 256 | 256 |
 | Learning rate | 1e-3 | 1e-3 | 1e-3 |
-| Scheduler | Warmup cosine (50 warmup) | Warmup cosine (50 warmup) | Warmup cosine (50 warmup) |
-| Mask ratio | 0.5 (random masking) | 0.5 (random masking) | 0.5 (two random masked views) |
+| Scheduler | Warmup cosine (10 warmup) | Warmup cosine (10 warmup) | Warmup cosine (10 warmup) |
+| Mask ratio | 0.5 (random masking) | 0.5 (block masking) | 0.5 (two random masked views) |
 | Gradient clipping | 1.0 | 1.0 | 1.0 |
-| Early stopping | Patience=10 on val loss | Patience=10 on val loss | Patience=10 on val loss |
+| Early stopping | None (fixed schedule) | None (fixed schedule) | None (fixed schedule) |
+| Checkpoint | Last epoch + best val loss | Last epoch + best val loss | Last epoch + best val loss |
 
-**Budget equalization**: Raw epoch counts differ because paradigms converge at different rates. For fair comparison, report **total gradient steps** and **wall-clock time** alongside epochs. If step counts diverge significantly (>2x), normalize by training the slower paradigm longer.
+**Fixed-schedule training**: All paradigms train for the full epoch budget without early stopping, following the convention in self-distillation literature (I-JEPA, DINO, BYOL) where validation loss is unreliable as a stopping criterion — JEPA's val loss rises as representations get richer, not worse. Fixed schedules ensure identical gradient step budgets across paradigms. The cosine LR schedule decays to eta_min=1e-6, providing natural convergence. Both last-epoch and best-val-loss encoders are saved; the last-epoch encoder is used for all primary results, with best-val-loss as a robustness check in the appendix.
 
 ### 2.2 Downstream Finetuning
 
@@ -148,15 +153,15 @@ Min subgroup size: 50 patients. Groups below threshold are excluded from fairnes
 
 | ID | Dataset | Paradigm | Encoder | Config Override |
 |----|---------|----------|---------|-----------------|
-| P1 | MIMIC-IV | MAE | ObservationTransformer | ssl=mae model=observation_transformer |
-| P2 | MIMIC-IV | JEPA | ObservationTransformer | ssl=jepa model=observation_transformer |
-| P3 | MIMIC-IV | Contrastive | ObservationTransformer | ssl=contrastive model=observation_transformer |
-| P4 | eICU | MAE | ObservationTransformer | ssl=mae model=observation_transformer |
-| P5 | eICU | JEPA | ObservationTransformer | ssl=jepa model=observation_transformer |
-| P6 | eICU | Contrastive | ObservationTransformer | ssl=contrastive model=observation_transformer |
-| P7 | Combined | MAE | ObservationTransformer | ssl=mae model=observation_transformer |
-| P8 | Combined | JEPA | ObservationTransformer | ssl=jepa model=observation_transformer |
-| P9 | Combined | Contrastive | ObservationTransformer | ssl=contrastive model=observation_transformer |
+| P1 | MIMIC-IV | MAE | Transformer (obs_aware) | ssl=mae |
+| P2 | MIMIC-IV | JEPA | Transformer (obs_aware) | ssl=jepa |
+| P3 | MIMIC-IV | Contrastive | Transformer (obs_aware) | ssl=contrastive |
+| P4 | eICU | MAE | Transformer (obs_aware) | ssl=mae dataset=eicu |
+| P5 | eICU | JEPA | Transformer (obs_aware) | ssl=jepa dataset=eicu |
+| P6 | eICU | Contrastive | Transformer (obs_aware) | ssl=contrastive dataset=eicu |
+| P7 | Combined | MAE | Transformer (obs_aware) | ssl=mae dataset=combined |
+| P8 | Combined | JEPA | Transformer (obs_aware) | ssl=jepa dataset=combined |
+| P9 | Combined | Contrastive | Transformer (obs_aware) | ssl=contrastive dataset=combined |
 
 ### 4.2 Phase 2: Downstream Evaluation (48 runs × 3 seeds = 144 runs)
 
