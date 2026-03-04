@@ -72,9 +72,13 @@ All three SSL paradigms share the same encoder architecture, removing tokenizati
 
 **Fixed-schedule training**: All paradigms train for the full epoch budget without early stopping, following the convention in self-distillation literature (I-JEPA, DINO, BYOL) where validation loss is unreliable as a stopping criterion — JEPA's val loss rises as representations get richer, not worse. Fixed schedules ensure identical gradient step budgets across paradigms. The cosine LR schedule decays to eta_min=1e-6, providing natural convergence. Both last-epoch and best-val-loss encoders are saved; the last-epoch encoder is used for all primary results, with best-val-loss as a robustness check in the appendix.
 
-### 2.2 Downstream Finetuning
+### 2.2 Downstream Evaluation (Two Protocols)
 
-All paradigms use identical finetuning protocol:
+SSL encoders are evaluated under **two** protocols to answer different questions:
+
+#### Protocol A: Linear Probing (primary SSL comparison)
+
+Isolates representation quality — the only variable is the SSL pretraining objective.
 
 | Setting | Value |
 |---------|-------|
@@ -83,11 +87,28 @@ All paradigms use identical finetuning protocol:
 | Batch size | 64 |
 | Learning rate | 1e-4 |
 | Scheduler | Cosine decay (eta_min=1e-6) |
-| Early stopping | Patience=10 on val metric (AUPRC for classification, MSE for regression) |
+| Early stopping | Patience=10 on val AUPRC (classification) or val MAE (regression) |
 | Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
-| Class weighting | None (report as-is; sensitivity analysis if needed) |
+| Class weighting | Inverse frequency (balanced) |
 
-**Linear probing rationale**: Isolates representation quality from finetuning optimization. Full finetuning results can be added as an appendix ablation.
+**Rationale**: Linear probing answers "Which SSL objective produces the best representations?" by preventing the encoder from adapting to the downstream task.
+
+#### Protocol B: Full Finetuning (practical utility)
+
+Measures how useful SSL pretraining is as weight initialization.
+
+| Setting | Value |
+|---------|-------|
+| Protocol | Full finetuning (freeze_encoder=false) |
+| Epochs | 100 |
+| Batch size | 64 |
+| Learning rate | 1e-3 (encoder), 1e-3 (head) |
+| Scheduler | Cosine decay (eta_min=1e-6) |
+| Early stopping | Patience=20 on val AUPRC (classification) or val MAE (regression) |
+| Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
+| Class weighting | Inverse frequency (balanced) |
+
+**Rationale**: Full finetuning answers "Which SSL objective is most useful in practice as initialization?" Results may diverge from linear probing — an encoder with mediocre frozen representations can still provide excellent initialization.
 
 ### 2.3 Supervised Baseline
 
@@ -97,11 +118,12 @@ All paradigms use identical finetuning protocol:
 | Batch size | 64 |
 | Learning rate | 1e-3 |
 | Scheduler | Cosine decay |
-| Early stopping | Patience=20 on val metric (AUPRC for classification, MSE for regression) |
+| Early stopping | Patience=20 on val AUPRC (classification) or val MAE (regression) |
 | Encoder | Transformer (d=64, L=2, H=4, obs_aware=True), trained end-to-end |
 | Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
+| Class weighting | Inverse frequency (balanced) |
 
-**Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then freeze the encoder for linear probing. This isolates the effect of SSL pretraining from architectural differences.
+**Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then evaluate via Protocol A (linear probe) and Protocol B (full finetune). Comparing supervised vs. Protocol B isolates the effect of SSL initialization; comparing SSL paradigms via Protocol A isolates representation quality.
 
 ---
 
@@ -165,14 +187,24 @@ Min subgroup size: 50 patients. Groups below threshold are excluded from fairnes
 | P8 | Combined | JEPA | Transformer (obs_aware) | ssl=jepa dataset=combined |
 | P9 | Combined | Contrastive | Transformer (obs_aware) | ssl=contrastive dataset=combined |
 
-### 4.2 Phase 2: Downstream Evaluation (48 runs × 3 seeds = 144 runs)
+### 4.2 Phase 2: Downstream Evaluation (84 runs × 3 seeds = 252 runs)
 
-Each of the 9 pretrained encoders is finetuned on 4 downstream tasks (36 SSL finetuning runs).
-Each of the 3 datasets gets a supervised baseline on 4 tasks (12 supervised runs).
+Each of the 9 pretrained encoders is evaluated on 4 downstream tasks under **both** protocols:
+- Protocol A (linear probe): 9 encoders × 4 tasks = 36 runs
+- Protocol B (full finetune): 9 encoders × 4 tasks = 36 runs
+- Supervised baseline: 3 datasets × 4 tasks = 12 runs
 
-**Result Tables** (one per dataset):
+**Result Tables** (one per dataset, two sub-tables per dataset):
 
-#### MIMIC-IV Results
+#### MIMIC-IV Results — Protocol A: Linear Probe (Embedding Quality)
+
+| | mortality_24h | mortality_hospital | aki_kdigo | los_remaining |
+|---|---|---|---|---|
+| **MAE** | AUPRC ± std | AUPRC ± std | AUPRC ± std | MAE ± std |
+| **JEPA** | | | | |
+| **Contrastive** | | | | |
+
+#### MIMIC-IV Results — Protocol B: Full Finetune (Practical Utility)
 
 | | mortality_24h | mortality_hospital | aki_kdigo | los_remaining |
 |---|---|---|---|---|
@@ -281,13 +313,13 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | Phase | Description | Runs | × 3 seeds | Cumulative |
 |-------|-------------|------|-----------|------------|
 | Phase 1 | Pretraining | 9 | 27 | 27 |
-| Phase 2 | Downstream finetuning | 48 | 144 | 171 |
-| Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 171 |
-| Ablation 5.1 | Label efficiency | 144 | 432 | 603 |
-| Ablation 5.2 | Cross-dataset transfer | 24 | 72 | 675 |
-| Ablation 5.3 | LR sensitivity | 12 | 36 | 711 |
-| Ablation 5.4 | Mask ratio sensitivity | 12 | 36 | 747 |
-| **Total** | | **249** | **747** | |
+| Phase 2 | Downstream (linear probe + full finetune + supervised) | 84 | 252 | 279 |
+| Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 279 |
+| Ablation 5.1 | Label efficiency | 144 | 432 | 711 |
+| Ablation 5.2 | Cross-dataset transfer | 24 | 72 | 783 |
+| Ablation 5.3 | LR sensitivity | 12 | 36 | 819 |
+| Ablation 5.4 | Mask ratio sensitivity | 12 | 36 | 855 |
+| **Total** | | **285** | **855** | |
 
 ---
 
@@ -295,10 +327,27 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 Priority ordering for incremental results and early debugging:
 
-### Sprint 1: Sanity Check (4 runs)
-1. MIMIC-IV, all 4 paradigms (MAE, JEPA, Contrastive, Supervised), mortality_24h only, seed=42
-2. Verify: training converges, metrics are reasonable, pipeline end-to-end works
-3. Check gradient step counts across paradigms — adjust epoch budgets if needed
+### Sprint 1: Full Pipeline Validation (3 pretrain + 16 finetune = 19 runs)
+
+**Goal**: Validate the entire pipeline end-to-end on MIMIC-IV across all 4 downstream tasks before committing to the full experiment matrix. Catch task-specific bugs (AKI label builder, regression head, extreme imbalance handling) early rather than after hundreds of runs.
+
+**Literature sanity check** (mortality_hospital — best-comparable published task):
+- SLICES task: 48h observation → in-hospital mortality. Matches DuETT/CRISP task framing.
+- Supervised Transformer target: ~0.86–0.88 AUROC (small d=64 model; larger models reach 0.91+)
+- SSL with full finetuning: should match or exceed supervised
+
+**Note on literature comparability**: The other 3 tasks (mortality_24h, aki_kdigo, los_remaining) have no directly comparable published baselines due to differences in task framing — see `docs/LIT_COMP.md` for details. Mortality_24h (24h prediction window after 48h observation) differs from YAIB's "24h" (24h observation → ICU mortality). AKI uses static prediction vs. YAIB's hourly rolling prediction. LOS uses regression vs. literature's mostly binary classification. These tasks are validated by checking for sensible outputs, not by matching specific published numbers.
+
+**Steps**:
+1. Run 3 SSL pretraining runs (MAE, JEPA, Contrastive) on MIMIC-IV, seed=42
+2. Run 4 supervised baselines (one per task, end-to-end), seed=42
+3. **Full finetune** (Protocol B) all 3 SSL encoders on all 4 tasks (12 runs)
+4. Validate mortality_hospital: supervised AUROC in ~0.86–0.88 range
+5. Validate mortality_24h: pipeline handles extreme imbalance (~1.7% positive rate) — metrics above chance, class weighting and AUPRC early stopping work correctly
+6. Validate aki_kdigo: KDIGO label builder produces sensible positive rates, no creatinine data bugs
+7. Validate los_remaining: regression head, MAE loss, and R² metric produce reasonable values
+8. Verify SSL full finetune matches or exceeds supervised across tasks
+9. **Decision gate**: Proceed to Sprint 1b when (a) supervised mortality_hospital AUROC ≥ 0.80, (b) SSL full-finetune within 10% of supervised on all tasks, (c) all 4 task pipelines produce valid outputs with sensible class/value distributions
 
 ### Sprint 1b: Hyperparameter Sensitivity Check (6 pretrain + 6 finetune)
 4. Validate shared hyperparameter choices before committing to full experiment matrix
@@ -307,21 +356,21 @@ Priority ordering for incremental results and early debugging:
 7. Finetune each on mortality_24h to check if paradigm ranking shifts across LRs
 8. **Decision gate**: If rankings are stable → proceed with shared LR=1e-3. If one paradigm is LR-sensitive → adjust shared LR or document the sensitivity before expensive sprints.
 
-### Sprint 2: First Full Dataset (16 runs)
-9. MIMIC-IV, all 4 paradigms × 4 tasks, seed=42
-10. Produces first complete results table for one dataset
+### Sprint 2: MIMIC-IV Linear Probing — Complete First Results Table (12 runs)
+9. Protocol A (linear probe): 3 SSL paradigms × 4 tasks on MIMIC-IV, seed=42
+10. Combined with Sprint 1 Protocol B runs, produces complete MIMIC-IV results table (Protocol A + B + supervised)
 11. Write preliminary results section
 
-### Sprint 3: Generalization (16 runs)
-12. eICU, all 4 paradigms × 4 tasks, seed=42
+### Sprint 3: Generalization — eICU (3 pretrain + 28 finetune = 31 runs)
+12. eICU: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
 13. Cross-dataset comparison possible
 
-### Sprint 4: Scaling (16 runs)
-14. Combined dataset, all 4 paradigms × 4 tasks, seed=42
+### Sprint 4: Scaling — Combined (3 pretrain + 28 finetune = 31 runs)
+14. Combined: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
 15. All three main result tables complete (single seed)
 
 ### Sprint 5: Statistical Robustness (96 runs)
-16. Seeds 123 and 456 for all Sprint 2–4 runs
+16. Seeds 123 and 456 for all Sprint 1–4 runs
 17. Compute mean ± std, run statistical tests
 
 ### Sprint 6: Label Efficiency Ablation (432 runs)
@@ -406,10 +455,10 @@ Examples:
 
 ### Appendix
 
-- Full finetuning results (unfreeze encoder) if time permits
 - Per-seed results for transparency
 - Training curves (loss vs steps) for all pretraining runs
 - Hyperparameter sensitivity (if reviewer requests)
+- Literature comparison table (see `docs/LIT_COMP.md`)
 
 ---
 
@@ -421,7 +470,7 @@ Examples:
 | eICU lacks race/ethnicity data | Fairness analysis for race is MIMIC-only; document as limitation |
 | Phenotyping task is MIMIC-only | Excluded from main matrix; can add as MIMIC-specific appendix |
 | Unequal training budgets across paradigms | Track gradient steps; normalize if >2x difference |
-| Class imbalance affects metrics | Use AUPRC as primary; report class ratios; sensitivity analysis with class_weight="balanced" |
+| Class imbalance affects metrics | Use AUPRC as primary metric; inverse-frequency class weighting enabled by default; early stopping on val AUPRC (not val loss); report class ratios |
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
 | Shared hyperparameters unfair to one paradigm | LR sensitivity ablation (Sprint 1b) validates that rankings are robust to shared LR choice |
 | Reviewer requests 5 seeds | Add 2 seeds only to contested comparisons (minor revision) |
