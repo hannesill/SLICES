@@ -45,13 +45,9 @@ data:
   window_stride: 24              # Stride for overlapping windows (50% overlap)
 
 # Encoder overrides for SSL pretraining
+# Architecture (d_model, n_layers, etc.) inherited from configs/model/transformer.yaml
 encoder:
   pooling: none  # Required for SSL - need per-token outputs (vs 'mean' for tasks)
-  obs_aware: true  # Enable obs-aware MLP projection for SSL
-  d_model: 128
-  n_layers: 4
-  n_heads: 8
-  d_ff: 512
 
 # Training configuration (same budget across thesis paradigms for fair comparison)
 training:

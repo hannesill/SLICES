@@ -47,6 +47,7 @@ output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
 # Encoder configuration inherited from configs/model/transformer.yaml
+# Same architecture as SSL paradigms (d=64, L=2, H=4, obs_aware=True) for fair comparison
 
 # Task configuration inherited from configs/tasks/*.yaml
 # Override with: task=mortality_hospital, task=los_remaining, etc.
