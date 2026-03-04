@@ -19,10 +19,10 @@ mask_n_blocks: 3  # Number of contiguous blocks (only for block strategy)
 # Unlike MAE decoder (which reconstructs raw features, d_model→D), JEPA predictor
 # predicts in latent space (d_model→d_model). The bottleneck forces information
 # routing through the online encoder's context representations.
-predictor_d_model: 64
+predictor_d_model: 32   # 50% of encoder d_model=64
 predictor_n_layers: 2
-predictor_n_heads: 4
-predictor_d_ff: 256
+predictor_n_heads: 4    # 32/4 = 8 per head
+predictor_d_ff: 128     # 4 * predictor_d_model
 predictor_dropout: 0.1
 
 # Momentum encoder parameters
