@@ -42,7 +42,7 @@ class ContrastiveConfig(SSLConfig):
     name: str = "contrastive"
 
     # Mode: "temporal" (per-timestep overlap pairs) or "instance" (mean-pool)
-    mode: str = "temporal"
+    mode: str = "instance"
 
     # Masking
     mask_ratio: float = 0.5
@@ -52,7 +52,7 @@ class ContrastiveConfig(SSLConfig):
     proj_output_dim: int = 128
 
     # Temperature for NT-Xent
-    temperature: float = 0.1
+    temperature: float = 0.07
 
     def __post_init__(self) -> None:
         if self.mode not in ("temporal", "instance"):
@@ -377,6 +377,24 @@ class ContrastiveObjective(BaseSSLObjective):
             # Positive pair similarities (before temperature scaling)
             pos_sim = F.cosine_similarity(z1, z2, dim=-1).mean()
 
+            # --- Collapse monitoring (Wang & Isola 2020) ---
+            # Alignment: mean L2 distance between positive pairs (lower = better)
+            alignment = (z1 - z2).norm(dim=-1).pow(2).mean()
+
+            # Uniformity: log avg pairwise Gaussian potential on hypersphere
+            # Lower = more uniform = better spread of representations
+            # Use z1 only (one view per sample) to avoid inflating with positives
+            sq_pdist = torch.cdist(z1, z1, p=2).pow(2)  # (B, B)
+            uniformity = sq_pdist.mul(-2).exp().mean().log()
+
+            # Effective rank via singular value entropy (Roy & Vetterli 2007)
+            # High effective rank = diverse representation dimensions
+            # Low effective rank → collapse to a low-dim subspace
+            _, s, _ = torch.svd_lowrank(z1 - z1.mean(dim=0), q=min(B, z1.shape[1]))
+            p = s.clamp(min=0).pow(2)  # eigenvalues (squared singular values)
+            p = p / p.sum().clamp(min=1e-12)
+            eff_rank = (-p * p.clamp(min=1e-7).log()).sum().exp()
+
             # Timestep statistics
             T = ssl_mask_1.shape[1]
             n_vis_1 = ssl_mask_1.sum().item()
@@ -389,6 +407,9 @@ class ContrastiveObjective(BaseSSLObjective):
                 "ssl_loss": loss.detach(),
                 "contrastive_accuracy": accuracy,
                 "contrastive_pos_similarity": pos_sim,
+                "contrastive_alignment": alignment,
+                "contrastive_uniformity": uniformity,
+                "contrastive_effective_rank": eff_rank,
                 "contrastive_temperature": temperature,
                 "contrastive_n_timesteps": T,
                 "contrastive_n_visible_view1": n_vis_1 / B,
