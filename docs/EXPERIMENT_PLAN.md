@@ -44,12 +44,12 @@ All three SSL paradigms share the same encoder architecture, removing tokenizati
 
 | Paradigm | Tokenization | Encoder | Masking | Rationale |
 |----------|-------------|---------|---------|-----------|
-| MAE | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Random timestep masking | Reconstruct masked timestep features |
-| JEPA | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Block masking (3 contiguous segments) | Predict in latent space; block masking prevents trivial interpolation |
-| Contrastive | Timestep-level (obs-aware) | Transformer (d=128, L=4, H=8, obs_aware=True) | Two random masked views | Align representations of different views |
-| Supervised | Timestep-level | Transformer (d=64, L=2, H=4) | N/A | Different encoder (no paradigm constraints) |
+| MAE | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Random timestep masking | Reconstruct masked timestep features |
+| JEPA | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Block masking (3 contiguous segments) | Predict in latent space; block masking prevents trivial interpolation |
+| Contrastive | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Two random masked views | Align representations of different views |
+| Supervised | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | N/A | Same encoder as SSL for fair comparison |
 
-**Obs-aware tokenization**: Each timestep token is produced by an MLP projection of `concat(values, obs_mask)` → `d_model`. This encodes both the observed values and the missingness pattern, avoiding the "mostly zeros" problem of naively feeding sparse timestep vectors through a linear projection. With ~22 observed features per timestep on average, the MLP maps ~44 non-zero inputs (22 values + 22 mask bits) to 128-dim tokens — no information bottleneck.
+**Obs-aware tokenization**: Each timestep token is produced by an MLP projection of `concat(values, obs_mask)` → `d_model`. This encodes both the observed values and the missingness pattern, avoiding the "mostly zeros" problem of naively feeding sparse timestep vectors through a linear projection. With ~22 observed features per timestep on average, the MLP maps ~44 non-zero inputs (22 values + 22 mask bits) to 64-dim tokens — no information bottleneck.
 
 **Design rationale**: An earlier observation-level design (1 token per observed value, using `ObservationTransformerEncoder`) produced ~1660 tokens per sample at 20% observation density, causing O(N²) attention to exceed L4 GPU memory. Timestep-level tokenization reduces this to 48 tokens (~35× reduction) while preserving all information through the obs-aware MLP. This also strengthens the controlled comparison by making all SSL paradigms share identical tokenization.
 
@@ -98,8 +98,10 @@ All paradigms use identical finetuning protocol:
 | Learning rate | 1e-3 |
 | Scheduler | Cosine decay |
 | Early stopping | Patience=20 on val metric (AUPRC for classification, MSE for regression) |
-| Encoder | Transformer (d=64, L=2, H=4), trained end-to-end |
+| Encoder | Transformer (d=64, L=2, H=4, obs_aware=True), trained end-to-end |
 | Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
+
+**Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then freeze the encoder for linear probing. This isolates the effect of SSL pretraining from architectural differences.
 
 ---
 
