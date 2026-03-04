@@ -5,15 +5,8 @@
 # Training configs (supervised.yaml, pretrain.yaml, finetune.yaml) inherit
 # from this via Hydra defaults and override only what differs.
 #
-# Common configurations:
-#
-# SMART-like (default, ~100K parameters):
-#   encoder.d_model=32 encoder.n_layers=2 encoder.n_heads=4 encoder.d_ff=128
-#   Matches SMART (NeurIPS 2024) architecture for missing-aware EHR modeling.
-#   Prevents overfitting on small positive classes typical in ICU prediction.
-#
-# Medium (~500K parameters):
-#   encoder.d_model=128 encoder.n_layers=4 encoder.n_heads=8 encoder.d_ff=512
+# All paradigms (SSL and supervised) share the same architecture (~174K params
+# with obs_aware=True) to eliminate model capacity as a confounding variable.
 
 
 name: transformer
@@ -47,5 +40,5 @@ use_positional_encoding: true  # Add sinusoidal positional encoding
 pooling: mean
 
 # Observation-aware mode: concat (values, obs_mask) -> MLP -> d_model
-# Enable for SSL pretraining; disabled by default for supervised baselines
-obs_aware: false
+# Enabled for all paradigms (SSL and supervised) for fair comparison
+obs_aware: true
