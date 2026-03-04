@@ -154,7 +154,6 @@ def main(cfg: DictConfig) -> None:
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
-        min_epochs=cfg.training.get("min_epochs", None),
         accelerator=cfg.training.get("accelerator", "auto"),
         devices=cfg.training.get("devices", "auto"),
         precision=cfg.training.get("precision", 32),
@@ -189,26 +188,33 @@ def main(cfg: DictConfig) -> None:
     trainer.fit(model, datamodule=datamodule)
 
     # =========================================================================
-    # 5. Save Encoder (from best checkpoint)
+    # 5. Save Encoder
     # =========================================================================
     print("\n" + "=" * 80)
     print("5. Saving Encoder")
     print("=" * 80)
 
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Primary: save encoder from last epoch (model state after trainer.fit)
+    # Fixed-schedule training follows I-JEPA/DINO/BYOL convention.
+    encoder_path = output_dir / "encoder.pt"
+    model.save_encoder(str(encoder_path))
+    print(f"\n Encoder (last epoch) saved to: {encoder_path}")
+    print("  - Use this for downstream fine-tuning")
+
+    # Secondary: save encoder from best-val-loss checkpoint (robustness check)
     checkpoint_callback = callbacks[0]
     best_ckpt = checkpoint_callback.best_model_path
     if best_ckpt:
-        print(f"\n  Loading best checkpoint: {best_ckpt}")
+        print(f"\n  Best val/loss checkpoint: {best_ckpt}")
         print(f"  Best val/loss: {checkpoint_callback.best_model_score:.4f}")
         best_state = torch.load(best_ckpt, map_location="cpu", weights_only=False)
         model.load_state_dict(best_state["state_dict"])
-
-    encoder_path = Path(cfg.output_dir) / "encoder.pt"
-    encoder_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save_encoder(str(encoder_path))
-
-    print(f"\n Encoder saved to: {encoder_path}")
-    print("  - Use this for downstream fine-tuning")
+        encoder_best_path = output_dir / "encoder_best_val.pt"
+        model.save_encoder(str(encoder_best_path))
+        print(f"  Encoder (best val) saved to: {encoder_best_path}")
 
     # =========================================================================
     # Summary
@@ -217,13 +223,11 @@ def main(cfg: DictConfig) -> None:
     print("Training Complete!")
     print("=" * 80)
 
-    if best_ckpt:
-        print(f"\n Best checkpoint: {best_ckpt}")
-        print(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
-
     print(f"\n Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")
-    print(f"  - Encoder weights: {encoder_path}")
+    print(f"  - Encoder (last epoch): {encoder_path}")
+    if best_ckpt:
+        print(f"  - Encoder (best val): {output_dir / 'encoder_best_val.pt'}")
 
     if logger:
         print(
