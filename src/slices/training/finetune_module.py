@@ -219,7 +219,8 @@ class FineTuneModule(pl.LightningModule):
             Loss module.
         """
         if self.task_type in ("binary", "multiclass"):
-            return nn.CrossEntropyLoss(weight=self._class_weights)
+            label_smoothing = self.config.training.get("label_smoothing", 0.0)
+            return nn.CrossEntropyLoss(weight=self._class_weights, label_smoothing=label_smoothing)
         elif self.task_type == "multilabel":
             return nn.BCEWithLogitsLoss()
         elif self.task_type == "regression":
