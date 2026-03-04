@@ -46,8 +46,9 @@ ckpt_path: null
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Encoder configuration inherited from configs/model/transformer.yaml
-# Same architecture as SSL paradigms (d=64, L=2, H=4, obs_aware=True) for fair comparison
+# Encoder overrides — increase dropout for training from scratch
+encoder:
+  dropout: 0.2
 
 # Task configuration inherited from configs/tasks/*.yaml
 # Override with: task=mortality_hospital, task=los_remaining, etc.
@@ -79,6 +80,9 @@ training:
   # [w0, w1, ...]: explicit per-class weights
   class_weight: null
 
+  # Label smoothing — helps calibration with highly imbalanced tasks
+  label_smoothing: 0.1
+
   # Regularization
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
@@ -97,7 +101,7 @@ training:
 optimizer:
   name: adamw
   lr: 1.0e-3  # Higher LR for training from scratch
-  weight_decay: 0.01
+  weight_decay: 0.05
 
 # Learning rate scheduler
 scheduler:

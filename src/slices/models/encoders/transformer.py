@@ -189,6 +189,7 @@ class TransformerEncoder(BaseEncoder):
             self.obs_proj = nn.Sequential(
                 nn.Linear(2 * config.d_input, config.d_ff),
                 nn.GELU(),
+                nn.Dropout(config.dropout),
                 nn.Linear(config.d_ff, config.d_model),
             )
             self.register_buffer(

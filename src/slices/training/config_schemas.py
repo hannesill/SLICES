@@ -86,6 +86,7 @@ class TrainingConfig(BaseModel):
     early_stopping_patience: Optional[int] = 10
     early_stopping_monitor: Optional[str] = None
     early_stopping_mode: Optional[str] = None
+    label_smoothing: float = 0.0
     overfit_batches: Union[int, float] = 0
 
 

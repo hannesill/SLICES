@@ -101,6 +101,9 @@ training:
   # Override here only if you need a non-default metric.
   early_stopping_patience: 10
 
+  # Label smoothing (default off for finetuning — frozen encoder doesn't overfit)
+  label_smoothing: 0.0
+
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
 
