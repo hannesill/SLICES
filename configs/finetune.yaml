@@ -84,7 +84,7 @@ training:
   # null: no weighting (default)
   # "balanced": auto-compute inverse frequency weights from training labels
   # [w0, w1, ...]: explicit per-class weights
-  class_weight: null
+  class_weight: balanced
 
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
