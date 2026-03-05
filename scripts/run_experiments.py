@@ -6,6 +6,7 @@ Generates all experiment configurations across sprints, resolves dependencies,
 and executes them in parallel with crash recovery and state persistence.
 
 Usage:
+    uv run python scripts/run_experiments.py warmup --sprint 1
     uv run python scripts/run_experiments.py run --sprint 1 --parallel 4
     uv run python scripts/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
     uv run python scripts/run_experiments.py status
@@ -818,6 +819,73 @@ def cmd_retry(args):
     run_scheduler(runs_to_retry, state, args.parallel, dry_run=False)
 
 
+def cmd_warmup(args):
+    """Pre-build tensor caches for requested sprints.
+
+    Instantiates ICUDataModule for each unique (dataset, task, seed, label_fraction)
+    combination sequentially. This populates the tensor cache so that parallel
+    experiment runs can load preprocessed data from disk instead of each process
+    independently loading and converting raw parquet files (which causes OOM).
+    """
+    all_runs = generate_all_runs()
+
+    # Filter to requested sprints
+    sprints = [str(s) for s in args.sprint]
+    runs = [r for r in all_runs if r.sprint in sprints]
+
+    # Also include dependency runs
+    run_ids = {r.id for r in runs}
+    deps_needed = set()
+    for r in runs:
+        for d in r.depends_on:
+            if d not in run_ids:
+                deps_needed.add(d)
+    if deps_needed:
+        all_by_id = {r.id: r for r in all_runs}
+        runs = [all_by_id[d] for d in deps_needed if d in all_by_id] + runs
+
+    # Collect unique (dataset, task, seed, label_fraction) combos
+    # task=None for pretrain, task=<name> for finetune/supervised
+    combos: dict[tuple, None] = {}  # ordered set via dict
+    for r in runs:
+        if r.run_type == "pretrain":
+            key = (r.dataset, None, r.seed, 1.0)
+        else:
+            key = (r.dataset, r.task, r.seed, r.label_fraction)
+        combos[key] = None
+
+    print(f"Warming up tensor caches for sprint(s) {', '.join(sprints)}")
+    print(f"  {len(combos)} unique (dataset, task, seed, label_fraction) combinations\n")
+
+    # Import here to avoid loading heavy deps when not needed
+    from slices.data.datamodule import ICUDataModule
+
+    for i, (dataset, task, seed, label_fraction) in enumerate(combos, 1):
+        processed_dir = f"data/processed/{dataset}"
+        task_str = task or "(pretrain/no task)"
+        frac_str = f", frac={label_fraction}" if label_fraction < 1.0 else ""
+        print(f"[{i}/{len(combos)}] {dataset} / {task_str} / seed={seed}{frac_str}")
+
+        try:
+            dm = ICUDataModule(
+                processed_dir=processed_dir,
+                task_name=task,
+                batch_size=1,  # doesn't matter, we just need setup()
+                num_workers=0,
+                seed=seed,
+                label_fraction=label_fraction,
+            )
+            dm.setup()
+            print(f"  -> Cached ({len(dm.dataset):,} samples)")
+            # Free memory before next combo
+            del dm
+        except Exception as e:
+            print(f"  -> ERROR: {e}")
+
+    print("\nWarmup complete. Tensor caches saved to data/processed/<dataset>/.tensor_cache/")
+    print("You can now run experiments in parallel without OOM.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="SLICES parallel experiment runner")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -838,6 +906,14 @@ def main():
     p_retry.add_argument("--skipped", action="store_true", help="Retry skipped runs")
     p_retry.add_argument("--parallel", type=int, default=4, help="Max parallel jobs (default: 4)")
 
+    # warmup
+    p_warmup = sub.add_parser(
+        "warmup", help="Pre-build tensor caches to avoid OOM during parallel runs"
+    )
+    p_warmup.add_argument(
+        "--sprint", nargs="+", required=True, help="Sprint(s) to warmup (e.g. 1 1b 2)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -846,6 +922,8 @@ def main():
         cmd_status(args)
     elif args.command == "retry":
         cmd_retry(args)
+    elif args.command == "warmup":
+        cmd_warmup(args)
 
 
 if __name__ == "__main__":
