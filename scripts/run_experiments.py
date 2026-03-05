@@ -44,7 +44,7 @@ LOG_DIR = Path("logs/runner")
 
 # Protocol defaults
 PROTO_A = {"freeze_encoder": True, "max_epochs": 50, "patience": 10, "lr": 1e-4}
-PROTO_B = {"freeze_encoder": False, "max_epochs": 100, "patience": 20, "lr": 1e-3}
+PROTO_B = {"freeze_encoder": False, "max_epochs": 100, "patience": 10, "lr": 3e-4}
 
 
 # ---------------------------------------------------------------------------

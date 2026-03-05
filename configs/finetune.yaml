@@ -101,8 +101,8 @@ training:
   # Override here only if you need a non-default metric.
   early_stopping_patience: 10
 
-  # Label smoothing (default off for finetuning — frozen encoder doesn't overfit)
-  label_smoothing: 0.0
+  # Label smoothing for classification tasks
+  label_smoothing: 0.1
 
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
@@ -112,7 +112,7 @@ training:
 optimizer:
   name: adamw
   lr: 1.0e-4  # Lower LR for finetuning
-  weight_decay: 0.01
+  weight_decay: 0.05
 
 # Optional learning rate scheduler
 scheduler:
