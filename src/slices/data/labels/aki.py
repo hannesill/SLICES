@@ -17,8 +17,8 @@ class AKILabelBuilder(LabelBuilder):
     - Creatinine rise >= 0.3 mg/dL within any 48h window
     - Creatinine >= 1.5x baseline within 7 days of baseline measurement
 
-    Baseline: minimum creatinine in first 24h (standard clinical proxy).
-    Only evaluates criteria AFTER the observation window ends.
+    Baseline: minimum creatinine in first baseline_window_hours (default 24h).
+    Evaluates criteria AFTER the baseline window within the observation period.
     Label = null if no creatinine measurements available.
     """
 
@@ -43,7 +43,6 @@ class AKILabelBuilder(LabelBuilder):
                 }
             )
 
-        obs_hours = self.config.observation_window_hours or 48
         crea_col = self.config.label_params.get("creatinine_col", "crea")
         baseline_hours = self.config.label_params.get("baseline_window_hours", 24)
         abs_threshold = self.config.label_params.get("absolute_rise_threshold", 0.3)
@@ -76,16 +75,13 @@ class AKILabelBuilder(LabelBuilder):
             .agg(pl.col(crea_col).min().alias("baseline"))
         )
 
-        # Post-observation creatinine values
-        post_obs = crea_ts.filter(pl.col("hour") >= obs_hours)
+        # Post-baseline creatinine values (detection window)
+        post_obs = crea_ts.filter(pl.col("hour") >= baseline_hours)
 
-        # Join baselines with post-observation data
+        # Join baselines with post-baseline data
         post_with_baseline = post_obs.join(baselines, on="stay_id", how="inner")
 
         # --- KDIGO Criterion 1: Relative rise (>= 1.5x baseline within 7 days) ---
-        # The 7-day window is relative to the baseline measurement period.
-        # Baseline is measured in first baseline_hours, so the 7-day window extends
-        # from hour 0 to hour rel_window_hours.
         rel_aki = (
             post_with_baseline.filter(pl.col("hour") < rel_window_hours)
             .filter(pl.col(crea_col) >= pl.col("baseline") * rel_threshold)
@@ -95,8 +91,12 @@ class AKILabelBuilder(LabelBuilder):
         )
 
         # --- KDIGO Criterion 2: Absolute rise (>= 0.3 mg/dL within 48h window) ---
-        # Self-join to find pairs within 48h windows
-        abs_aki = self._check_absolute_criterion_vectorized(post_obs, crea_col, abs_threshold)
+        # Use all creatinine data but only flag rises where the later measurement
+        # falls in the detection window (>= baseline_hours), so we catch rises
+        # that span the baseline/detection boundary.
+        abs_aki = self._check_absolute_criterion_vectorized(
+            crea_ts, crea_col, abs_threshold, baseline_hours
+        )
 
         # Combine criteria: AKI = 1 if either criterion is met
         stay_df = pl.DataFrame({"stay_id": pl.Series(stay_ids, dtype=pl.Int64)})
@@ -107,7 +107,7 @@ class AKILabelBuilder(LabelBuilder):
         # Stays with baseline (needed for evaluation)
         stays_with_baseline = baselines.select("stay_id").unique()
 
-        # Stays with post-obs data
+        # Stays with post-baseline data
         stays_with_post_obs = post_obs.select("stay_id").unique()
 
         result = (
@@ -132,7 +132,7 @@ class AKILabelBuilder(LabelBuilder):
 
         # Build label:
         # - null if no creatinine data or no baseline
-        # - 0 if no post-obs data (survived observation without AKI evidence after)
+        # - 0 if no post-baseline data (no creatinine to evaluate after baseline period)
         # - 1 if either AKI criterion met
         # - 0 otherwise
         result = result.with_columns(
@@ -163,19 +163,21 @@ class AKILabelBuilder(LabelBuilder):
 
     def _check_absolute_criterion_vectorized(
         self,
-        post_obs: pl.DataFrame,
+        crea_ts: pl.DataFrame,
         crea_col: str,
         abs_threshold: float,
+        detection_start_hour: int,
     ) -> pl.DataFrame:
         """Check KDIGO absolute rise criterion using vectorized operations.
 
         Finds any pair of creatinine values within a 48h window where the later
-        value exceeds the earlier by >= abs_threshold.
+        value exceeds the earlier by >= abs_threshold and the later measurement
+        falls in the detection window (hour >= detection_start_hour).
 
         Returns:
             DataFrame with stay_id column for stays meeting the criterion.
         """
-        if len(post_obs) == 0:
+        if len(crea_ts) == 0:
             return pl.DataFrame(
                 {
                     "stay_id": pl.Series([], dtype=pl.Int64),
@@ -184,21 +186,23 @@ class AKILabelBuilder(LabelBuilder):
             )
 
         # Self-join within each stay: pair each measurement with later ones
-        left = post_obs.select(
+        left = crea_ts.select(
             pl.col("stay_id"),
             pl.col("hour").alias("hour_i"),
             pl.col(crea_col).alias("crea_i"),
         )
-        right = post_obs.select(
+        right = crea_ts.select(
             pl.col("stay_id"),
             pl.col("hour").alias("hour_j"),
             pl.col(crea_col).alias("crea_j"),
         )
 
-        # Join on stay_id and filter: j > i, within 48h, rise >= threshold
+        # Join on stay_id and filter: j > i, within 48h, rise >= threshold,
+        # and the later measurement is in the detection window
         pairs = left.join(right, on="stay_id", how="inner").filter(
             (pl.col("hour_j") > pl.col("hour_i"))
             & (pl.col("hour_j") - pl.col("hour_i") <= 48)
+            & (pl.col("hour_j") >= detection_start_hour)
             & (pl.col("crea_j") - pl.col("crea_i") >= abs_threshold)
         )
 
