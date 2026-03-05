@@ -150,8 +150,9 @@ def main(cfg: DictConfig) -> None:
                     f"Cannot compute balanced class weights for '{task_name}': "
                     f"{n_pos} positive, {n_neg} negative. Check label extraction."
                 )
-            cfg.training.class_weight = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
-            print(f"\n  Balanced class weights: {cfg.training.class_weight}")
+            raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
+            cfg.training.class_weight = [w**0.5 for w in raw]
+            print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
             print(f"\n  Warning: No label stats for '{task_name}', skipping class weighting")
             cfg.training.class_weight = None

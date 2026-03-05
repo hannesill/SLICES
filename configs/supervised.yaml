@@ -87,7 +87,10 @@ training:
   # Monitor/mode are set automatically by task type in setup_callbacks():
   #   classification -> val/auprc (max), regression -> val/mse (min)
   # Override here only if you need a non-default metric.
-  early_stopping_patience: 20  # More patience for training from scratch
+  early_stopping_patience: 10
+
+  # Label smoothing for classification tasks
+  label_smoothing: 0.1
 
   # Debug: overfit on N batches (0 = disabled)
   overfit_batches: 0
@@ -96,8 +99,8 @@ training:
 # Higher learning rate than finetuning since we're training from scratch
 optimizer:
   name: adamw
-  lr: 1.0e-3  # Higher LR for training from scratch
-  weight_decay: 0.01
+  lr: 3.0e-4
+  weight_decay: 0.05
 
 # Learning rate scheduler
 scheduler:
