@@ -22,3 +22,7 @@ proj_output_dim: 64    # Output dimension (contrastive embedding space, = encode
 
 # NT-Xent temperature (0.07 suits instance-level with ~511 negatives at B=256)
 temperature: 0.07
+
+# Complementary masks: view 2 = ~view 1, ensuring zero overlap between views.
+# Forces encoder to learn abstract semantics from non-overlapping windows.
+complementary_masks: true
