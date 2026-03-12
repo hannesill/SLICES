@@ -471,6 +471,7 @@ class TestTemporalContrastive:
             proj_hidden_dim=64,
             proj_output_dim=16,
             temperature=0.1,
+            complementary_masks=False,
         )
 
     def test_scatter_to_full_shape_and_zeros(self, encoder, temporal_config):
@@ -599,6 +600,7 @@ class TestTemporalContrastive:
             proj_hidden_dim=64,
             proj_output_dim=16,
             temperature=0.1,
+            complementary_masks=False,
         )
         obj = ContrastiveObjective(encoder, cont_config)
         optimizer = torch.optim.Adam(obj.parameters(), lr=1e-3)
@@ -636,6 +638,96 @@ class TestTemporalContrastive:
         # Expected overlap per sample ≈ 0.5 * 0.5 * 48 = 12
         avg_overlap = metrics["contrastive_n_overlap_per_sample"]
         assert 4 < avg_overlap < 24, f"Unexpected overlap: {avg_overlap}"
+
+
+# =============================================================================
+# Complementary masks tests
+# =============================================================================
+
+
+class TestComplementaryMasks:
+    """Tests for complementary mask behavior."""
+
+    @pytest.fixture
+    def encoder(self):
+        config = TransformerConfig(
+            d_input=10,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            pooling="none",
+            obs_aware=True,
+            max_seq_length=48,
+        )
+        return TransformerEncoder(config)
+
+    def test_complementary_masks_zero_overlap(self, encoder):
+        """Complementary masks should have zero overlap."""
+        from slices.models.pretraining.masking import create_timestep_mask
+
+        B, T = 8, 48
+        ssl_mask_1 = create_timestep_mask(B, T, 0.5, torch.device("cpu"))
+        ssl_mask_2 = ~ssl_mask_1
+
+        overlap = ssl_mask_1 & ssl_mask_2
+        assert overlap.sum() == 0
+
+    def test_complementary_masks_full_coverage(self, encoder):
+        """Complementary masks should cover all timesteps."""
+        from slices.models.pretraining.masking import create_timestep_mask
+
+        B, T = 8, 48
+        ssl_mask_1 = create_timestep_mask(B, T, 0.5, torch.device("cpu"))
+        ssl_mask_2 = ~ssl_mask_1
+
+        coverage = ssl_mask_1 | ssl_mask_2
+        assert coverage.all()
+
+    def test_complementary_temporal_raises(self):
+        """complementary_masks=True + mode='temporal' should raise ValueError."""
+        with pytest.raises(ValueError, match="incompatible with mode='temporal'"):
+            ContrastiveConfig(
+                mode="temporal",
+                complementary_masks=True,
+            )
+
+    def test_forward_with_complementary_masks(self, encoder):
+        """Forward pass works with complementary masks (default)."""
+        config = ContrastiveConfig(
+            mode="instance",
+            mask_ratio=0.5,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            complementary_masks=True,
+        )
+        obj = ContrastiveObjective(encoder, config)
+
+        B, T, D = 8, 16, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        loss, metrics = obj(x, obs_mask)
+        assert torch.isfinite(loss)
+        assert "contrastive_loss" in metrics
+
+    def test_forward_with_independent_masks(self, encoder):
+        """Forward pass works with independent masks (complementary_masks=False)."""
+        config = ContrastiveConfig(
+            mode="instance",
+            mask_ratio=0.5,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            complementary_masks=False,
+        )
+        obj = ContrastiveObjective(encoder, config)
+
+        B, T, D = 8, 16, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.ones(B, T, D, dtype=torch.bool)
+
+        loss, metrics = obj(x, obs_mask)
+        assert torch.isfinite(loss)
 
 
 # =============================================================================
