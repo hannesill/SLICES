@@ -286,16 +286,17 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 **Motivation**: A controlled comparison uses shared hyperparameters to isolate the SSL objective as the only variable. A reviewer could argue this is unfair if one paradigm's optimal LR differs significantly. This ablation validates the shared-hyperparameter design.
 
-**Design**: Pretrain with LR ∈ {5e-4, 1e-3, 2e-3} on MIMIC-IV, finetune on mortality_24h.
+**Design**: Pretrain with LR ∈ {2e-4, 5e-4, 1e-3, 2e-3} on MIMIC-IV, finetune on mortality_24h.
 
 | Learning Rate | Paradigms | Dataset | Task | Runs |
 |---------------|-----------|---------|------|------|
+| 2e-4 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 |
 | 5e-4 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 |
 | 1e-3 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 (from main experiments) |
 | 2e-3 | MAE, JEPA, Contrastive | MIMIC-IV | mortality_24h | 3 |
-| **Total** | | | | **6 new pretraining + 6 new finetuning = 12 runs × 3 seeds = 36 runs** |
+| **Total** | | | | **9 new pretraining + 9 new finetuning = 18 runs × 3 seeds = 54 runs** |
 
-**Note**: The LR=1e-3 runs are reused from the main experiments (P1–P3). Only 5e-4 and 2e-3 require additional pretraining. This ablation runs as Sprint 1b (before the main experiment matrix) to validate the shared LR choice early.
+**Note**: The LR=1e-3 runs are reused from the main experiments (P1–P3). Only 2e-4, 5e-4, and 2e-3 require additional pretraining. This ablation runs as Sprint 1b (before the main experiment matrix) to validate the shared LR choice early.
 
 **Visualization**: Line plot of downstream AUPRC vs pretraining LR, one line per paradigm. Stable rankings across LRs validate the controlled comparison design.
 
@@ -327,9 +328,25 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | Phase 3 | Fairness evaluation | 0 (eval only) | 0 | 279 |
 | Ablation 5.1 | Label efficiency | 144 | 432 | 711 |
 | Ablation 5.2 | Cross-dataset transfer | 24 | 72 | 783 |
-| Ablation 5.3 | LR sensitivity | 12 | 36 | 819 |
-| Ablation 5.4 | Mask ratio sensitivity | 12 | 36 | 855 |
-| **Total** | | **285** | **855** | |
+| Ablation 5.3 | LR sensitivity | 18 | 54 | 837 |
+| Ablation 5.4 | Mask ratio sensitivity | 12 | 36 | 873 |
+| **Total** | | **291** | **873** | |
+
+**Sprint execution order** (incremental results, early validation):
+
+| Sprint | Description | New runs (seed=42) | Total with seeds |
+|--------|-------------|-------------------|-----------------|
+| 1 | Pipeline validation (MIMIC, Protocol B + supervised) | 19 | 19 |
+| 1b | LR sensitivity (MIMIC, mortality_24h) | 18 | 18 |
+| 1c | Mask ratio sensitivity (MIMIC, mortality_24h) | 12 | 12 |
+| 2 | MIMIC Protocol A | 12 | 12 |
+| 3 | eICU (both protocols + supervised) | 31 | 31 |
+| 4 | Combined (both protocols + supervised) | 31 | 31 |
+| 5 | Seeds 123, 456 for Sprints 1–4 | 96 | 96 |
+| 6 | Label efficiency ablation | 432 | 432 |
+| 7 | Cross-dataset transfer | 72 | 72 |
+| 8 | LR + mask ratio extra seeds | 60 | 60 |
+| 9 | Fairness (eval only) | 0 | 0 |
 
 ---
 
@@ -359,48 +376,55 @@ Priority ordering for incremental results and early debugging:
 8. Verify SSL full finetune matches or exceeds supervised across tasks
 9. **Decision gate**: Proceed to Sprint 1b when (a) supervised mortality_hospital AUROC ≥ 0.80, (b) SSL full-finetune within 10% of supervised on all tasks, (c) all 4 task pipelines produce valid outputs with sensible class/value distributions
 
-### Sprint 1b: Hyperparameter Sensitivity Check (6 pretrain + 6 finetune)
-4. Validate shared hyperparameter choices before committing to full experiment matrix
-5. MIMIC-IV, 3 SSL paradigms × 2 extra LRs (5e-4, 2e-3), mortality_24h only, seed=42
-6. Sprint 1 runs at LR=1e-3 serve as the third data point — no duplication needed
+### Sprint 1b: Learning Rate Sensitivity Check (9 pretrain + 9 finetune = 18 runs)
+4. Validate shared LR choice before committing to full experiment matrix
+5. MIMIC-IV, 3 SSL paradigms × 3 extra LRs (2e-4, 5e-4, 2e-3), mortality_24h only, seed=42
+6. Sprint 1 runs at LR=1e-3 serve as the fourth data point — no duplication needed
 7. Finetune each on mortality_24h to check if paradigm ranking shifts across LRs
 8. **Decision gate**: If rankings are stable → proceed with shared LR=1e-3. If one paradigm is LR-sensitive → adjust shared LR or document the sensitivity before expensive sprints.
 
+### Sprint 1c: Mask Ratio Sensitivity Check (6 pretrain + 6 finetune)
+9. Validate shared mask ratio before committing to full experiment matrix
+10. MIMIC-IV, 3 SSL paradigms × 2 extra mask ratios (0.3, 0.75), mortality_24h only, seed=42
+11. Sprint 1 runs at mask_ratio=0.5 serve as the third data point — no duplication needed
+12. Finetune each on mortality_24h to check if paradigm ranking shifts across mask ratios
+13. **Motivation**: Mask ratio is the second most likely hyperparameter to differentially affect paradigms. MAE literature favors 0.75 (He et al. 2022), JEPA uses 0.5 with block masking, and contrastive is less studied. A reviewer will ask whether the shared 0.5 unfairly advantages one paradigm.
+14. **Decision gate**: If rankings are stable → proceed with shared mask_ratio=0.5. If one paradigm is mask-ratio-sensitive → document the sensitivity and consider paradigm-specific ratios.
+
 ### Sprint 2: MIMIC-IV Linear Probing — Complete First Results Table (12 runs)
-9. Protocol A (linear probe): 3 SSL paradigms × 4 tasks on MIMIC-IV, seed=42
-10. Combined with Sprint 1 Protocol B runs, produces complete MIMIC-IV results table (Protocol A + B + supervised)
-11. Write preliminary results section
+15. Protocol A (linear probe): 3 SSL paradigms × 4 tasks on MIMIC-IV, seed=42
+16. Combined with Sprint 1 Protocol B runs, produces complete MIMIC-IV results table (Protocol A + B + supervised)
+17. Write preliminary results section
 
 ### Sprint 3: Generalization — eICU (3 pretrain + 28 finetune = 31 runs)
-12. eICU: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
-13. Cross-dataset comparison possible
+18. eICU: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
+19. Cross-dataset comparison possible
 
 ### Sprint 4: Scaling — Combined (3 pretrain + 28 finetune = 31 runs)
-14. Combined: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
-15. All three main result tables complete (single seed)
+20. Combined: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
+21. All three main result tables complete (single seed)
 
 ### Sprint 5: Statistical Robustness (96 runs)
-16. Seeds 123 and 456 for all Sprint 1–4 runs
-17. Compute mean ± std, run statistical tests
+22. Seeds 123 and 456 for all Sprint 1–4 runs
+23. Compute mean ± std, run statistical tests
 
 ### Sprint 6: Label Efficiency Ablation (432 runs)
-18. Full sweep on mortality_24h anchor
-19. Trend check on remaining tasks
-20. Generate learning curve plots
+24. Full sweep on mortality_24h anchor
+25. Trend check on remaining tasks
+26. Generate learning curve plots
 
 ### Sprint 7: Transfer Ablation (72 runs)
-21. Cross-dataset transfer experiments
-22. Compare against in-domain baselines
+27. Cross-dataset transfer experiments
+28. Compare against in-domain baselines
 
-### Sprint 8: Mask Ratio + LR Ablations (72 runs)
-23. LR sensitivity runs (if not already completed in Sprint 1b with extra seeds)
-24. Mask ratio sensitivity runs
-25. Seeds 123 and 456 for Sprint 1b LR runs
+### Sprint 8: LR + Mask Ratio Ablation Extra Seeds (60 runs)
+29. Seeds 123 and 456 for Sprint 1b LR sensitivity runs
+30. Seeds 123 and 456 for Sprint 1c mask ratio sensitivity runs
 
 ### Sprint 9: Fairness Analysis (0 extra runs)
-26. Compute fairness metrics on all Phase 2 test predictions
-27. Enable `eval.fairness.enabled=true` and rerun evaluation
-28. Generate fairness tables and disparity plots
+31. Compute fairness metrics on all Phase 2 test predictions
+32. Enable `eval.fairness.enabled=true` and rerun evaluation
+33. Generate fairness tables and disparity plots
 
 ---
 
@@ -481,5 +505,5 @@ Examples:
 | Class imbalance affects metrics | Use AUPRC as primary metric; sqrt(balanced) class weighting; early stopping on val AUPRC (not val loss); report class ratios |
 | Downstream overfitting | Addressed with regularization suite: dropout 0.3, LR 3e-4, weight decay 0.05, sqrt class weights, label smoothing 0.1 — applied uniformly to all paradigms |
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
-| Shared hyperparameters unfair to one paradigm | LR sensitivity ablation (Sprint 1b) validates that rankings are robust to shared LR choice |
+| Shared hyperparameters unfair to one paradigm | LR sensitivity (Sprint 1b) and mask ratio sensitivity (Sprint 1c) validate that rankings are robust to shared hyperparameter choices |
 | Reviewer requests 5 seeds | Add 2 seeds only to contested comparisons (minor revision) |
