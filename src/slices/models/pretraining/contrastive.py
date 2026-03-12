@@ -1,24 +1,30 @@
 """Contrastive (SimCLR-style) SSL objective for ICU time-series.
 
-Timestep-level tokenization variant: uses two different random timestep masks as
-two augmented "views" of the same sample, then applies NT-Xent contrastive loss.
+Timestep-level tokenization variant: creates two "views" of the same sample
+via timestep masks, then applies NT-Xent contrastive loss.
+
+By default, views use **complementary masks** (view 2 = ~view 1), ensuring
+zero overlap and forcing the encoder to learn abstract temporal semantics
+from non-overlapping windows. Independent random masks are available as a
+fallback (complementary_masks=False).
 
 Supports two modes:
-- **temporal** (default): Positive pairs are formed from timesteps visible in
+- **instance** (default): SimCLR-style — mean-pool each view to a single
+  sequence-level embedding, then NT-Xent on a (2B x 2B) matrix.
+  Compatible with both complementary and independent masks.
+- **temporal**: Positive pairs are formed from timesteps visible in
   both views (~25% at mask_ratio=0.5). Each overlapping timestep has two
   independently contextualized representations (different self-attention
   contexts) that form a natural positive pair.  All other tokens across the
   batch are negatives.  NT-Xent operates on a (2N x 2N) matrix where
-  N = number of overlap tokens.
-- **instance**: Original SimCLR-style — mean-pool each view to a single
-  sequence-level embedding, then NT-Xent on a (2B x 2B) matrix.
+  N = number of overlap tokens.  Requires complementary_masks=False.
 
 Architecture:
 1. TransformerEncoder.tokenize() -> one token per timestep (B, T, d_model)
-2. Two independent random masks -> two different subsets of timestep tokens (views)
+2. Complementary masks (default) or two independent random masks -> two views
 3. Encoder processes each view separately -> per-token representations
-4. temporal: scatter to (B,T,d) -> gather overlap tokens -> project -> NT-Xent
-   instance: mean-pool -> project -> NT-Xent
+4. instance: mean-pool -> project -> NT-Xent
+   temporal: scatter to (B,T,d) -> gather overlap tokens -> project -> NT-Xent
 
 Key difference from MAE: discriminative (not reconstructive).
 Key difference from JEPA: invariance (not positional prediction).
@@ -54,10 +60,18 @@ class ContrastiveConfig(SSLConfig):
     # Temperature for NT-Xent
     temperature: float = 0.07
 
+    # Use complementary (non-overlapping) masks for views
+    complementary_masks: bool = True
+
     def __post_init__(self) -> None:
         if self.mode not in ("temporal", "instance"):
             raise ValueError(
                 f"ContrastiveConfig.mode must be 'temporal' or 'instance', " f"got '{self.mode}'"
+            )
+        if self.complementary_masks and self.mode == "temporal":
+            raise ValueError(
+                "complementary_masks=True is incompatible with mode='temporal'. "
+                "Temporal mode requires overlapping masks to form positive pairs."
             )
 
 
@@ -154,9 +168,12 @@ class ContrastiveObjective(BaseSSLObjective):
         # 1. Tokenize (shared between both views)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
 
-        # 2. Two independent random timestep masks
+        # 2. Create two views via timestep masks
         ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
-        ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        if self.config.complementary_masks:
+            ssl_mask_2 = ~ssl_mask_1
+        else:
+            ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
 
         # 3. Encode both views
         vis_tokens_1, vis_padding_1 = extract_visible_timesteps(tokens, ssl_mask_1)
