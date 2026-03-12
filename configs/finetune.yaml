@@ -136,7 +136,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
+  run_name: s${sprint}_finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
   wandb_group: finetune_${dataset}_${paradigm}_${task.task_name}
   wandb_tags:
     - "phase:finetune"
@@ -144,6 +144,7 @@ logging:
     - "paradigm:${paradigm}"
     - "task:${task.task_name}"
     - "seed:${seed}"
+    - "lr:${optimizer.lr}"
   log_every_n_steps: 10
 
 # Hydra configuration
