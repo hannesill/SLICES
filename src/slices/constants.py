@@ -11,8 +11,11 @@ remain in Hydra configs under configs/.
 # =============================================================================
 # Observation Window
 # =============================================================================
-SEQ_LENGTH_HOURS: int = 48
+SEQ_LENGTH_HOURS: int = 48  # Model input window
 MIN_STAY_HOURS: int = 48
+# RICU extraction horizon — longer than SEQ_LENGTH_HOURS to enable
+# forward-looking labels (e.g. AKI prediction from hours 48-72).
+LABEL_HORIZON_HOURS: int = 72
 
 # =============================================================================
 # Extraction
