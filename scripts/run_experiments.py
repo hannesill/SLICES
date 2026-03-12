@@ -9,15 +9,18 @@ Usage:
     uv run python scripts/run_experiments.py warmup --sprint 1
     uv run python scripts/run_experiments.py run --sprint 1 --parallel 4
     uv run python scripts/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
+    uv run python scripts/run_experiments.py run --sprint 1 --revision v2 --reason "fix LR"
     uv run python scripts/run_experiments.py status
     uv run python scripts/run_experiments.py status --sprint 1
     uv run python scripts/run_experiments.py retry --failed --parallel 4
+    uv run python scripts/run_experiments.py retry --failed --sprint 1 --revision v2 --parallel 4
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -434,6 +437,44 @@ def generate_all_runs() -> list[Run]:
     return builder.build_all()
 
 
+def apply_revision(runs: list[Run], revision: str, reason: str | None = None) -> list[Run]:
+    """Post-process runs to inject revision into IDs, output dirs, and overrides.
+
+    Rewrites:
+    - Run IDs: s1_pretrain_... → s1_rev-v2_pretrain_...
+    - Output dirs: outputs/sprint1/... → outputs/sprint1_rev-v2/...
+    - depends_on: remap references within the revised set
+    - extra_overrides: inject revision= and rerun_reason=
+    """
+    old_to_new: dict[str, str] = {}
+
+    for r in runs:
+        old_id = r.id
+        # Insert rev-<name> after the sprint prefix (e.g. s1_ → s1_rev-v2_)
+        prefix = f"s{r.sprint}_"
+        if old_id.startswith(prefix):
+            new_id = f"{prefix}rev-{revision}_{old_id[len(prefix):]}"
+        else:
+            new_id = f"rev-{revision}_{old_id}"
+        old_to_new[old_id] = new_id
+
+        r.id = new_id
+        # Rewrite output dir: sprint1/ → sprint1_rev-v2/
+        r.output_dir = r.output_dir.replace(
+            f"outputs/sprint{r.sprint}/",
+            f"outputs/sprint{r.sprint}_rev-{revision}/",
+        )
+        r.extra_overrides["revision"] = revision
+        if reason:
+            r.extra_overrides["rerun_reason"] = reason
+
+    # Remap depends_on references within the revised set
+    for r in runs:
+        r.depends_on = [old_to_new.get(d, d) for d in r.depends_on]
+
+    return runs
+
+
 # ---------------------------------------------------------------------------
 # State Management
 # ---------------------------------------------------------------------------
@@ -676,54 +717,85 @@ def _print_dry_run(runs: list[Run], runs_by_id: dict[str, Run]):
 # ---------------------------------------------------------------------------
 # Status / Retry
 # ---------------------------------------------------------------------------
+def _extract_revision_from_id(run_id: str) -> str | None:
+    """Extract revision name from a run ID (e.g. 's1_rev-v2_pretrain_...' → 'v2')."""
+    m = re.search(r"_rev-([^_]+)_", run_id)
+    return m.group(1) if m else None
+
+
+def _sprint_display(sprint: str, revision: str | None) -> str:
+    """Format sprint column, e.g. '1' or '1/v2'."""
+    if revision:
+        return f"{sprint}/{revision}"
+    return sprint
+
+
+def _extract_sprint_from_id(run_id: str) -> str | None:
+    """Extract sprint from a run ID (e.g. 's1_rev-v2_pretrain_...' → '1')."""
+    m = re.match(r"s([^_]+)_", run_id)
+    return m.group(1) if m else None
+
+
 def print_status(sprint_filter: list[str] | None = None):
     all_runs = generate_all_runs()
     state = load_state()
+    generated_ids = {r.id for r in all_runs}
 
-    # Group by sprint
-    sprints: dict[str, list[Run]] = {}
+    # Group generated runs by (sprint, revision=None)
+    groups: dict[tuple[str, str | None], list[str]] = {}
     for r in all_runs:
-        sprints.setdefault(r.sprint, []).append(r)
+        key = (r.sprint, None)
+        groups.setdefault(key, []).append(r.id)
 
-    sprint_keys = sorted(sprints.keys(), key=_sprint_sort_key)
+    # Add revised runs from state (not in generated set) by parsing their IDs
+    for run_id in state.get("runs", {}):
+        if run_id not in generated_ids and "_rev-" in run_id:
+            sprint = _extract_sprint_from_id(run_id)
+            rev = _extract_revision_from_id(run_id)
+            if sprint and rev:
+                key = (sprint, rev)
+                groups.setdefault(key, []).append(run_id)
+
+    group_keys = sorted(groups.keys(), key=lambda k: (_sprint_sort_key(k[0]), k[1] or ""))
     if sprint_filter:
-        sprint_keys = [s for s in sprint_keys if s in sprint_filter]
+        group_keys = [k for k in group_keys if k[0] in sprint_filter]
 
     print(
-        f"{'Sprint':>6} | {'Total':>5} | {'Done':>4} | {'Run':>3} | "
+        f"{'Sprint':>8} | {'Total':>5} | {'Done':>4} | {'Run':>3} | "
         f"{'Fail':>4} | {'Pend':>4} | {'Skip':>4}"
     )
-    print("-" * 52)
+    print("-" * 54)
 
     totals = {"total": 0, "completed": 0, "running": 0, "failed": 0, "pending": 0, "skipped": 0}
 
-    for s in sprint_keys:
-        runs = sprints[s]
+    for sprint, rev in group_keys:
+        run_ids = groups[(sprint, rev)]
+        label = _sprint_display(sprint, rev)
         counts = {
-            "total": len(runs),
+            "total": len(run_ids),
             "completed": 0,
             "running": 0,
             "failed": 0,
             "pending": 0,
             "skipped": 0,
         }
-        for r in runs:
-            status = get_run_status(state, r.id)
+        for rid in run_ids:
+            status = get_run_status(state, rid)
             if status in counts:
                 counts[status] += 1
             else:
                 counts["pending"] += 1  # unknown → pending
         print(
-            f"{s:>6} | {counts['total']:>5} | {counts['completed']:>4} | "
+            f"{label:>8} | {counts['total']:>5} | {counts['completed']:>4} | "
             f"{counts['running']:>3} | {counts['failed']:>4} | "
             f"{counts['pending']:>4} | {counts['skipped']:>4}"
         )
         for k in totals:
             totals[k] += counts[k]
 
-    print("-" * 52)
+    print("-" * 54)
     print(
-        f"{'TOTAL':>6} | {totals['total']:>5} | {totals['completed']:>4} | "
+        f"{'TOTAL':>8} | {totals['total']:>5} | {totals['completed']:>4} | "
         f"{totals['running']:>3} | {totals['failed']:>4} | "
         f"{totals['pending']:>4} | {totals['skipped']:>4}"
     )
@@ -785,7 +857,13 @@ def cmd_run(args):
         print(f"No runs found for sprint(s): {', '.join(sprints)}")
         return
 
+    # Apply revision transform if requested
+    if args.revision:
+        runs = apply_revision(runs, args.revision, args.reason)
+
     print(f"Sprint(s) {', '.join(sprints)}: {len(runs)} runs")
+    if args.revision:
+        print(f"Revision: {args.revision}" + (f" ({args.reason})" if args.reason else ""))
     run_scheduler(runs, state, args.parallel, args.dry_run)
 
 
@@ -796,6 +874,18 @@ def cmd_status(args):
 
 def cmd_retry(args):
     all_runs = generate_all_runs()
+
+    # Apply revision if specified (must happen before ID matching against state)
+    if args.revision:
+        sprint_filter = [str(s) for s in args.sprint] if args.sprint else None
+        if sprint_filter:
+            revised = [r for r in all_runs if r.sprint in sprint_filter]
+            rest = [r for r in all_runs if r.sprint not in sprint_filter]
+            revised = apply_revision(revised, args.revision, args.reason)
+            all_runs = rest + revised
+        else:
+            all_runs = apply_revision(all_runs, args.revision, args.reason)
+
     state = load_state()
     recover_stale_running(state)
 
@@ -837,6 +927,9 @@ def cmd_warmup(args):
     experiment runs can load preprocessed data from disk instead of each process
     independently loading and converting raw parquet files (which causes OOM).
     """
+    if args.revision:
+        print(f"Note: --revision={args.revision} ignored (warmup is revision-independent)")
+
     all_runs = generate_all_runs()
 
     # Filter to requested sprints
@@ -905,6 +998,8 @@ def main():
     p_run.add_argument("--sprint", nargs="+", required=True, help="Sprint(s) to run (e.g. 1 1b 2)")
     p_run.add_argument("--parallel", type=int, default=4, help="Max parallel jobs (default: 4)")
     p_run.add_argument("--dry-run", action="store_true", help="Print runs without executing")
+    p_run.add_argument("--revision", type=str, default=None, help="Revision name (e.g. v2)")
+    p_run.add_argument("--reason", type=str, default=None, help="Reason for rerun")
 
     # status
     p_status = sub.add_parser("status", help="Show experiment status")
@@ -915,6 +1010,9 @@ def main():
     p_retry.add_argument("--failed", action="store_true", help="Retry failed runs")
     p_retry.add_argument("--skipped", action="store_true", help="Retry skipped runs")
     p_retry.add_argument("--parallel", type=int, default=4, help="Max parallel jobs (default: 4)")
+    p_retry.add_argument("--sprint", nargs="+", default=None, help="Scope retry to sprint(s)")
+    p_retry.add_argument("--revision", type=str, default=None, help="Revision name to retry")
+    p_retry.add_argument("--reason", type=str, default=None, help="Reason for rerun")
 
     # warmup
     p_warmup = sub.add_parser(
@@ -923,8 +1021,20 @@ def main():
     p_warmup.add_argument(
         "--sprint", nargs="+", required=True, help="Sprint(s) to warmup (e.g. 1 1b 2)"
     )
+    p_warmup.add_argument(
+        "--revision", type=str, default=None, help="Ignored (warmup is revision-independent)"
+    )
+    p_warmup.add_argument("--reason", type=str, default=None, help="Ignored for warmup")
 
     args = parser.parse_args()
+
+    # Validate --reason requires --revision
+    if getattr(args, "reason", None) and not getattr(args, "revision", None):
+        parser.error("--reason requires --revision")
+
+    # Validate retry --revision requires --sprint
+    if args.command == "retry" and args.revision and not args.sprint:
+        parser.error("--revision requires --sprint to scope which sprints to revise")
 
     if args.command == "run":
         cmd_run(args)
