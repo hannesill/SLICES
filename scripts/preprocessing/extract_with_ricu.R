@@ -43,7 +43,7 @@ option_list <- list(
               help = "RICU source name (miiv, eicu, hirid, aumc, mimic, sic)"),
   make_option("--output_dir", type = "character", default = NULL,
               help = "Output directory for parquet files"),
-  make_option("--seq_length_hours", type = "integer", default = 48L,
+  make_option("--seq_length_hours", type = "integer", default = 72L,
               help = "Max hours per stay [default: %default]"),
   make_option("--raw_data_dir", type = "character", default = NULL,
               help = "Path to raw CSV files for ricu import (auto-detected if not set)")
