@@ -242,6 +242,10 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     tags = list(cfg.logging.get("wandb_tags", []))
     if cfg.get("sprint") is not None:
         tags.append(f"sprint:{cfg.sprint}")
+    if cfg.get("revision") is not None:
+        tags.append(f"revision:{cfg.revision}")
+    if cfg.get("rerun_reason") is not None:
+        tags.append(f"rerun-reason:{cfg.rerun_reason}")
     tags = tags or None
 
     logger = WandbLogger(
