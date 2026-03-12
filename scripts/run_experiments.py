@@ -307,6 +307,15 @@ class MatrixBuilder:
                 pt = self._add_pretrain(sprint, p, ds, seed, extra)
                 self._add_finetune(sprint, p, ds, seed, task, False, pt, name_extra=extra)
 
+    def build_sprint1c(self):
+        """Mask ratio sensitivity, MIMIC, mortality_24h, seed=42."""
+        ds, seed, task, sprint = "miiv", 42, "mortality_24h", "1c"
+        for p in SSL_PARADIGMS:
+            for mr in MASK_RATIO_ABLATION:
+                extra = {"ssl.mask_ratio": mr}
+                pt = self._add_pretrain(sprint, p, ds, seed, extra)
+                self._add_finetune(sprint, p, ds, seed, task, False, pt, name_extra=extra)
+
     def build_sprint2(self):
         """MIMIC Protocol A, seed=42 — reuses Sprint 1 pretrains."""
         ds, seed, sprint = "miiv", 42, "2"
@@ -409,6 +418,7 @@ class MatrixBuilder:
         """Build full experiment matrix. Order matters for dedup."""
         self.build_sprint1()
         self.build_sprint1b()
+        self.build_sprint1c()
         self.build_sprint2()
         self.build_sprint3()
         self.build_sprint4()
