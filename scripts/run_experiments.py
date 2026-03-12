@@ -36,7 +36,7 @@ TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
 SEEDS = [42, 123, 456]
 LABEL_FRACTIONS_FULL = [0.01, 0.05, 0.1, 0.25, 0.5]
 LABEL_FRACTIONS_TREND = [0.1]
-LR_ABLATION = [5e-4, 2e-3]  # 1e-3 reused from Phase 1
+LR_ABLATION = [2e-4, 5e-4, 2e-3]  # 1e-3 reused from Phase 1
 MASK_RATIO_ABLATION = [0.3, 0.75]  # 0.5 reused from Phase 1
 TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
 
