@@ -1,14 +1,14 @@
 task_name: aki_kdigo
 task_type: binary
 observation_window_hours: 48
-prediction_window_hours: null
+prediction_window_hours: 24  # Look ahead 24h (hours 48-72) for AKI label
 gap_hours: 0
 label_sources:
   - stays
   - timeseries
 label_params:
   creatinine_col: crea
-  baseline_window_hours: 24
+  baseline_window_hours: 48  # Use full observation window for baseline
   absolute_rise_threshold: 0.3
   relative_rise_threshold: 1.5
   relative_window_hours: 168  # 7 days per KDIGO 2012 specification
