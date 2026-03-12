@@ -25,7 +25,7 @@ from rich.progress import (
     TextColumn,
 )
 
-from slices.constants import FEATURE_BLOCKLIST
+from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
 
 from .base import BaseExtractor, ExtractorConfig
@@ -308,6 +308,7 @@ class RicuExtractor(BaseExtractor):
                 "feature_names": feature_names,
                 "n_features": len(feature_names),
                 "seq_length_hours": self.config.seq_length_hours,
+                "label_horizon_hours": LABEL_HORIZON_HOURS,
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
