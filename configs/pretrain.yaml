@@ -25,6 +25,10 @@ dataset: miiv  # miiv | eicu | combined
 # Experiment sprint (for W&B filtering, e.g. sprint=1)
 sprint: null
 
+# Revision tracking (for rerunning sprints with changed settings)
+revision: null
+rerun_reason: null
+
 # Random seed for reproducibility
 seed: 42
 
