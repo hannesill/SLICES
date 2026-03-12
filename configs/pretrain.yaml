@@ -94,13 +94,14 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: pretrain_${dataset}_${ssl.name}_seed${seed}
+  run_name: s${sprint}_pretrain_${dataset}_${ssl.name}_seed${seed}
   wandb_group: pretrain_${dataset}_${ssl.name}
   wandb_tags:
     - "phase:pretrain"
     - "dataset:${dataset}"
     - "paradigm:${ssl.name}"
     - "seed:${seed}"
+    - "lr:${optimizer.lr}"
   log_every_n_steps: 50
 
 # Hydra configuration
