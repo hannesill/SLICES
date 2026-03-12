@@ -246,12 +246,34 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         tags.append(f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
         tags.append(f"rerun-reason:{cfg.rerun_reason}")
+
+    # Add protocol tag for finetune runs (Protocol A = frozen, Protocol B = unfrozen)
+    freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
+    if freeze_encoder is not None:
+        protocol = "A" if freeze_encoder else "B"
+        tags.append(f"protocol:{protocol}")
+
+    # Add mask_ratio tag for pretrain runs (useful for ablation filtering)
+    ssl_cfg = cfg.get("ssl", {})
+    if ssl_cfg and ssl_cfg.get("mask_ratio") is not None:
+        tags.append(f"mask_ratio:{ssl_cfg.mask_ratio}")
+
+    # Add label_fraction tag when subsampling training data
+    label_fraction = cfg.get("label_fraction")
+    if label_fraction is not None and label_fraction < 1.0:
+        tags.append(f"label_fraction:{label_fraction}")
+
     tags = tags or None
+
+    # Adjust run name: use "probe" prefix instead of "finetune" for frozen encoder
+    run_name = cfg.logging.get("run_name", None)
+    if run_name and freeze_encoder is True:
+        run_name = run_name.replace("_finetune_", "_probe_", 1)
 
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
-        name=cfg.logging.get("run_name", None),
+        name=run_name,
         group=cfg.logging.get("wandb_group", None),
         tags=tags,
         save_dir=cfg.output_dir,
