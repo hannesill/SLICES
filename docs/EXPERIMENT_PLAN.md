@@ -34,9 +34,8 @@ Secondary questions addressed through ablations:
 | Splits | 70/15/15 train/val/test | Patient-level, no leakage |
 | Imputation | Normalize-then-zero-fill | Eliminates imputation as confound |
 | Finetuning head | MLP, hidden_dims=[64] | Same head architecture across all paradigms |
-| Finetuning LR | 1e-4 | Same optimization for all downstream runs |
-| Finetuning epochs | 50 (patience=10) | Same budget |
-| Weight decay | 0.01 | Same regularization |
+| Precision | fp32 | Avoids bf16 numerical issues with small model |
+| Weight decay | 0.05 | Same regularization across all downstream runs |
 
 ### 1.3 Shared Encoder Architecture
 
@@ -46,7 +45,7 @@ All three SSL paradigms share the same encoder architecture, removing tokenizati
 |----------|-------------|---------|---------|-----------|
 | MAE | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Random timestep masking | Reconstruct masked timestep features |
 | JEPA | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Block masking (3 contiguous segments) | Predict in latent space; block masking prevents trivial interpolation |
-| Contrastive | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Two random masked views | Align representations of different views |
+| Contrastive | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Two random masked views (instance mode) | Instance-level NT-Xent: mean-pool each view → align sequence embeddings |
 | Supervised | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | N/A | Same encoder as SSL for fair comparison |
 
 **Obs-aware tokenization**: Each timestep token is produced by an MLP projection of `concat(values, obs_mask)` → `d_model`. This encodes both the observed values and the missingness pattern, avoiding the "mostly zeros" problem of naively feeding sparse timestep vectors through a linear projection. With ~22 observed features per timestep on average, the MLP maps ~44 non-zero inputs (22 values + 22 mask bits) to 64-dim tokens — no information bottleneck.
@@ -88,8 +87,11 @@ Isolates representation quality — the only variable is the SSL pretraining obj
 | Learning rate | 1e-4 |
 | Scheduler | Cosine decay (eta_min=1e-6) |
 | Early stopping | Patience=10 on val AUPRC (classification) or val MAE (regression) |
-| Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
-| Class weighting | Inverse frequency (balanced) |
+| Head | MLP, hidden_dims=[64], dropout=0.3, ReLU |
+| Gradient clipping | 1.0 |
+| Label smoothing | 0.1 |
+| Weight decay | 0.05 |
+| Class weighting | sqrt(balanced) — square root of inverse frequency |
 
 **Rationale**: Linear probing answers "Which SSL objective produces the best representations?" by preventing the encoder from adapting to the downstream task.
 
@@ -102,13 +104,18 @@ Measures how useful SSL pretraining is as weight initialization.
 | Protocol | Full finetuning (freeze_encoder=false) |
 | Epochs | 100 |
 | Batch size | 64 |
-| Learning rate | 1e-3 (encoder), 1e-3 (head) |
+| Learning rate | 3e-4 |
 | Scheduler | Cosine decay (eta_min=1e-6) |
-| Early stopping | Patience=20 on val AUPRC (classification) or val MAE (regression) |
-| Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
-| Class weighting | Inverse frequency (balanced) |
+| Early stopping | Patience=10 on val AUPRC (classification) or val MAE (regression) |
+| Head | MLP, hidden_dims=[64], dropout=0.3, ReLU |
+| Gradient clipping | 1.0 |
+| Label smoothing | 0.1 |
+| Weight decay | 0.05 |
+| Class weighting | sqrt(balanced) — square root of inverse frequency |
 
 **Rationale**: Full finetuning answers "Which SSL objective is most useful in practice as initialization?" Results may diverge from linear probing — an encoder with mediocre frozen representations can still provide excellent initialization.
+
+**Regularization rationale**: Early Sprint 1 runs showed severe overfitting across all paradigms (train AUROC ~0.98 by epoch 1–2, monotonically degrading val metrics). The regularization suite — reduced LR (1e-3 → 3e-4), increased dropout (0.1 → 0.3), higher weight decay (0.01 → 0.05), sqrt class weights, and label smoothing — was introduced to address this. These settings apply uniformly to all paradigms and the supervised baseline, preserving the controlled comparison.
 
 ### 2.3 Supervised Baseline
 
@@ -116,12 +123,15 @@ Measures how useful SSL pretraining is as weight initialization.
 |---------|-------|
 | Epochs | 100 |
 | Batch size | 64 |
-| Learning rate | 1e-3 |
-| Scheduler | Cosine decay |
-| Early stopping | Patience=20 on val AUPRC (classification) or val MAE (regression) |
+| Learning rate | 3e-4 |
+| Scheduler | Cosine decay (eta_min=1e-6) |
+| Early stopping | Patience=10 on val AUPRC (classification) or val MAE (regression) |
 | Encoder | Transformer (d=64, L=2, H=4, obs_aware=True), trained end-to-end |
-| Head | MLP, hidden_dims=[64], dropout=0.1, ReLU |
-| Class weighting | Inverse frequency (balanced) |
+| Head | MLP, hidden_dims=[64], dropout=0.3, ReLU |
+| Gradient clipping | 1.0 |
+| Label smoothing | 0.1 |
+| Weight decay | 0.05 |
+| Class weighting | sqrt(balanced) — square root of inverse frequency |
 
 **Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then evaluate via Protocol A (linear probe) and Protocol B (full finetune). Comparing supervised vs. Protocol B isolates the effect of SSL initialization; comparing SSL paradigms via Protocol A isolates representation quality.
 
@@ -466,11 +476,10 @@ Examples:
 
 | Risk | Mitigation |
 |------|-----------|
-| Contrastive paradigm not yet implemented | Implement before Sprint 1; if delayed, run MAE + JEPA + Supervised first |
 | eICU lacks race/ethnicity data | Fairness analysis for race is MIMIC-only; document as limitation |
-| Phenotyping task is MIMIC-only | Excluded from main matrix; can add as MIMIC-specific appendix |
 | Unequal training budgets across paradigms | Track gradient steps; normalize if >2x difference |
-| Class imbalance affects metrics | Use AUPRC as primary metric; inverse-frequency class weighting enabled by default; early stopping on val AUPRC (not val loss); report class ratios |
+| Class imbalance affects metrics | Use AUPRC as primary metric; sqrt(balanced) class weighting; early stopping on val AUPRC (not val loss); report class ratios |
+| Downstream overfitting | Addressed with regularization suite: dropout 0.3, LR 3e-4, weight decay 0.05, sqrt class weights, label smoothing 0.1 — applied uniformly to all paradigms |
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
 | Shared hyperparameters unfair to one paradigm | LR sensitivity ablation (Sprint 1b) validates that rankings are robust to shared LR choice |
 | Reviewer requests 5 seeds | Add 2 seeds only to contested comparisons (minor revision) |
