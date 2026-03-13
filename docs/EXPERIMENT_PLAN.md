@@ -30,7 +30,8 @@ Secondary questions addressed through ablations:
 | Variable | Value | Rationale |
 |----------|-------|-----------|
 | Observation window | 48 hours | Standard in ICU benchmarks |
-| Min stay | 48 hours | Ensures full observation window |
+| AKI prediction window | Hours 48–72 (forward-looking) | Prevents leakage from creatinine values used in label construction |
+| Min stay | 48 hours (72 hours for AKI) | Ensures full observation + prediction window |
 | Splits | 70/15/15 train/val/test | Patient-level, no leakage |
 | Imputation | Normalize-then-zero-fill | Eliminates imputation as confound |
 | Finetuning head | MLP, hidden_dims=[64] | Same head architecture across all paradigms |
@@ -45,7 +46,7 @@ All three SSL paradigms share the same encoder architecture, removing tokenizati
 |----------|-------------|---------|---------|-----------|
 | MAE | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Random timestep masking | Reconstruct masked timestep features |
 | JEPA | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Block masking (3 contiguous segments) | Predict in latent space; block masking prevents trivial interpolation |
-| Contrastive | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Two random masked views (instance mode) | Instance-level NT-Xent: mean-pool each view → align sequence embeddings |
+| Contrastive | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | Two complementary masked views (instance mode, zero overlap) | Instance-level NT-Xent: mean-pool each view → align sequence embeddings |
 | Supervised | Timestep-level (obs-aware) | Transformer (d=64, L=2, H=4, obs_aware=True) | N/A | Same encoder as SSL for fair comparison |
 
 **Obs-aware tokenization**: Each timestep token is produced by an MLP projection of `concat(values, obs_mask)` → `d_model`. This encodes both the observed values and the missingness pattern, avoiding the "mostly zeros" problem of naively feeding sparse timestep vectors through a linear projection. With ~22 observed features per timestep on average, the MLP maps ~44 non-zero inputs (22 values + 22 mask bits) to 64-dim tokens — no information bottleneck.
@@ -64,7 +65,7 @@ All three SSL paradigms share the same encoder architecture, removing tokenizati
 | Batch size | 256 | 256 | 256 |
 | Learning rate | 1e-3 | 1e-3 | 1e-3 |
 | Scheduler | Warmup cosine (10 warmup) | Warmup cosine (10 warmup) | Warmup cosine (10 warmup) |
-| Mask ratio | 0.5 (random masking) | 0.5 (block masking) | 0.5 (two random masked views) |
+| Mask ratio | 0.5 (random masking) | 0.5 (block masking) | 0.5 (complementary masks, zero overlap) |
 | Gradient clipping | 1.0 | 1.0 | 1.0 |
 | Early stopping | None (fixed schedule) | None (fixed schedule) | None (fixed schedule) |
 | Checkpoint | Last epoch + best val loss | Last epoch + best val loss | Last epoch + best val loss |
@@ -354,7 +355,7 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 Priority ordering for incremental results and early debugging:
 
-### Sprint 1: Full Pipeline Validation (3 pretrain + 16 finetune = 19 runs)
+### Sprint 1: Full Pipeline Validation (3 pretrain + 16 finetune = 19 runs) — COMPLETE
 
 **Goal**: Validate the entire pipeline end-to-end on MIMIC-IV across all 4 downstream tasks before committing to the full experiment matrix. Catch task-specific bugs (AKI label builder, regression head, extreme imbalance handling) early rather than after hundreds of runs.
 
@@ -376,14 +377,18 @@ Priority ordering for incremental results and early debugging:
 8. Verify SSL full finetune matches or exceeds supervised across tasks
 9. **Decision gate**: Proceed to Sprint 1b when (a) supervised mortality_hospital AUROC ≥ 0.80, (b) SSL full-finetune within 10% of supervised on all tasks, (c) all 4 task pipelines produce valid outputs with sensible class/value distributions
 
-### Sprint 1b: Learning Rate Sensitivity Check (9 pretrain + 9 finetune = 18 runs)
+**Outcome**: Gate passed. Supervised mortality_hospital AUROC = 0.882. All task pipelines valid. Re-run with rev2 corrections (AKI fix + complementary masks) confirmed results.
+
+### Sprint 1b: Learning Rate Sensitivity Check (9 pretrain + 9 finetune = 18 runs) — COMPLETE
 4. Validate shared LR choice before committing to full experiment matrix
 5. MIMIC-IV, 3 SSL paradigms × 3 extra LRs (2e-4, 5e-4, 2e-3), mortality_24h only, seed=42
 6. Sprint 1 runs at LR=1e-3 serve as the fourth data point — no duplication needed
 7. Finetune each on mortality_24h to check if paradigm ranking shifts across LRs
 8. **Decision gate**: If rankings are stable → proceed with shared LR=1e-3. If one paradigm is LR-sensitive → adjust shared LR or document the sensitivity before expensive sprints.
 
-### Sprint 1c: Mask Ratio Sensitivity Check (6 pretrain + 6 finetune)
+**Outcome**: Gate passed. JEPA #1 at every LR (0.881–0.883, std=0.001). MAE more LR-sensitive (std=0.012). Rankings stable → shared LR=1e-3 validated.
+
+### Sprint 1c: Mask Ratio Sensitivity Check (6 pretrain + 6 finetune) — COMPLETE
 9. Validate shared mask ratio before committing to full experiment matrix
 10. MIMIC-IV, 3 SSL paradigms × 2 extra mask ratios (0.3, 0.75), mortality_24h only, seed=42
 11. Sprint 1 runs at mask_ratio=0.5 serve as the third data point — no duplication needed
@@ -391,10 +396,14 @@ Priority ordering for incremental results and early debugging:
 13. **Motivation**: Mask ratio is the second most likely hyperparameter to differentially affect paradigms. MAE literature favors 0.75 (He et al. 2022), JEPA uses 0.5 with block masking, and contrastive is less studied. A reviewer will ask whether the shared 0.5 unfairly advantages one paradigm.
 14. **Decision gate**: If rankings are stable → proceed with shared mask_ratio=0.5. If one paradigm is mask-ratio-sensitive → document the sensitivity and consider paradigm-specific ratios.
 
-### Sprint 2: MIMIC-IV Linear Probing — Complete First Results Table (12 runs)
+**Outcome**: Gate passed. Rankings stable across mask ratios → shared mask_ratio=0.5 validated.
+
+### Sprint 2: MIMIC-IV Linear Probing — Complete First Results Table (12 runs) — COMPLETE
 15. Protocol A (linear probe): 3 SSL paradigms × 4 tasks on MIMIC-IV, seed=42
 16. Combined with Sprint 1 Protocol B runs, produces complete MIMIC-IV results table (Protocol A + B + supervised)
 17. Write preliminary results section
+
+**Outcome**: Complete. Core finding: Protocol A/B divergence — MAE dominates linear probing (all 4 tasks), paradigms equalize under full finetuning with task-specific winners. See Section 11 for detailed results.
 
 ### Sprint 3: Generalization — eICU (3 pretrain + 28 finetune = 31 runs)
 18. eICU: 3 SSL pretraining + 4 supervised + 12 Protocol B + 12 Protocol A, seed=42
@@ -468,6 +477,29 @@ Examples:
 | Regression | val_mae, test_mae, test_mse, test_r2 |
 | Fairness | fairness/auroc_gap_sex, fairness/dem_parity_diff, fairness/eq_odds_diff |
 
+### Baseline Inheritance Across Sprints
+
+Later sprints reuse runs from earlier sprints as comparison baselines (e.g., Sprint 2 needs Sprint 1's supervised baselines). To enable filtering all relevant runs for a sprint in a single W&B query, baseline runs from earlier sprints are tagged with later sprint tags using `run_experiments.py tag --sprint N`.
+
+**Inheritance map** (which earlier sprint runs serve as baselines):
+
+| Sprint | Inherits From | What's Inherited |
+|--------|--------------|------------------|
+| **1** | — | Self-contained (root sprint) |
+| **1b** | 1 | Default-LR pretrain+finetune (mortality_24h) + supervised baseline |
+| **1c** | 1 | Default-mask-ratio pretrain+finetune (mortality_24h) + supervised baseline |
+| **2** | 1 | All Sprint 1 runs (pretrains, Protocol B finetunes, supervised) — completes the MIMIC results table |
+| **3** | — | Self-contained (eICU has own pretrains + supervised) |
+| **4** | — | Self-contained (Combined has own pretrains + supervised) |
+| **5** | 1, 2, 3, 4 | All seed=42 runs (to aggregate with seeds 123, 456 for mean±std) |
+| **6** | 1, 2, 3, 4, 5 | All fraction=1.0 finetune + supervised (learning curve right endpoints) |
+| **7** | 1, 3, 5 | In-domain finetunes + supervised for MIMIC and eICU (transfer comparison) |
+| **8** | 1, 1b, 1c, 5 | Seed=42 ablation runs + default-HP data points for seeds 123, 456 |
+
+**Usage**: After completing a sprint, run `uv run python scripts/run_experiments.py tag --sprint N` to propagate sprint tags to inherited baseline runs. This is idempotent — re-running it won't duplicate tags.
+
+**Querying**: With tags propagated, filter W&B by `sprint:N` to see all runs relevant to that sprint (both native and inherited baselines). Combine with existing tags (`protocol:A`, `paradigm:mae`, `task:mortality_24h`, etc.) for fine-grained filtering.
+
 ---
 
 ## 9. Expected Outputs
@@ -507,3 +539,73 @@ Examples:
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
 | Shared hyperparameters unfair to one paradigm | LR sensitivity (Sprint 1b) and mask ratio sensitivity (Sprint 1c) validate that rankings are robust to shared hyperparameter choices |
 | Reviewer requests 5 seeds | Add 2 seeds only to contested comparisons (minor revision) |
+| AKI label leakage | Fixed: forward-looking prediction window (hours 48–72) prevents model from seeing creatinine values used for KDIGO label construction |
+
+---
+
+## 11. Sprint Progress & Methodological Corrections
+
+### Completed Sprints (as of 2026-03-13)
+
+#### Sprint 1 — PASSED
+- Supervised mortality_hospital AUROC: 0.882 (target: ≥0.80)
+- All 4 task pipelines produce valid outputs
+- SSL full-finetune matches supervised on classification tasks
+- Decision gate passed → proceeded to Sprint 1b
+
+#### Sprint 1b — PASSED
+- JEPA #1 at every pretrain LR (0.881–0.883 AUROC, std=0.001)
+- MAE more LR-sensitive (std=0.012), Contrastive moderate (std=0.005)
+- Rankings stable across all 4 LR values → shared LR=1e-3 validated
+- Decision gate passed → proceeded to Sprint 1c
+
+#### Sprint 1c — PASSED
+- Mask ratio sensitivity tested at {0.3, 0.5, 0.75}
+- Rankings stable → shared mask_ratio=0.5 validated
+- Decision gate passed → proceeded to Sprint 2
+
+#### Sprint 2 — COMPLETE
+- Protocol A (linear probing) on MIMIC-IV, all 4 tasks
+- Core finding: MAE dominates all tasks by 2–6 AUROC points (Protocol A)
+- Protocol B: paradigms equalized, task-specific winners
+- Protocol A/B divergence is the central thesis finding
+
+### Rev2 Methodological Corrections (applied 2026-03-12)
+
+Two corrections were applied via `--revision rev2` re-runs. All prior sprint results were re-validated.
+
+**1. AKI Forward-Looking Prediction Window** (`cdf498b`)
+- Original AKI labels evaluated creatinine changes within the 48h observation window, allowing the model to see values used for label construction
+- Fix: predict AKI onset in hours 48–72 (after the observation window ends). RICU extraction horizon extended to 72h
+- Impact: AKI AUROC dropped ~9 points in Protocol B (0.97→0.89) and ~4–5 points in Protocol A, uniformly across paradigms — confirming a data issue, not a paradigm issue
+- AKI now behaves like other classification tasks (~0.89 AUROC), clinically coherent
+- Sample count: 6808→5380 (1428 stays excluded for missing creatinine in future window), positive rate stable (~21.5%→21.9%)
+
+**2. Complementary Masks for Contrastive** (`194d066`)
+- Original contrastive used independent random masks with ~25% expected overlap between views
+- Fix: view 2 = complement of view 1 (zero overlap), forcing encoder to learn from non-overlapping timesteps
+- Impact: pretraining task became slightly harder (loss 0.004→0.007) but remained trivially easy (accuracy still 100%). Downstream performance unchanged (±0.003 AUROC)
+- **Valuable negative result**: contrastive's trivially easy proxy task is fundamental to instance-level discrimination on ICU data (high inter-patient variance), not a mask overlap issue
+- Complementary masks reversed the LR-downstream relationship (higher LR → better, well-behaved monotonic) but did not change absolute peak performance
+
+### Key Findings So Far (MIMIC-IV, seed=42, rev2)
+
+**Protocol B (Full Finetuning, AUROC):**
+
+| Task | MAE | JEPA | Contrastive | Supervised |
+|------|-----|------|-------------|-----------|
+| mortality_24h | 0.873 | **0.880** | 0.859 | 0.869 |
+| mortality_hospital | **0.887** | 0.880 | 0.879 | 0.882 |
+| aki_kdigo | 0.884 | 0.891 | 0.885 | **0.894** |
+| los_remaining R² | 0.245 | 0.250 | **0.253** | 0.245 |
+
+**Protocol A (Linear Probing, AUROC):**
+
+| Task | MAE | JEPA | Contrastive |
+|------|-----|------|-------------|
+| mortality_24h | **0.856** | 0.811 | 0.801 |
+| mortality_hospital | **0.867** | 0.835 | 0.838 |
+| aki_kdigo | **0.802** | 0.781 | 0.788 |
+| los_remaining R² | **0.186** | 0.157 | 0.172 |
+
+**Central finding**: Protocol A → MAE dominates all tasks. Protocol B → paradigms equalized with task-specific winners. This divergence suggests MAE produces the best frozen representations, while all paradigms provide similarly useful weight initialization.
