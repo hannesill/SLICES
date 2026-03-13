@@ -57,6 +57,28 @@ VALID_DATASETS <- c("miiv", "eicu", "hirid", "aumc", "mimic", "sic",
 # Batch size for concept loading — controls peak memory during extraction.
 CONCEPT_BATCH_SIZE <- 8L
 
+# Tables actually needed for concept extraction and admin/mortality/diagnosis
+# data.  Derived from ricu:::tbl_cfg — tables referenced by time-series,
+# admin, mortality, and diagnosis concepts.  Everything else (emar_detail,
+# pharmacy, poe, prescriptions, …) is unused and can take 20+ min to import
+# for no benefit.
+ESSENTIAL_TABLES <- list(
+  miiv = c("chartevents", "labevents", "inputevents", "outputevents",
+           "procedureevents", "ingredientevents", "datetimeevents",
+           "icustays", "patients", "admissions", "transfers",
+           "d_labitems", "diagnoses_icd", "d_icd_diagnoses"),
+  mimic = c("chartevents", "labevents", "inputevents", "outputevents",
+            "procedureevents", "ingredientevents", "datetimeevents",
+            "icustays", "patients", "admissions", "transfers",
+            "d_labitems", "diagnoses_icd", "d_icd_diagnoses"),
+  eicu = c("patient", "vitalAperiodic", "vitalPeriodic", "lab",
+           "infusionDrug", "respiratoryCharting", "nurseCharting",
+           "intakeOutput", "diagnosis", "medication"),
+  hirid = c("observations", "pharma", "general"),
+  aumc = c("numericitems", "drugitems", "procedureorderitems",
+           "admissions", "listitems")
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -192,8 +214,7 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
     for (b in 2:n_batches) {
       merged <- merge(merged, batch_results[[b]],
                       by = c("stay_id", "hour"), all = TRUE)
-      batch_results[[b]] <- NULL
-      gc()
+      batch_results[[b]] <- NULL  # allow GC to reclaim
     }
   }
   rm(batch_results, wins)
@@ -857,12 +878,21 @@ main <- function(opts) {
         )
       )
 
-      # ricu requires ALL tables to be present before it considers a source
-      # "available" (e.g. load_dictionary(src=...) will fail otherwise).
-      # Import every table, but one at a time to control peak memory.
-      message(sprintf("  Importing %d tables one at a time...", length(all_tables)))
-      for (tbl_name in all_tables) {
-        message(sprintf("  Importing: %s", tbl_name))
+      # Only import tables actually needed for concept extraction and admin
+      # data.  We bypass RICU's availability gate with parse_ricu_dictionary()
+      # later, so we don't need ALL tables — just the ones concepts reference.
+      fam <- dataset_family(dataset)
+      if (fam %in% names(ESSENTIAL_TABLES)) {
+        tables_to_import <- intersect(all_tables, ESSENTIAL_TABLES[[fam]])
+      } else {
+        tables_to_import <- all_tables
+      }
+      n_import <- length(tables_to_import)
+      message(sprintf("  Importing %d/%d essential tables...",
+                      n_import, length(all_tables)))
+      for (i in seq_along(tables_to_import)) {
+        tbl_name <- tables_to_import[i]
+        message(sprintf("  [%d/%d] Importing: %s", i, n_import, tbl_name))
         tryCatch({
           import_src(dataset, tables = tbl_name)
         }, error = function(e) {
