@@ -245,7 +245,10 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if cfg.get("revision") is not None:
         tags.append(f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
-        tags.append(f"rerun-reason:{cfg.rerun_reason}")
+        tag = f"rerun-reason:{cfg.rerun_reason}"
+        if len(tag) > 64:
+            tag = tag[:61] + "..."
+        tags.append(tag)
 
     # Add protocol tag for finetune runs (Protocol A = frozen, Protocol B = unfrozen)
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
