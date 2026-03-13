@@ -14,6 +14,8 @@ Usage:
     uv run python scripts/run_experiments.py status --sprint 1
     uv run python scripts/run_experiments.py retry --failed --parallel 4
     uv run python scripts/run_experiments.py retry --failed --sprint 1 --revision v2 --parallel 4
+    uv run python scripts/run_experiments.py tag --sprint 2 --dry-run
+    uv run python scripts/run_experiments.py tag --sprint 2 3 5
 """
 from __future__ import annotations
 
@@ -42,6 +44,24 @@ LABEL_FRACTIONS_TREND = [0.1]
 LR_ABLATION = [2e-4, 5e-4, 2e-3]  # 1e-3 reused from Phase 1
 MASK_RATIO_ABLATION = [0.3, 0.75]  # 0.5 reused from Phase 1
 TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
+
+# Baseline inheritance: which earlier sprints' runs should be tagged as baselines
+# for later sprints. See docs/EXPERIMENT_PLAN.md § "Baseline Inheritance Across Sprints".
+# Intentionally coarse-grained: ALL runs from source sprints are tagged, even when
+# only a subset is relevant (e.g. 1b only needs mortality_24h from Sprint 1). Use
+# secondary W&B tags (task:, protocol:, phase:, etc.) to filter down when querying.
+BASELINE_SPRINTS: dict[str, list[str]] = {
+    "1": [],
+    "1b": ["1"],
+    "1c": ["1"],
+    "2": ["1"],
+    "3": [],
+    "4": [],
+    "5": ["1", "2", "3", "4"],
+    "6": ["1", "2", "3", "4", "5"],
+    "7": ["1", "3", "5"],
+    "8": ["1", "1b", "1c", "5"],
+}
 
 STATE_FILE = Path("outputs/experiment_state.json")
 LOG_DIR = Path("logs/runner")
@@ -989,6 +1009,77 @@ def cmd_warmup(args):
     print("You can now run experiments in parallel without OOM.")
 
 
+def cmd_tag(args):
+    """Add sprint tags to inherited baseline runs in W&B.
+
+    For each requested sprint, finds runs from inherited baseline sprints
+    (per BASELINE_SPRINTS mapping) and adds the target sprint tag via the
+    W&B API. Idempotent — already-tagged runs are skipped.
+
+    Usage:
+        uv run python scripts/run_experiments.py tag --sprint 2
+        uv run python scripts/run_experiments.py tag --sprint 2 3 --dry-run
+        uv run python scripts/run_experiments.py tag --sprint 2 --project slices --entity myteam
+    """
+    try:
+        import wandb  # noqa: F811
+    except ImportError:
+        print("Error: wandb is required for tagging. Install with: pip install wandb")
+        sys.exit(1)
+
+    api = wandb.Api()
+
+    project = args.project
+    entity = args.entity
+    # Resolve entity: CLI flag > WANDB_ENTITY env var > wandb default entity
+    if entity is None:
+        entity = os.environ.get("WANDB_ENTITY") or api.default_entity
+    if entity is None:
+        print("Error: Could not determine W&B entity. Set --entity or WANDB_ENTITY env var.")
+        sys.exit(1)
+
+    sprints = [str(s) for s in args.sprint]
+    dry_run = args.dry_run
+
+    for target_sprint in sprints:
+        source_sprints = BASELINE_SPRINTS.get(target_sprint, [])
+        if not source_sprints:
+            print(f"Sprint {target_sprint}: no baseline sprints to inherit from — skipping.")
+            continue
+
+        target_tag = f"sprint:{target_sprint}"
+        sources = ", ".join(source_sprints)
+        print(f"\nSprint {target_sprint}: inheriting baselines from sprint(s) {sources}")
+
+        # Query runs from each source sprint
+        tagged = 0
+        skipped = 0
+        for source_sprint in source_sprints:
+            source_tag = f"sprint:{source_sprint}"
+            runs = api.runs(
+                f"{entity}/{project}",
+                filters={"tags": {"$in": [source_tag]}},
+            )
+
+            for run in runs:
+                if target_tag in run.tags:
+                    skipped += 1
+                    continue
+
+                if dry_run:
+                    print(f"  [dry-run] Would tag: {run.name} ({run.id}) with {target_tag}")
+                    tagged += 1
+                else:
+                    run.tags = run.tags + [target_tag]
+                    run.update()
+                    tagged += 1
+
+        action = "would tag" if dry_run else "tagged"
+        print(f"  {action} {tagged} runs, skipped {skipped} (already tagged)")
+
+    print("\nDone.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="SLICES parallel experiment runner")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1026,6 +1117,25 @@ def main():
     )
     p_warmup.add_argument("--reason", type=str, default=None, help="Ignored for warmup")
 
+    # tag
+    p_tag = sub.add_parser("tag", help="Tag inherited baseline runs in W&B with target sprint tags")
+    p_tag.add_argument(
+        "--sprint",
+        nargs="+",
+        required=True,
+        help="Sprint(s) whose baselines to tag (e.g. 2 or 2 3 5)",
+    )
+    p_tag.add_argument("--dry-run", action="store_true", help="Show what would be tagged")
+    p_tag.add_argument(
+        "--project", type=str, default="slices", help="W&B project name (default: slices)"
+    )
+    p_tag.add_argument(
+        "--entity",
+        type=str,
+        default=None,
+        help="W&B entity (default: WANDB_ENTITY env var or wandb default)",
+    )
+
     args = parser.parse_args()
 
     # Validate --reason requires --revision
@@ -1044,6 +1154,8 @@ def main():
         cmd_retry(args)
     elif args.command == "warmup":
         cmd_warmup(args)
+    elif args.command == "tag":
+        cmd_tag(args)
 
 
 if __name__ == "__main__":
