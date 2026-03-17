@@ -38,7 +38,8 @@ PIN_MEMORY: bool = True
 # =============================================================================
 # Feature Blocklist
 # =============================================================================
-# RICU concepts that leak downstream task labels and must be excluded from
-# model input. los_hosp / los_icu are updated hourly by RICU and directly
-# reveal the length-of-stay answer.
-FEATURE_BLOCKLIST: frozenset = frozenset({"los_hosp", "los_icu"})
+# RICU concepts that must be excluded from model input:
+# - los_hosp / los_icu: leak downstream task labels (updated hourly by RICU,
+#   directly reveal the length-of-stay answer)
+# - dur_var: internal ricu helper variable, not a clinical concept
+FEATURE_BLOCKLIST: frozenset = frozenset({"los_hosp", "los_icu", "dur_var"})
