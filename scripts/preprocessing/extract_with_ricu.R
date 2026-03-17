@@ -55,7 +55,7 @@ VALID_DATASETS <- c("miiv", "eicu", "hirid", "aumc", "mimic", "sic",
                      "mimic_demo", "eicu_demo")
 
 # Batch size for concept loading — controls peak memory during extraction.
-CONCEPT_BATCH_SIZE <- 8L
+CONCEPT_BATCH_SIZE <- 4L
 
 # Tables actually needed for concept extraction and admin/mortality/diagnosis
 # data.  Derived from ricu:::tbl_cfg — tables referenced by time-series,
@@ -71,9 +71,9 @@ ESSENTIAL_TABLES <- list(
             "procedureevents", "ingredientevents", "datetimeevents",
             "icustays", "patients", "admissions", "transfers",
             "d_labitems", "diagnoses_icd", "d_icd_diagnoses"),
-  eicu = c("patient", "vitalAperiodic", "vitalPeriodic", "lab",
-           "infusionDrug", "respiratoryCharting", "nurseCharting",
-           "intakeOutput", "diagnosis", "medication"),
+  # eicu requires all tables: load_concepts() internally calls
+  # load_dictionary() which checks full source availability.
+  # Omitted from this list so all tables are imported (see fallback below).
   hirid = c("observations", "pharma", "general"),
   aumc = c("numericitems", "drugitems", "procedureorderitems",
            "admissions", "listitems")
@@ -161,60 +161,105 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
   n_batches <- length(batch_indices)
   batch_results <- vector("list", n_batches)
 
+  # Helper: load a set of concepts into a data.table with stay_id, hour, and
+
+  # value + mask columns.  Returns NULL on failure.
+  load_batch <- function(cnames, dataset, dict, wins, seq_length_hours) {
+    tryCatch({
+      ts_data <- load_concepts(
+        cnames,
+        src        = dataset,
+        concepts   = dict,
+        interval   = hours(1L),
+        merge_data = TRUE,
+        verbose    = FALSE
+      )
+      ts_dense <- fill_gaps(ts_data, limits = wins)
+      idx_name <- index_var(ts_dense)
+      ts_capped <- ts_dense[get(idx_name) < hours(seq_length_hours)]
+      batch_concept_cols <- data_vars(ts_capped)
+      for (col in batch_concept_cols) {
+        mask_name <- paste0(col, "_mask")
+        set(ts_capped, j = mask_name, value = !is.na(ts_capped[[col]]))
+      }
+      dt <- as.data.table(ts_capped)
+      id_name <- id_var(ts_capped)
+      dt[, hour := as.integer(as.numeric(get(idx_name), units = "hours"))]
+      setnames(dt, id_name, "stay_id")
+      dt[, (idx_name) := NULL]
+      rm(ts_data, ts_dense, ts_capped)
+      gc()
+      dt
+    }, error = function(e) {
+      warning(sprintf("  Failed to load concepts [%s]: %s",
+                      paste(cnames, collapse = ", "), conditionMessage(e)))
+      NULL
+    })
+  }
+
+  skipped_concepts <- character(0)
+
   for (b in seq_len(n_batches)) {
     batch_concepts <- concepts[batch_indices[[b]]]
     message(sprintf("  Batch %d/%d (%d concepts): %s",
                     b, n_batches, length(batch_concepts),
                     paste(batch_concepts, collapse = ", ")))
 
-    # Load this batch — RICU handles unit conversion, hourly binning, median agg
-    ts_data <- load_concepts(
-      batch_concepts,
-      src        = dataset,
-      concepts   = dict,
-      interval   = hours(1L),
-      merge_data = TRUE,
-      verbose    = FALSE
-    )
+    dt <- load_batch(batch_concepts, dataset, dict, wins, seq_length_hours)
 
-    # Fill gaps to create a dense hourly grid (capped at seq_length_hours)
-    ts_dense <- fill_gaps(ts_data, limits = wins)
-
-    # Cap at seq_length_hours (belt-and-suspenders)
-    idx_name <- index_var(ts_dense)
-    ts_capped <- ts_dense[get(idx_name) < hours(seq_length_hours)]
-
-    # Derive boolean observation masks for this batch's concepts
-    batch_concept_cols <- data_vars(ts_capped)
-    for (col in batch_concept_cols) {
-      mask_name <- paste0(col, "_mask")
-      set(ts_capped, j = mask_name, value = !is.na(ts_capped[[col]]))
+    if (is.null(dt) && length(batch_concepts) > 1) {
+      # Retry concepts individually to isolate the broken one(s)
+      message("    Batch failed — retrying concepts individually...")
+      individual_dts <- list()
+      for (cname in batch_concepts) {
+        cdt <- load_batch(cname, dataset, dict, wins, seq_length_hours)
+        if (is.null(cdt)) {
+          message(sprintf("    Skipping concept '%s' (unsupported for this dataset).", cname))
+          skipped_concepts <- c(skipped_concepts, cname)
+        } else {
+          individual_dts[[length(individual_dts) + 1]] <- cdt
+        }
+        rm(cdt); gc()
+      }
+      if (length(individual_dts) > 0) {
+        dt <- individual_dts[[1]]
+        if (length(individual_dts) > 1) {
+          for (j in 2:length(individual_dts)) {
+            dt <- merge(dt, individual_dts[[j]],
+                        by = c("stay_id", "hour"), all = TRUE)
+          }
+        }
+        rm(individual_dts); gc()
+      } else {
+        dt <- NULL
+      }
+    } else if (is.null(dt)) {
+      message(sprintf("    Skipping concept '%s' (unsupported for this dataset).",
+                      batch_concepts))
+      skipped_concepts <- c(skipped_concepts, batch_concepts)
     }
 
-    # Convert to data.table for efficient merging
-    dt <- as.data.table(ts_capped)
-
-    # Integer hour column from the difftime index
-    id_name <- id_var(ts_capped)
-    dt[, hour := as.integer(as.numeric(get(idx_name), units = "hours"))]
-    setnames(dt, id_name, "stay_id")
-    dt[, (idx_name) := NULL]
-
     batch_results[[b]] <- dt
-
-    # Free intermediate objects
-    rm(ts_data, ts_dense, ts_capped, dt)
-    gc()
+    rm(dt); gc()
   }
 
-  # Merge all batches by (stay_id, hour)
+  if (length(skipped_concepts) > 0) {
+    message(sprintf("  Skipped %d concepts: %s",
+                    length(skipped_concepts),
+                    paste(skipped_concepts, collapse = ", ")))
+  }
+
+  # Merge all batches by (stay_id, hour), skipping NULLs
   message("  Merging batches...")
+  batch_results <- Filter(Negate(is.null), batch_results)
+  if (length(batch_results) == 0) {
+    stop("All concept batches failed. Cannot continue.")
+  }
   merged <- batch_results[[1]]
-  if (n_batches > 1) {
-    for (b in 2:n_batches) {
+  if (length(batch_results) > 1) {
+    for (b in 2:length(batch_results)) {
       merged <- merge(merged, batch_results[[b]],
                       by = c("stay_id", "hour"), all = TRUE)
-      batch_results[[b]] <- NULL  # allow GC to reclaim
     }
   }
   rm(batch_results, wins)

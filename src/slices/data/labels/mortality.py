@@ -97,7 +97,20 @@ class MortalityLabelBuilder(LabelBuilder):
 
         # Check dtype of date_of_death to handle DATE vs DATETIME properly
         # This avoids edge cases where DATE type is cast to DATETIME with 00:00:00
-        date_of_death_dtype = mortality["date_of_death"].dtype
+        # When all-null (e.g., eICU), polars may infer Null/Boolean dtype — cast to
+        # Datetime so downstream comparisons don't fail on type mismatch.
+        date_of_death_dtype = merged["date_of_death"].dtype
+        if date_of_death_dtype not in (
+            pl.Date,
+            pl.Datetime,
+            pl.Datetime("us"),
+            pl.Datetime("ns"),
+            pl.Datetime("ms"),
+        ):
+            merged = merged.with_columns(
+                pl.col("date_of_death").cast(pl.Datetime("us", "UTC")).alias("date_of_death")
+            )
+            date_of_death_dtype = pl.Datetime("us", "UTC")
         is_date_type = date_of_death_dtype == pl.Date
 
         if window_hours is None and obs_hours is None:
