@@ -189,6 +189,15 @@ def main():
     data_a["static"] = data_a["static"].with_columns(pl.lit(names[0]).alias("source_dataset"))
     data_b["static"] = data_b["static"].with_columns(pl.lit(names[1]).alias("source_dataset"))
 
+    # Harmonize column dtypes across datasets (e.g. patient_id: Int32 vs String)
+    for col in set(data_a["static"].columns) & set(data_b["static"].columns):
+        dt_a = data_a["static"][col].dtype
+        dt_b = data_b["static"][col].dtype
+        if dt_a != dt_b:
+            print(f"  Harmonizing column '{col}': {dt_a} vs {dt_b} → String")
+            data_a["static"] = data_a["static"].with_columns(pl.col(col).cast(pl.Utf8))
+            data_b["static"] = data_b["static"].with_columns(pl.col(col).cast(pl.Utf8))
+
     # Merge
     print("\nMerging...")
     static_combined = pl.concat([data_a["static"], data_b["static"]])
