@@ -26,6 +26,7 @@ from slices.data.tensor_preprocessing import (
     compute_normalization_stats,
     compute_single_sample_stages,
     convert_raw_to_tensors,
+    extract_tensors_from_dataframe,
 )
 
 # Module-level logger
@@ -251,9 +252,12 @@ class ICUDataset(Dataset):
             # Free raw DataFrame — not needed when using cached tensors
             del self.timeseries_df
         else:
-            # Pre-extract raw arrays
-            raw_timeseries = self.timeseries_df["timeseries"].to_list()
-            raw_masks = self.timeseries_df["mask"].to_list()
+            # Extract tensors directly from Polars DataFrame.
+            # Uses explode() for zero-copy extraction instead of to_list(),
+            # which creates Python objects and can OOM on large datasets.
+            timeseries_tensor, masks_tensor = extract_tensors_from_dataframe(
+                self.timeseries_df, self.seq_length, self.n_features
+            )
 
             # Free raw DataFrame immediately to reduce peak memory.
             # get_preprocessing_stages() reloads from parquet on demand.
@@ -264,8 +268,12 @@ class ICUDataset(Dataset):
                 self.data_dir, self.train_indices, self.normalize
             )
 
-            # Pre-compute tensors for all samples (much faster __getitem__)
-            self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
+            # Apply normalization and imputation (steps 2 and 3)
+            self._precompute_tensors(
+                precomputed_tensors=(timeseries_tensor, masks_tensor),
+                train_indices=self.train_indices,
+                cached_stats=cached_stats,
+            )
 
             # Save preprocessed tensors to cache for next run
             save_cached_tensors(
@@ -286,10 +294,11 @@ class ICUDataset(Dataset):
 
     def _precompute_tensors(
         self,
-        raw_timeseries: List[List[List[float]]],
-        raw_masks: List[List[List[bool]]],
+        raw_timeseries: Optional[List[List[List[float]]]] = None,
+        raw_masks: Optional[List[List[List[bool]]]] = None,
         train_indices: Optional[List[int]] = None,
         cached_stats: Optional[Dict[str, Any]] = None,
+        precomputed_tensors: Optional[tuple] = None,
     ) -> None:
         """Pre-compute all tensors at initialization for fast __getitem__.
 
@@ -298,20 +307,24 @@ class ICUDataset(Dataset):
 
         Args:
             raw_timeseries: List of timeseries arrays (n_samples x seq_len x n_features).
+                Not needed if precomputed_tensors is provided.
             raw_masks: List of mask arrays (n_samples x seq_len x n_features).
+                Not needed if precomputed_tensors is provided.
             train_indices: Optional list of indices for training set.
             cached_stats: Optional cached normalization statistics.
+            precomputed_tensors: Optional tuple of (timeseries_tensor, masks_tensor)
+                already extracted. Skips the list-to-tensor conversion step.
         """
-        n_samples = len(raw_timeseries)
+        if precomputed_tensors is not None:
+            timeseries_tensor, masks_tensor = precomputed_tensors
+        else:
+            timeseries_tensor, masks_tensor = convert_raw_to_tensors(
+                raw_timeseries, raw_masks, self.seq_length, self.n_features
+            )
+            del raw_timeseries, raw_masks
+
+        n_samples = timeseries_tensor.shape[0]
         logger.info(f"Preprocessing {n_samples:,} samples...")
-
-        # Step 1: Convert nested lists to tensors
-        timeseries_tensor, masks_tensor = convert_raw_to_tensors(
-            raw_timeseries, raw_masks, self.seq_length, self.n_features
-        )
-
-        # Free raw Python lists to reduce peak memory
-        del raw_timeseries, raw_masks
 
         # Step 2: Compute normalization statistics
         self.feature_means = torch.zeros(self.n_features)
