@@ -43,53 +43,31 @@ def convert_raw_to_tensors(
     n_samples = len(raw_timeseries)
     logger.debug("[1/3] Converting to tensors...")
 
-    batch_size = 10000
-    all_timeseries = []
-    all_masks = []
+    # Pre-allocate output arrays to avoid 2x peak memory from list + np.stack
+    timeseries_np = np.full(
+        (n_samples, seq_length, n_features), np.nan, dtype=np.float32
+    )
+    masks_np = np.zeros((n_samples, seq_length, n_features), dtype=bool)
 
-    n_batches = (n_samples + batch_size - 1) // batch_size
-    batch_iter = range(0, n_samples, batch_size)
-    if n_batches >= 10:  # Only show progress for many batches
-        batch_iter = tqdm(batch_iter, desc="  Converting batches", unit="batch")
+    sample_iter = range(n_samples)
+    if n_samples >= 50000:  # Only show progress for large datasets
+        sample_iter = tqdm(sample_iter, desc="  Converting samples", unit="sample")
 
-    for batch_start in batch_iter:
-        batch_end = min(batch_start + batch_size, n_samples)
-        batch_ts = []
-        batch_mask = []
+    for i in sample_iter:
+        ts_data = raw_timeseries[i]
+        mask_data = raw_masks[i]
+        actual_len = min(len(ts_data), seq_length)
 
-        for i in range(batch_start, batch_end):
-            ts_data = raw_timeseries[i]
-            mask_data = raw_masks[i]
-            actual_len = len(ts_data)
+        timeseries_np[i, :actual_len] = np.array(
+            ts_data[:actual_len], dtype=np.float32
+        )
+        masks_np[i, :actual_len] = np.array(
+            mask_data[:actual_len], dtype=bool
+        )
 
-            # Pad or truncate to seq_length
-            if actual_len >= seq_length:
-                # Truncate
-                ts_arr = np.array(ts_data[:seq_length], dtype=np.float32)
-                mask_arr = np.array(mask_data[:seq_length], dtype=bool)
-            else:
-                # Pad with NaN / False
-                ts_arr = np.full((seq_length, n_features), np.nan, dtype=np.float32)
-                mask_arr = np.zeros((seq_length, n_features), dtype=bool)
-                ts_arr[:actual_len] = np.array(ts_data, dtype=np.float32)
-                mask_arr[:actual_len] = np.array(mask_data, dtype=bool)
-
-            batch_ts.append(ts_arr)
-            batch_mask.append(mask_arr)
-
-        all_timeseries.extend(batch_ts)
-        all_masks.extend(batch_mask)
-
-    # Stack into single arrays
-    timeseries_np = np.stack(all_timeseries)  # (n_samples, seq_len, n_features)
-    masks_np = np.stack(all_masks)  # (n_samples, seq_len, n_features)
-
-    # Convert to tensors
+    # Convert to tensors (torch.from_numpy shares memory, no copy)
     timeseries_tensor = torch.from_numpy(timeseries_np)  # (n_samples, seq_len, n_features)
     masks_tensor = torch.from_numpy(masks_np)  # (n_samples, seq_len, n_features)
-
-    # Free numpy arrays
-    del timeseries_np, masks_np, all_timeseries, all_masks
 
     return timeseries_tensor, masks_tensor
 
