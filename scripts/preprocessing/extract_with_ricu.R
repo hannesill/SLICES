@@ -605,11 +605,33 @@ extract_mortality_eicu <- function(dataset, dict) {
     NA_integer_
   }
 
+  # Derive date_of_death from hospitaldischargeoffset for expired patients.
+  # eICU does not store death timestamps directly, but hospitaldischargeoffset
+  # gives minutes from unit admission to hospital discharge. For patients who
+  # expired (hospitaldischargestatus == "Expired"), this is the approximate
+  # time of death. We use the same synthetic epoch as the stays extraction
+  # so that windowed mortality tasks (e.g., mortality_24h) can compute
+  # whether death falls within the prediction window.
+  epoch <- as.POSIXct("2000-01-01 00:00:00", tz = "UTC")
+  has_offset <- "hospitaldischargeoffset" %in% names(pat)
+  expired <- !is.na(hosp_flag) & hosp_flag == 1L
+
+  dod <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
+  if (has_offset) {
+    dod[expired] <- epoch + pat$hospitaldischargeoffset[expired] * 60
+  }
+
+  # Also derive dischtime from hospitaldischargeoffset for all patients
+  dischtime <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
+  if (has_offset) {
+    dischtime <- epoch + pat$hospitaldischargeoffset * 60
+  }
+
   df <- data.frame(
     stay_id              = pat[[id_col]],
-    date_of_death        = NA,
+    date_of_death        = dod,
     hospital_expire_flag = hosp_flag,
-    dischtime            = NA,
+    dischtime            = dischtime,
     discharge_location   = if ("unitdischargelocation" %in% names(pat)) {
       pat$unitdischargelocation
     } else {
