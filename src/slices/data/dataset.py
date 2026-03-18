@@ -248,10 +248,16 @@ class ICUDataset(Dataset):
             self.feature_means = cached_tensors["feature_means"]
             self.feature_stds = cached_tensors["feature_stds"]
             logger.info("Using cached preprocessed tensors")
+            # Free raw DataFrame — not needed when using cached tensors
+            del self.timeseries_df
         else:
             # Pre-extract raw arrays
             raw_timeseries = self.timeseries_df["timeseries"].to_list()
             raw_masks = self.timeseries_df["mask"].to_list()
+
+            # Free raw DataFrame immediately to reduce peak memory.
+            # get_preprocessing_stages() reloads from parquet on demand.
+            del self.timeseries_df
 
             # Try to load existing normalization stats (for reproducibility)
             cached_stats = load_normalization_stats(
@@ -274,10 +280,6 @@ class ICUDataset(Dataset):
                 self.train_indices,
                 self._excluded_stay_ids,
             )
-
-        # Free raw DataFrame — only _timeseries_tensor and _mask_tensor needed from here.
-        # get_preprocessing_stages() reloads from parquet on demand.
-        del self.timeseries_df
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
@@ -307,6 +309,9 @@ class ICUDataset(Dataset):
         timeseries_tensor, masks_tensor = convert_raw_to_tensors(
             raw_timeseries, raw_masks, self.seq_length, self.n_features
         )
+
+        # Free raw Python lists to reduce peak memory
+        del raw_timeseries, raw_masks
 
         # Step 2: Compute normalization statistics
         self.feature_means = torch.zeros(self.n_features)
