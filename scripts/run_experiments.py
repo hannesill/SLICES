@@ -980,8 +980,8 @@ def cmd_warmup(args):
     print(f"Warming up tensor caches for sprint(s) {', '.join(sprints)}")
     print(f"  {len(combos)} unique (dataset, task, seed, label_fraction) combinations\n")
 
-    # Import here to avoid loading heavy deps when not needed
-    from slices.data.datamodule import ICUDataModule
+    import subprocess
+    import sys
 
     for i, (dataset, task, seed, label_fraction) in enumerate(combos, 1):
         processed_dir = f"data/processed/{dataset}"
@@ -989,21 +989,35 @@ def cmd_warmup(args):
         frac_str = f", frac={label_fraction}" if label_fraction < 1.0 else ""
         print(f"[{i}/{len(combos)}] {dataset} / {task_str} / seed={seed}{frac_str}")
 
-        try:
-            dm = ICUDataModule(
-                processed_dir=processed_dir,
-                task_name=task,
-                batch_size=1,  # doesn't matter, we just need setup()
-                num_workers=0,
-                seed=seed,
-                label_fraction=label_fraction,
-            )
-            dm.setup()
-            print(f"  -> Cached ({len(dm.dataset):,} samples)")
-            # Free memory before next combo
-            del dm
-        except Exception as e:
-            print(f"  -> ERROR: {e}")
+        # Run each warmup in a subprocess so that memory is fully returned to
+        # the OS between iterations. Python's allocator retains freed memory,
+        # so in-process iteration causes cumulative RSS growth and OOM on the
+        # combined dataset (~23 GB peak per run).
+        task_arg = task or ""
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "from slices.data.datamodule import ICUDataModule; "
+                f"dm = ICUDataModule("
+                f"  processed_dir={processed_dir!r},"
+                f"  task_name={task!r},"
+                f"  batch_size=1,"
+                f"  num_workers=0,"
+                f"  seed={seed},"
+                f"  label_fraction={label_fraction},"
+                f"); "
+                "dm.setup(); "
+                f"print(len(dm.dataset))",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            n_samples = result.stdout.strip().split("\n")[-1]
+            print(f"  -> Cached ({int(n_samples):,} samples)")
+        else:
+            stderr_tail = result.stderr.strip().split("\n")[-3:]
+            print(f"  -> ERROR: {' '.join(stderr_tail)}")
 
     print("\nWarmup complete. Tensor caches saved to data/processed/<dataset>/.tensor_cache/")
     print("You can now run experiments in parallel without OOM.")

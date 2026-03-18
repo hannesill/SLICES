@@ -18,6 +18,78 @@ logger = logging.getLogger(__name__)
 MIN_STD_THRESHOLD = 1e-6  # Minimum standard deviation to avoid division by zero
 
 
+def extract_tensors_from_dataframe(
+    timeseries_df: "pl.DataFrame",
+    seq_length: int,
+    n_features: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract tensors directly from a Polars DataFrame using zero-copy operations.
+
+    Uses Polars explode() to flatten nested List(List(...)) columns into flat
+    arrays, then reshapes to 3D tensors. This avoids to_list() which creates
+    Python objects (~28 bytes per float) and can use 3-4x more memory than the
+    actual data, causing OOM on large datasets.
+
+    Requires uniform sequence lengths (all rows must have exactly seq_length
+    timesteps with n_features features each). Falls back to convert_raw_to_tensors
+    if sequences are non-uniform.
+
+    Args:
+        timeseries_df: Polars DataFrame with 'timeseries' and 'mask' columns,
+            where each is List(List(Float64|Boolean)).
+        seq_length: Expected sequence length per sample.
+        n_features: Expected number of features per timestep.
+
+    Returns:
+        Tuple of (timeseries_tensor, masks_tensor), each shaped
+        (n_samples, seq_length, n_features).
+    """
+    import polars as pl
+
+    n_samples = len(timeseries_df)
+    logger.debug("[1/3] Extracting tensors from DataFrame...")
+
+    # Verify uniform sequence lengths for reshape safety
+    ts_lens = timeseries_df["timeseries"].list.len()
+    if ts_lens.min() != ts_lens.max():
+        logger.info(
+            "Non-uniform sequence lengths detected, falling back to list conversion"
+        )
+        raw_timeseries = timeseries_df["timeseries"].to_list()
+        raw_masks = timeseries_df["mask"].to_list()
+        return convert_raw_to_tensors(raw_timeseries, raw_masks, seq_length, n_features)
+
+    # Fast path: explode nested lists to flat array, then reshape.
+    # This stays in Arrow/numpy memory without creating Python objects.
+    # Extract columns as Series first, then process sequentially to limit
+    # peak memory (avoids holding both float64 intermediate + final tensor).
+    ts_series = timeseries_df["timeseries"]
+    mask_series = timeseries_df["mask"]
+
+    # Cast to Float32 in Polars to avoid a float64 intermediate array (~5 GB saved)
+    timeseries_np = (
+        ts_series.explode()
+        .explode()
+        .cast(pl.Float32)
+        .to_numpy(writable=True)
+        .reshape(n_samples, seq_length, n_features)
+    )
+    del ts_series
+    timeseries_tensor = torch.from_numpy(timeseries_np)
+
+    masks_np = (
+        mask_series.explode()
+        .explode()
+        .to_numpy()
+        .reshape(n_samples, seq_length, n_features)
+    )
+    del mask_series
+    masks_tensor = torch.from_numpy(masks_np.copy())  # copy needed: bool dtype
+    del masks_np
+
+    return timeseries_tensor, masks_tensor
+
+
 def convert_raw_to_tensors(
     raw_timeseries: List[List[List[float]]],
     raw_masks: List[List[List[bool]]],
@@ -29,6 +101,9 @@ def convert_raw_to_tensors(
     Converts all samples to numpy arrays in batches for memory efficiency,
     then stacks into single tensors. Samples shorter than seq_length are
     padded with NaN/False; longer samples are truncated.
+
+    Note: For large datasets, prefer extract_tensors_from_dataframe() which
+    avoids the expensive to_list() conversion.
 
     Args:
         raw_timeseries: List of timeseries arrays (n_samples x seq_len x n_features).
