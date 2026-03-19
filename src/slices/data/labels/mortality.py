@@ -90,7 +90,7 @@ class MortalityLabelBuilder(LabelBuilder):
         if needs_date_of_death and merged["date_of_death"].null_count() == len(merged):
             logger.warning(
                 f"Task '{self.config.task_name}': 'date_of_death' is null for all stays. "
-                "This dataset (e.g., eICU) may not provide death timestamps. "
+                "This dataset may not provide death timestamps. "
                 "All windowed mortality labels will be null (excluded). "
                 "Consider using hospital-mortality (hospital_expire_flag) instead."
             )

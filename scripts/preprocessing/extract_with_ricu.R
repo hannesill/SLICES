@@ -643,7 +643,10 @@ extract_mortality_eicu <- function(dataset, dict) {
     names(pat)[1]
   }
 
-  # eICU uses status strings and offsets rather than timestamps
+  # eICU uses status strings and offsets rather than timestamps.
+  # We derive date_of_death from hospitaldischargeoffset for expired patients,
+  # using the same synthetic epoch as the stays extraction so timelines are
+  # consistent (intime = epoch, outtime = epoch + unitdischargeoffset*60).
   hosp_flag <- if ("hospitaldischargestatus" %in% names(pat)) {
     as.integer(tolower(pat$hospitaldischargestatus) == "expired")
   } else {
