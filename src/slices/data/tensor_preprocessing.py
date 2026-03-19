@@ -6,9 +6,12 @@ Extracted from ICUDataset._precompute_tensors for modularity.
 """
 
 import logging
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import polars as pl
 import torch
 from tqdm import tqdm
 
@@ -52,9 +55,7 @@ def extract_tensors_from_dataframe(
     # Verify uniform sequence lengths for reshape safety
     ts_lens = timeseries_df["timeseries"].list.len()
     if ts_lens.min() != ts_lens.max():
-        logger.info(
-            "Non-uniform sequence lengths detected, falling back to list conversion"
-        )
+        logger.info("Non-uniform sequence lengths detected, falling back to list conversion")
         raw_timeseries = timeseries_df["timeseries"].to_list()
         raw_masks = timeseries_df["mask"].to_list()
         return convert_raw_to_tensors(raw_timeseries, raw_masks, seq_length, n_features)
@@ -77,12 +78,7 @@ def extract_tensors_from_dataframe(
     del ts_series
     timeseries_tensor = torch.from_numpy(timeseries_np)
 
-    masks_np = (
-        mask_series.explode()
-        .explode()
-        .to_numpy()
-        .reshape(n_samples, seq_length, n_features)
-    )
+    masks_np = mask_series.explode().explode().to_numpy().reshape(n_samples, seq_length, n_features)
     del mask_series
     masks_tensor = torch.from_numpy(masks_np.copy())  # copy needed: bool dtype
     del masks_np
@@ -119,9 +115,7 @@ def convert_raw_to_tensors(
     logger.debug("[1/3] Converting to tensors...")
 
     # Pre-allocate output arrays to avoid 2x peak memory from list + np.stack
-    timeseries_np = np.full(
-        (n_samples, seq_length, n_features), np.nan, dtype=np.float32
-    )
+    timeseries_np = np.full((n_samples, seq_length, n_features), np.nan, dtype=np.float32)
     masks_np = np.zeros((n_samples, seq_length, n_features), dtype=bool)
 
     sample_iter = range(n_samples)
@@ -133,12 +127,8 @@ def convert_raw_to_tensors(
         mask_data = raw_masks[i]
         actual_len = min(len(ts_data), seq_length)
 
-        timeseries_np[i, :actual_len] = np.array(
-            ts_data[:actual_len], dtype=np.float32
-        )
-        masks_np[i, :actual_len] = np.array(
-            mask_data[:actual_len], dtype=bool
-        )
+        timeseries_np[i, :actual_len] = np.array(ts_data[:actual_len], dtype=np.float32)
+        masks_np[i, :actual_len] = np.array(mask_data[:actual_len], dtype=bool)
 
     # Convert to tensors (torch.from_numpy shares memory, no copy)
     timeseries_tensor = torch.from_numpy(timeseries_np)  # (n_samples, seq_len, n_features)
