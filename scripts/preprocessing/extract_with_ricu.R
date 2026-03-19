@@ -643,18 +643,36 @@ extract_mortality_eicu <- function(dataset, dict) {
     names(pat)[1]
   }
 
-  # eICU uses status strings and offsets rather than timestamps
+  # eICU uses status strings and offsets rather than timestamps.
+  # We derive date_of_death from hospitaldischargeoffset for expired patients,
+  # using the same synthetic epoch as the stays extraction so timelines are
+  # consistent (intime = epoch, outtime = epoch + unitdischargeoffset*60).
   hosp_flag <- if ("hospitaldischargestatus" %in% names(pat)) {
     as.integer(tolower(pat$hospitaldischargestatus) == "expired")
   } else {
     NA_integer_
   }
 
+  epoch <- as.POSIXct("2000-01-01 00:00:00", tz = "UTC")
+  expired <- !is.na(hosp_flag) & hosp_flag == 1L
+
+  # For expired patients, hospital discharge time ≈ death time
+  dod <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
+  if ("hospitaldischargeoffset" %in% names(pat)) {
+    dod[expired] <- epoch + pat$hospitaldischargeoffset[expired] * 60
+  }
+
+  # dischtime from hospitaldischargeoffset for all patients
+  dischtime <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
+  if ("hospitaldischargeoffset" %in% names(pat)) {
+    dischtime <- epoch + pat$hospitaldischargeoffset * 60
+  }
+
   df <- data.frame(
     stay_id              = pat[[id_col]],
-    date_of_death        = NA,
+    date_of_death        = dod,
     hospital_expire_flag = hosp_flag,
-    dischtime            = NA,
+    dischtime            = dischtime,
     discharge_location   = if ("unitdischargelocation" %in% names(pat)) {
       pat$unitdischargelocation
     } else {
