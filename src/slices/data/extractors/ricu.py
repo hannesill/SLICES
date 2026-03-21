@@ -14,7 +14,8 @@ Usage:
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import polars as pl
 import yaml
@@ -30,6 +31,21 @@ from slices.data.config_schemas import TimeSeriesConceptConfig
 
 from .base import BaseExtractor, ExtractorConfig
 
+
+def _resolve_parquet_path(path: Path) -> Union[Path, str]:
+    """Resolve a parquet path that may be a single file or a directory of parts.
+
+    The R extraction script writes timeseries as a directory of part files
+    to avoid exceeding memory limits. Polars scan_parquet accepts both a
+    single file and a glob pattern.
+    """
+    if path.is_file():
+        return path
+    if path.is_dir():
+        return str(path / "*.parquet")
+    raise FileNotFoundError(f"Parquet path not found: {path}")
+
+
 console = Console()
 
 
@@ -37,9 +53,9 @@ class RicuExtractor(BaseExtractor):
     """Reads pre-extracted RICU parquet output.
 
     Expects parquet_root to contain:
-      ricu_timeseries.parquet, ricu_stays.parquet,
-      ricu_mortality.parquet, ricu_diagnoses.parquet,
-      ricu_metadata.yaml
+      ricu_timeseries.parquet (file or directory of part files),
+      ricu_stays.parquet, ricu_mortality.parquet,
+      ricu_diagnoses.parquet, ricu_metadata.yaml
 
     Unlike other extractors, this class does NOT use DuckDB or concept YAML
     files. All extraction and binning is handled by the R script; this class
@@ -85,7 +101,7 @@ class RicuExtractor(BaseExtractor):
         Categorical string columns (e.g. avpu, mech_vent) are mapped to
         ordinal floats using CATEGORICAL_ENCODINGS.
         """
-        path = self.parquet_root / "ricu_timeseries.parquet"
+        path = _resolve_parquet_path(self.parquet_root / "ricu_timeseries.parquet")
         df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
         return self._encode_categorical_columns(df)
 
@@ -141,7 +157,7 @@ class RicuExtractor(BaseExtractor):
             raise ValueError(
                 f"Unknown data source '{source_name}'. " f"Available: {list(dispatch.keys())}"
             )
-        path = self.parquet_root / dispatch[source_name]
+        path = _resolve_parquet_path(self.parquet_root / dispatch[source_name])
         df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
         if source_name == "timeseries":
             df = self._encode_categorical_columns(df)
