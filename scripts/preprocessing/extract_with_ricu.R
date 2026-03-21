@@ -5,7 +5,8 @@
 #' RICU handles concept lookup, unit harmonization, hourly binning, and gap filling.
 #'
 #' Output files:
-#'   ricu_timeseries.parquet  - stay_id, hour, {concept}, {concept}_mask, ...
+#'   ricu_timeseries.parquet/ - directory of parquet part files (chunked by stay)
+#'                              each part: stay_id, hour, {concept}, {concept}_mask, ...
 #'   ricu_stays.parquet       - stay_id, patient_id, intime, outtime, los_days, ...
 #'   ricu_mortality.parquet   - stay_id, date_of_death, hospital_expire_flag, ...
 #'   ricu_diagnoses.parquet   - stay_id, icd_code, icd_version
@@ -25,6 +26,7 @@ if (length(missing) > 0) {
   message("Installing missing R packages: ", paste(missing, collapse = ", "))
   install.packages(missing, repos = "https://cloud.r-project.org")
 }
+
 
 suppressPackageStartupMessages({
   library(ricu)
@@ -144,7 +146,8 @@ discover_ts_concepts <- function(dataset, dict) {
 # 2. Extract time-series
 # ---------------------------------------------------------------------------
 
-extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
+extract_timeseries <- function(dataset, concepts, seq_length_hours, dict,
+                               output_path) {
   message("[2/6] Extracting time-series data in batches...")
 
   # Pre-compute stay windows (shared across all batches)
@@ -159,10 +162,8 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
     ceiling(seq_len(n_concepts) / CONCEPT_BATCH_SIZE)
   )
   n_batches <- length(batch_indices)
-  batch_results <- vector("list", n_batches)
 
   # Helper: load a set of concepts into a data.table with stay_id, hour, and
-
   # value + mask columns.  Returns NULL on failure.
   load_batch <- function(cnames, dataset, dict, wins, seq_length_hours) {
     tryCatch({
@@ -197,7 +198,34 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
     })
   }
 
+  # --- Phase 0: Discover stay IDs and assign to chunks -------------------
+  # We need stay IDs before processing batches so we can pre-split each
+  # batch by stay chunk on first read (avoiding re-reading batch files).
+  message("  Discovering stay IDs...")
+  all_stay_ids <- sort(unique(as.data.table(wins)[[id_var(wins)]]))
+  STAY_CHUNK_SIZE <- 10000L
+  # Map each stay_id to its chunk index for fast lookup
+  chunk_assignment <- ceiling(seq_along(all_stay_ids) / STAY_CHUNK_SIZE)
+  names(chunk_assignment) <- as.character(all_stay_ids)
+  n_chunks <- max(chunk_assignment)
+  n_stays <- length(all_stay_ids)
+  message(sprintf("  %d stays → %d chunks of ≤%d stays.",
+                  n_stays, n_chunks, STAY_CHUNK_SIZE))
+
+  # --- Phase 1: Extract concept batches and pre-split by stay chunk ------
+  # Each concept batch is loaded once, split by stay chunk, and written to
+  # tmp/<chunk_idx>/batch_<batch_idx>.parquet.  This way each batch's data
+  # is read from RICU exactly once (not re-read per chunk in Phase 2).
+  tmp_dir <- file.path(tempdir(), "ricu_merge")
+  unlink(tmp_dir, recursive = TRUE)
+  for (ci in seq_len(n_chunks)) {
+    dir.create(file.path(tmp_dir, sprintf("chunk_%04d", ci)),
+               recursive = TRUE, showWarnings = FALSE)
+  }
+
   skipped_concepts <- character(0)
+  all_concept_cols <- character(0)
+  batches_written <- 0L
 
   for (b in seq_len(n_batches)) {
     batch_concepts <- concepts[batch_indices[[b]]]
@@ -239,9 +267,28 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
       skipped_concepts <- c(skipped_concepts, batch_concepts)
     }
 
-    batch_results[[b]] <- dt
+    if (!is.null(dt)) {
+      # Track concept columns from this batch
+      batch_cols <- names(dt)
+      batch_mask <- batch_cols[grepl("_mask$", batch_cols)]
+      all_concept_cols <- c(all_concept_cols, sub("_mask$", "", batch_mask))
+
+      # Split by stay chunk and write to per-chunk directories
+      dt[, .chunk_idx := chunk_assignment[as.character(stay_id)]]
+      for (ci in unique(dt$.chunk_idx)) {
+        chunk_dt <- dt[.chunk_idx == ci]
+        chunk_dt[, .chunk_idx := NULL]
+        chunk_path <- file.path(tmp_dir, sprintf("chunk_%04d", ci),
+                                sprintf("batch_%03d.parquet", b))
+        write_parquet(chunk_dt, chunk_path)
+        rm(chunk_dt)
+      }
+      batches_written <- batches_written + 1L
+    }
     rm(dt); gc()
   }
+
+  rm(wins); gc()
 
   if (length(skipped_concepts) > 0) {
     message(sprintf("  Skipped %d concepts: %s",
@@ -249,31 +296,57 @@ extract_timeseries <- function(dataset, concepts, seq_length_hours, dict) {
                     paste(skipped_concepts, collapse = ", ")))
   }
 
-  # Merge all batches by (stay_id, hour), skipping NULLs
-  message("  Merging batches...")
-  batch_results <- Filter(Negate(is.null), batch_results)
-  if (length(batch_results) == 0) {
+  if (batches_written == 0) {
     stop("All concept batches failed. Cannot continue.")
   }
-  merged <- batch_results[[1]]
-  if (length(batch_results) > 1) {
-    for (b in 2:length(batch_results)) {
-      merged <- merge(merged, batch_results[[b]],
-                      by = c("stay_id", "hour"), all = TRUE)
+
+  # --- Phase 2: Merge pre-split batches per chunk -------------------------
+  # For each stay chunk, read its small batch files, merge wide, and write
+  # one output parquet part.  Peak memory ≈ one chunk's worth of data in
+  # narrow form + one chunk wide (~1-2 GB for 10k stays).
+  message(sprintf("  Merging %d chunks...", n_chunks))
+  dir.create(output_path, showWarnings = FALSE, recursive = TRUE)
+  total_rows <- 0L
+
+  for (ci in seq_len(n_chunks)) {
+    chunk_dir <- file.path(tmp_dir, sprintf("chunk_%04d", ci))
+    batch_files <- list.files(chunk_dir, pattern = "\\.parquet$",
+                              full.names = TRUE)
+    if (length(batch_files) == 0) next
+
+    chunk_merged <- NULL
+    for (bf in batch_files) {
+      batch_dt <- as.data.table(read_parquet(bf))
+      setkeyv(batch_dt, c("stay_id", "hour"))
+
+      if (is.null(chunk_merged)) {
+        chunk_merged <- batch_dt
+      } else {
+        chunk_merged <- merge(chunk_merged, batch_dt,
+                              by = c("stay_id", "hour"), all = TRUE)
+      }
+      rm(batch_dt)
+    }
+    gc()
+
+    total_rows <- total_rows + nrow(chunk_merged)
+
+    out_path <- file.path(output_path, sprintf("part_%04d.parquet", ci))
+    write_parquet(chunk_merged, out_path)
+    rm(chunk_merged); gc()
+
+    if (ci %% 5 == 0 || ci == n_chunks) {
+      message(sprintf("    Chunk %d/%d done.", ci, n_chunks))
     }
   }
-  rm(batch_results, wins)
-  gc()
-
-  # Collect concept column names (value columns paired with _mask columns)
-  all_cols <- names(merged)
-  mask_cols <- all_cols[grepl("_mask$", all_cols)]
-  concept_cols <- sub("_mask$", "", mask_cols)
 
   message(sprintf("  Time-series: %d rows, %d concepts, %d stays.",
-                  nrow(merged), length(concept_cols),
-                  length(unique(merged$stay_id))))
-  list(df = merged, concept_cols = concept_cols)
+                  total_rows, length(all_concept_cols), n_stays))
+
+  # Clean up temp files
+  unlink(tmp_dir, recursive = TRUE)
+
+  list(concept_cols = all_concept_cols, n_stays = n_stays)
 }
 
 # ---------------------------------------------------------------------------
@@ -993,13 +1066,12 @@ main <- function(opts) {
     stop("No time-series concepts found. Check ricu setup.")
   }
 
-  # 2. Extract timeseries
-  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours, dict)
+  # 2. Extract timeseries (writes parquet directly to avoid full-table merge)
+  ts_path <- file.path(output_dir, "ricu_timeseries.parquet")
+  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours, dict,
+                                   output_path = ts_path)
   concept_cols <- ts_result$concept_cols
-  n_stays <- length(unique(ts_result$df$stay_id))
-  # arrow::write_parquet writes data.table directly — no as.data.frame() needed
-  write_parquet(ts_result$df, file.path(output_dir, "ricu_timeseries.parquet"))
-  rm(ts_result); gc()
+  n_stays <- ts_result$n_stays
 
   # 3. Extract stays
   stays <- extract_stays_data(dataset, dict)
