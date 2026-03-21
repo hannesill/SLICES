@@ -228,6 +228,30 @@ class TestExtractTimeseries:
         ts = ricu_extractor.extract_timeseries([100])
         assert len(ts) == 6  # 6 hours of data
 
+    def test_reads_from_partitioned_directory(self, ricu_output_dir: Path, tmp_path: Path) -> None:
+        """Timeseries stored as a directory of part files (chunked output)."""
+        ts_file = ricu_output_dir / "ricu_timeseries.parquet"
+        original = pl.read_parquet(ts_file)
+
+        # Split into two part files in a directory with the same name
+        ts_file.unlink()
+        ts_file.mkdir()
+        part1 = original.filter(pl.col("stay_id") == 100)
+        part2 = original.filter(pl.col("stay_id").is_in([200, 300]))
+        part1.write_parquet(ts_file / "part_0001.parquet")
+        part2.write_parquet(ts_file / "part_0002.parquet")
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed_partitioned"),
+        )
+        extractor = RicuExtractor(config)
+        ts = extractor.extract_timeseries([100, 200, 300])
+
+        assert set(ts["stay_id"].unique().to_list()) == {100, 200, 300}
+        assert len(ts) == len(original)
+        assert set(ts.columns) == set(original.columns)
+
 
 class TestExtractDataSource:
     """Tests for extract_data_source()."""
