@@ -8,9 +8,6 @@
 task_name: mortality_24h
 task_type: binary
 n_classes: null
-observation_window_hours: 48  # must match seq_length_hours
-prediction_window_hours: 24
-gap_hours: 0
 head_type: mlp
 hidden_dims: [64]
 dropout: 0.3
