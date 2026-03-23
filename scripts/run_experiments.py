@@ -41,6 +41,55 @@ TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
 SEEDS = [42, 123, 456]
 LABEL_FRACTIONS_FULL = [0.01, 0.05, 0.1, 0.25, 0.5]
 LABEL_FRACTIONS_TREND = [0.1]
+LABEL_FRACTIONS_PILOT = [0.01, 0.1, 0.5]
+
+# Model capacity variants for Sprint 7 pilot (capacity ablation)
+MODEL_SIZES = {
+    "medium": {
+        "model": "transformer_medium",
+        "encoder": {"d_model": 128, "n_layers": 4, "n_heads": 8, "d_ff": 512},
+        "ssl_scale": {
+            "mae": {
+                "ssl.decoder_d_model": 128,
+                "ssl.decoder_n_layers": 2,
+                "ssl.decoder_n_heads": 8,
+                "ssl.decoder_d_ff": 512,
+            },
+            "jepa": {
+                "ssl.predictor_d_model": 64,
+                "ssl.predictor_n_layers": 2,
+                "ssl.predictor_n_heads": 4,
+                "ssl.predictor_d_ff": 256,
+            },
+            "contrastive": {
+                "ssl.proj_hidden_dim": 512,
+                "ssl.proj_output_dim": 128,
+            },
+        },
+    },
+    "large": {
+        "model": "transformer_large",
+        "encoder": {"d_model": 256, "n_layers": 4, "n_heads": 8, "d_ff": 1024},
+        "ssl_scale": {
+            "mae": {
+                "ssl.decoder_d_model": 256,
+                "ssl.decoder_n_layers": 2,
+                "ssl.decoder_n_heads": 8,
+                "ssl.decoder_d_ff": 1024,
+            },
+            "jepa": {
+                "ssl.predictor_d_model": 128,
+                "ssl.predictor_n_layers": 2,
+                "ssl.predictor_n_heads": 8,
+                "ssl.predictor_d_ff": 512,
+            },
+            "contrastive": {
+                "ssl.proj_hidden_dim": 1024,
+                "ssl.proj_output_dim": 256,
+            },
+        },
+    },
+}
 LR_ABLATION = [2e-4, 5e-4, 2e-3]  # 1e-3 reused from Phase 1
 MASK_RATIO_ABLATION = [0.3, 0.75]  # 0.5 reused from Phase 1
 TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
@@ -60,6 +109,7 @@ BASELINE_SPRINTS: dict[str, list[str]] = {
     "5": ["1", "2", "3", "4"],
     "6": ["1", "2", "3", "4", "5"],
     "7": ["1", "3", "5"],
+    "7p": ["6"],
     "8": ["1", "1b", "1c", "5"],
 }
 
@@ -405,6 +455,78 @@ class MatrixBuilder:
                     for frac in LABEL_FRACTIONS_TREND:
                         self._add_supervised(sprint, ds, seed, task, frac)
 
+    def build_sprint7p(self):
+        """Model capacity pilot — test whether bigger models widen SSL-supervised gap.
+
+        MIIV only, seed 42, mortality_24h, MAE + supervised.
+        Two model sizes (medium=128d/4L, large=256d/4L) at 3 label fractions.
+        Compares against Sprint 6 baseline (64d/2L) — no need to rerun baseline.
+
+        Total: 2 pretrain + 2×3 finetune + 2×3 probe + 2×3 supervised = 20 runs.
+        """
+        sprint = "7p"
+        ds, seed, task = "miiv", 42, "mortality_24h"
+
+        for size_name, size_cfg in MODEL_SIZES.items():
+            # Common model override for all runs at this size
+            model_extra = {"model": size_cfg["model"]}
+
+            # --- MAE pretrain (new encoder size, full data) ---
+            pretrain_extra = {
+                **model_extra,
+                **size_cfg["ssl_scale"]["mae"],
+            }
+            pt = self._add_pretrain(sprint, "mae", ds, seed, extra=pretrain_extra)
+
+            # --- MAE finetune (Protocol B) + probe (Protocol A) ---
+            finetune_extra = {**model_extra}
+            for frac in LABEL_FRACTIONS_PILOT:
+                self._add_finetune(
+                    sprint,
+                    "mae",
+                    ds,
+                    seed,
+                    task,
+                    False,
+                    pt,
+                    label_fraction=frac,
+                    extra=finetune_extra,
+                    name_extra={"size": size_name},
+                )
+                self._add_finetune(
+                    sprint,
+                    "mae",
+                    ds,
+                    seed,
+                    task,
+                    True,
+                    pt,
+                    label_fraction=frac,
+                    extra=finetune_extra,
+                    name_extra={"size": size_name},
+                )
+
+            # --- Supervised baseline (same larger encoder, from scratch) ---
+            sup_extra = {**model_extra}
+            for frac in LABEL_FRACTIONS_PILOT:
+                sup_name = f"supervised_{task}_{ds}_seed{seed}_{size_name}"
+                if frac < 1.0:
+                    frac_str = str(frac).replace(".", "")
+                    sup_name += f"_frac{frac_str}"
+                run = Run(
+                    id=f"s{sprint}_{sup_name}",
+                    sprint=sprint,
+                    run_type="supervised",
+                    paradigm="supervised",
+                    dataset=ds,
+                    seed=seed,
+                    output_dir=_output_dir(sprint, sup_name),
+                    task=task,
+                    label_fraction=frac,
+                    extra_overrides=sup_extra,
+                )
+                self.runs.append(run)
+
     def build_sprint7(self):
         """Cross-dataset transfer — Protocol B only (full finetune)."""
         sprint = "7"
@@ -447,6 +569,7 @@ class MatrixBuilder:
         self.build_sprint4()
         self.build_sprint5()
         self.build_sprint6()
+        self.build_sprint7p()
         self.build_sprint7()
         self.build_sprint8()
         return self.runs
@@ -993,10 +1116,10 @@ def cmd_warmup(args):
         # the OS between iterations. Python's allocator retains freed memory,
         # so in-process iteration causes cumulative RSS growth and OOM on the
         # combined dataset (~23 GB peak per run).
-        task_arg = task or ""
         result = subprocess.run(
             [
-                sys.executable, "-c",
+                sys.executable,
+                "-c",
                 "from slices.data.datamodule import ICUDataModule; "
                 f"dm = ICUDataModule("
                 f"  processed_dir={processed_dir!r},"

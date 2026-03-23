@@ -1,0 +1,28 @@
+# @package encoder
+# Transformer Encoder — Medium (128-dim, 4-layer)
+#
+# Scaled-up variant for capacity ablation (Sprint 7 pilot).
+# ~816K params vs ~112K for the base transformer.
+# All other settings identical to transformer.yaml.
+
+name: transformer
+
+# Input/Output dimensions
+d_model: 128
+max_seq_length: 168  # Overridden at runtime by datamodule
+
+# Transformer architecture
+n_layers: 4
+n_heads: 8    # 128 / 8 = 16 per head
+d_ff: 512     # 4 * d_model
+
+# Regularization
+dropout: 0.1
+
+# Architecture choices (same as base)
+activation: gelu
+layer_norm_eps: 1.0e-5
+prenorm: true
+use_positional_encoding: true
+pooling: mean
+obs_aware: true
