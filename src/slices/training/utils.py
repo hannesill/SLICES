@@ -273,11 +273,21 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if run_name and freeze_encoder is True:
         run_name = run_name.replace("_finetune_", "_probe_", 1)
 
+    # Adjust group to include protocol and label_fraction so that W&B "Group" view
+    # aggregates exactly the runs that differ only by seed.
+    group = cfg.logging.get("wandb_group", None)
+    if group:
+        if freeze_encoder is True:
+            group = group.replace("finetune_", "probe_", 1)
+        if label_fraction is not None and label_fraction < 1.0:
+            frac_str = str(label_fraction).replace(".", "")
+            group += f"_frac{frac_str}"
+
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
         entity=cfg.logging.get("wandb_entity", None),
         name=run_name,
-        group=cfg.logging.get("wandb_group", None),
+        group=group,
         tags=tags,
         save_dir=cfg.output_dir,
         log_model=False,
