@@ -16,6 +16,7 @@ from omegaconf import DictConfig
 
 from slices.models.encoders import (
     EncoderWithMissingToken,
+    GRUDEncoder,
     ObservationTransformerEncoder,
     SMARTEncoder,
     TransformerEncoder,
@@ -37,6 +38,10 @@ def infer_encoder_type(state_dict: Dict[str, Any]) -> Optional[str]:
         Inferred encoder name or None if unknown.
     """
     keys = set(state_dict.keys())
+
+    # GRU-D encoder has gru_cell and decay parameters
+    if any("gru_cell" in k for k in keys) and any("W_gamma_x" in k for k in keys):
+        return "gru_d"
 
     # SMART encoder has distinctive keys
     if any("embedder" in k or "blocks" in k or "seq_att" in k for k in keys):
@@ -73,7 +78,7 @@ def wrap_encoder_with_missing_token(
         The encoder, possibly wrapped with EncoderWithMissingToken.
     """
     # Skip for encoders that handle missingness intrinsically
-    if isinstance(encoder, (ObservationTransformerEncoder, SMARTEncoder)):
+    if isinstance(encoder, (ObservationTransformerEncoder, SMARTEncoder, GRUDEncoder)):
         logger.info(
             "Skipping EncoderWithMissingToken wrapper for %s "
             "(handles missingness intrinsically)",

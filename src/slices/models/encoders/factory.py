@@ -7,6 +7,7 @@ with proper configuration validation.
 from typing import Any, Dict, Type
 
 from .base import BaseEncoder, EncoderConfig
+from .gru_d import GRUDConfig, GRUDEncoder
 from .linear import LinearConfig, LinearEncoder
 from .observation import ObservationTransformerConfig, ObservationTransformerEncoder
 from .smart import SMARTEncoder, SMARTEncoderConfig
@@ -18,6 +19,7 @@ ENCODER_REGISTRY: Dict[str, Type[BaseEncoder]] = {
     "linear": LinearEncoder,
     "smart": SMARTEncoder,
     "observation_transformer": ObservationTransformerEncoder,
+    "gru_d": GRUDEncoder,
 }
 
 # Registry of encoder configs
@@ -26,6 +28,7 @@ ENCODER_CONFIG_REGISTRY: Dict[str, Type[EncoderConfig]] = {
     "linear": LinearConfig,
     "smart": SMARTEncoderConfig,
     "observation_transformer": ObservationTransformerConfig,
+    "gru_d": GRUDConfig,
 }
 
 
