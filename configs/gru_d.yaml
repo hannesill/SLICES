@@ -1,0 +1,105 @@
+# GRU-D Baseline Training Configuration
+#
+# Trains GRU-D from scratch as a non-SSL baseline. GRU-D handles missing data
+# natively via learnable decay, so no missing token is needed.
+#
+# Uses the same FineTuneModule infrastructure as supervised training.
+#
+# Example usage:
+#   uv run python scripts/training/supervised.py --config-name gru_d dataset=miiv
+#   uv run python scripts/training/supervised.py --config-name gru_d dataset=eicu tasks=mortality_hospital
+
+defaults:
+  - data: ricu
+  - model: gru_d
+  - tasks: mortality_24h
+  - _self_
+
+# Project info
+project_name: slices
+experiment_name: gru_d
+
+# Dataset identifier
+dataset: miiv
+
+# Paradigm
+paradigm: gru_d
+
+# Experiment sprint
+sprint: null
+revision: null
+rerun_reason: null
+
+# Random seed
+seed: 42
+
+# Resume from checkpoint
+ckpt_path: null
+
+# Output directory
+output_dir: ${hydra:runtime.output_dir}
+checkpoint_dir: ${output_dir}/checkpoints
+
+# Label fraction for label-efficiency ablations
+label_fraction: 1.0
+
+# Training configuration
+training:
+  max_epochs: 100
+  batch_size: 64
+  freeze_encoder: false
+  use_missing_token: false
+  accelerator: auto
+  devices: auto
+  precision: 32
+  class_weight: balanced
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  early_stopping_patience: 10
+  label_smoothing: 0.1
+  overfit_batches: 0
+
+# Optimizer
+optimizer:
+  name: adamw
+  lr: 3.0e-4
+  weight_decay: 0.05
+
+# Scheduler
+scheduler:
+  name: cosine
+  T_max: ${training.max_epochs}
+  eta_min: 1.0e-6
+
+# Evaluation
+eval:
+  fairness:
+    enabled: false
+    protected_attributes: [gender, age_group, race]
+    min_subgroup_size: 50
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: ${project_name}
+  wandb_entity: null
+  run_name: s${sprint}_gru_d_${dataset}_${task.task_name}_seed${seed}
+  wandb_group: gru_d_${dataset}_${task.task_name}
+  wandb_tags:
+    - "phase:baseline"
+    - "dataset:${dataset}"
+    - "paradigm:gru_d"
+    - "task:${task.task_name}"
+    - "seed:${seed}"
+    - "lr:${optimizer.lr}"
+  log_every_n_steps: 10
+
+# Hydra
+hydra:
+  run:
+    dir: outputs/gru_d/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/gru_d/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+deterministic: false

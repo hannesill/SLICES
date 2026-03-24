@@ -1,0 +1,81 @@
+# XGBoost Baseline Configuration
+#
+# Non-neural baseline using hand-crafted tabular features from ICU time series.
+# Reuses ICUDataModule for data/splits and logs to W&B.
+#
+# Example usage:
+#   uv run python scripts/training/xgboost_baseline.py dataset=miiv
+#   uv run python scripts/training/xgboost_baseline.py dataset=eicu tasks=mortality_hospital
+
+defaults:
+  - data: ricu
+  - tasks: mortality_24h
+  - _self_
+
+# Project info
+project_name: slices
+experiment_name: xgboost
+
+# Dataset identifier
+dataset: miiv
+
+# Paradigm
+paradigm: xgboost
+
+# Experiment sprint
+sprint: null
+revision: null
+rerun_reason: null
+
+# Random seed
+seed: 42
+
+# Output directory
+output_dir: ${hydra:runtime.output_dir}
+
+# Label fraction for label-efficiency ablations
+label_fraction: 1.0
+
+# XGBoost hyperparameters
+xgboost:
+  n_estimators: 1000
+  max_depth: 6
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 1
+  early_stopping_rounds: 20
+  scale_pos_weight: null  # set to "balanced" to auto-compute from label distribution
+
+# Data loading
+training:
+  batch_size: 256  # for feature extraction only
+
+# Evaluation
+eval:
+  fairness:
+    enabled: false
+    protected_attributes: [gender, age_group, race]
+    min_subgroup_size: 50
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: ${project_name}
+  wandb_entity: null
+  run_name: s${sprint}_xgboost_${dataset}_${task.task_name}_seed${seed}
+  wandb_group: xgboost_${dataset}_${task.task_name}
+  wandb_tags:
+    - "phase:baseline"
+    - "dataset:${dataset}"
+    - "paradigm:xgboost"
+    - "task:${task.task_name}"
+    - "seed:${seed}"
+
+# Hydra
+hydra:
+  run:
+    dir: outputs/xgboost/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/xgboost/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

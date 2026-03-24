@@ -1,0 +1,310 @@
+"""XGBoost baseline for ICU prediction tasks.
+
+Non-neural baseline that extracts hand-crafted tabular features from ICU time
+series and trains XGBoost. Reuses ICUDataModule for data loading and splits,
+and logs metrics to W&B in the same format as neural baselines.
+
+Example usage:
+    uv run python scripts/training/xgboost_baseline.py dataset=miiv
+    uv run python scripts/training/xgboost_baseline.py dataset=eicu tasks=mortality_hospital
+    uv run python scripts/training/xgboost_baseline.py dataset=miiv logging.use_wandb=false
+"""
+
+from pathlib import Path
+
+import hydra
+import numpy as np
+import torch
+from omegaconf import DictConfig, OmegaConf
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
+)
+from slices.data.datamodule import ICUDataModule
+from xgboost import XGBClassifier, XGBRegressor
+
+
+def extract_tabular_features(dataset, indices: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    """Extract per-feature summary statistics from time-series data.
+
+    For each of the D features, computes: mean, std, min, max, first, last,
+    obs_count, obs_fraction over observed values. Total = D * 8 features.
+    Vectorized over the full batch using the dataset's stacked tensors.
+
+    Args:
+        dataset: ICUDataset instance.
+        indices: List of sample indices.
+
+    Returns:
+        X: Feature matrix (N, D*8).
+        y: Label array (N,).
+    """
+    idx_tensor = torch.tensor(indices, dtype=torch.long)
+    ts = dataset._timeseries_tensor[idx_tensor]  # (N, T, D)
+    mask = dataset._mask_tensor[idx_tensor]  # (N, T, D) bool
+
+    N, T, D = ts.shape
+    mask_float = mask.float()
+
+    # obs_count, obs_fraction: (N, D)
+    obs_count = mask_float.sum(dim=1)  # (N, D)
+    obs_frac = obs_count / T
+
+    # Masked sum for mean: sum observed values / count
+    masked_ts = ts * mask_float  # zero out unobserved
+    feat_sum = masked_ts.sum(dim=1)  # (N, D)
+    safe_count = obs_count.clamp(min=1)
+    feat_mean = feat_sum / safe_count  # (N, D)
+
+    # Masked std
+    diff_sq = ((ts - feat_mean.unsqueeze(1)) ** 2) * mask_float
+    feat_var = diff_sq.sum(dim=1) / safe_count
+    feat_std = torch.sqrt(feat_var)
+
+    # Min/max: fill unobserved with +inf/-inf before taking min/max
+    zeros = ts.new_zeros(N, D)
+    ts_for_min = ts.clone()
+    ts_for_min[~mask] = float("inf")
+    raw_min = ts_for_min.min(dim=1).values
+    feat_min = torch.where(obs_count > 0, raw_min, zeros)
+
+    ts_for_max = ts.clone()
+    ts_for_max[~mask] = float("-inf")
+    raw_max = ts_for_max.max(dim=1).values
+    feat_max = torch.where(obs_count > 0, raw_max, zeros)
+
+    # first and last observed value per feature
+    # Use argmax on mask along time axis for first; flip for last
+    # For features with no observations, falls back to 0
+    first_idx = mask.float().argmax(dim=1)  # (N, D) — first True index
+    last_idx = T - 1 - mask.flip(dims=[1]).float().argmax(dim=1)  # (N, D)
+
+    feat_first = ts.gather(1, first_idx.unsqueeze(1)).squeeze(1)  # (N, D)
+    feat_last = ts.gather(1, last_idx.unsqueeze(1)).squeeze(1)  # (N, D)
+
+    # Zero out features with no observations
+    no_obs = obs_count == 0
+    feat_mean = torch.nan_to_num(feat_mean, nan=0.0)
+    feat_first[no_obs] = 0.0
+    feat_last[no_obs] = 0.0
+
+    # Stack: (N, D, 8) -> (N, D*8)
+    features = torch.stack(
+        [feat_mean, feat_std, feat_min, feat_max, feat_first, feat_last, obs_count, obs_frac],
+        dim=-1,
+    )  # (N, D, 8)
+    X = features.reshape(N, D * 8).numpy()
+
+    # Labels
+    if dataset._labels_tensor is not None:
+        y = dataset._labels_tensor[idx_tensor].numpy()
+    else:
+        y = np.zeros(N, dtype=np.float32)
+
+    return X, y
+
+
+@hydra.main(version_base=None, config_path="../../configs", config_name="xgboost")
+def main(cfg: DictConfig) -> None:
+    """Train XGBoost baseline."""
+    print("=" * 80)
+    print("XGBoost Baseline")
+    print("=" * 80)
+
+    print("\nConfiguration:")
+    print(OmegaConf.to_yaml(cfg))
+
+    # =========================================================================
+    # 1. Setup DataModule
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("1. Setting up DataModule")
+    print("=" * 80)
+
+    task_name = cfg.task.get("task_name", "mortality_24h")
+    task_type = cfg.task.get("task_type", "binary")
+
+    datamodule = ICUDataModule(
+        processed_dir=cfg.data.processed_dir,
+        task_name=task_name,
+        batch_size=cfg.training.batch_size,
+        num_workers=0,  # feature extraction is single-threaded
+        seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
+    )
+    datamodule.setup()
+
+    print(f"\n  Task: {task_name} ({task_type})")
+    print(f"  Train: {len(datamodule.train_indices)} stays")
+    print(f"  Val:   {len(datamodule.val_indices)} stays")
+    print(f"  Test:  {len(datamodule.test_indices)} stays")
+
+    # =========================================================================
+    # 2. Extract Tabular Features
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("2. Extracting tabular features")
+    print("=" * 80)
+
+    X_train, y_train = extract_tabular_features(datamodule.dataset, datamodule.train_indices)
+    X_val, y_val = extract_tabular_features(datamodule.dataset, datamodule.val_indices)
+    X_test, y_test = extract_tabular_features(datamodule.dataset, datamodule.test_indices)
+
+    print(f"  Train: {X_train.shape}")
+    print(f"  Val:   {X_val.shape}")
+    print(f"  Test:  {X_test.shape}")
+
+    # =========================================================================
+    # 3. Train XGBoost
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("3. Training XGBoost")
+    print("=" * 80)
+
+    xgb_cfg = cfg.xgboost
+    early_stopping_rounds = xgb_cfg.get("early_stopping_rounds", 20)
+    common_params = {
+        "n_estimators": xgb_cfg.n_estimators,
+        "max_depth": xgb_cfg.max_depth,
+        "learning_rate": xgb_cfg.learning_rate,
+        "subsample": xgb_cfg.subsample,
+        "colsample_bytree": xgb_cfg.colsample_bytree,
+        "min_child_weight": xgb_cfg.min_child_weight,
+        "early_stopping_rounds": early_stopping_rounds,
+        "random_state": cfg.seed,
+        "n_jobs": -1,
+    }
+
+    if task_type == "regression":
+        model = XGBRegressor(**common_params)
+    else:
+        # Auto-compute scale_pos_weight if requested
+        scale_pos_weight = xgb_cfg.get("scale_pos_weight", None)
+        if scale_pos_weight == "balanced":
+            n_pos = y_train.sum()
+            n_neg = len(y_train) - n_pos
+            scale_pos_weight = n_neg / max(n_pos, 1)
+            print(f"  scale_pos_weight (balanced): {scale_pos_weight:.2f}")
+        model = XGBClassifier(
+            **common_params,
+            scale_pos_weight=scale_pos_weight,
+            eval_metric="logloss",
+        )
+
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=50,
+    )
+
+    # =========================================================================
+    # 4. Evaluate
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("4. Evaluating on test set")
+    print("=" * 80)
+
+    metrics = {}
+
+    if task_type == "regression":
+        y_pred = model.predict(X_test)
+        metrics["test/mse"] = mean_squared_error(y_test, y_pred)
+        metrics["test/mae"] = mean_absolute_error(y_test, y_pred)
+        metrics["test/r2"] = r2_score(y_test, y_pred)
+    else:
+        y_pred_proba = model.predict_proba(X_test)[:, 1]
+        y_pred_class = (y_pred_proba >= 0.5).astype(int)
+
+        metrics["test/auroc"] = roc_auc_score(y_test, y_pred_proba)
+        metrics["test/auprc"] = average_precision_score(y_test, y_pred_proba)
+        metrics["test/accuracy"] = accuracy_score(y_test, y_pred_class)
+
+    print("\n  Test Results:")
+    for key, value in metrics.items():
+        print(f"    {key}: {value:.4f}")
+
+    # =========================================================================
+    # 5. Optional Fairness Evaluation
+    # =========================================================================
+    fairness_cfg = cfg.get("eval", {}).get("fairness", {})
+    fairness_report = None
+    if fairness_cfg.get("enabled", False):
+        print("\n" + "=" * 80)
+        print("5. Fairness Evaluation")
+        print("=" * 80)
+
+        from slices.eval.fairness_evaluator import FairnessEvaluator
+
+        # Get stay_ids for test set
+        test_stay_ids = [datamodule.dataset.stay_ids[i] for i in datamodule.test_indices]
+
+        evaluator = FairnessEvaluator(
+            static_df=datamodule.dataset.static_df,
+            protected_attributes=list(
+                fairness_cfg.get("protected_attributes", ["gender", "age_group"])
+            ),
+            min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
+            task_type=task_type,
+        )
+
+        if task_type == "regression":
+            predictions_tensor = torch.tensor(y_pred, dtype=torch.float32)
+        else:
+            predictions_tensor = torch.tensor(y_pred_proba, dtype=torch.float32)
+        labels_tensor = torch.tensor(y_test, dtype=torch.float32)
+
+        fairness_report = evaluator.evaluate(predictions_tensor, labels_tensor, test_stay_ids)
+        evaluator.print_report(fairness_report)
+
+    # =========================================================================
+    # 6. Log to W&B
+    # =========================================================================
+    if cfg.logging.get("use_wandb", False):
+        import wandb
+
+        tags = list(cfg.logging.get("wandb_tags", []))
+        if cfg.get("sprint"):
+            tags.append(f"sprint:{cfg.sprint}")
+        if cfg.get("label_fraction", 1.0) < 1.0:
+            tags.append(f"label_fraction:{cfg.label_fraction}")
+
+        run = wandb.init(
+            project=cfg.logging.wandb_project,
+            entity=cfg.logging.get("wandb_entity", None),
+            name=cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}"),
+            group=cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}"),
+            tags=tags,
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
+        run.summary.update(metrics)
+        if fairness_report:
+            run.summary.update(
+                {
+                    f"fairness/{k}": v
+                    for k, v in fairness_report.items()
+                    if isinstance(v, (int, float))
+                }
+            )
+        wandb.finish()
+
+    # =========================================================================
+    # 7. Save Model
+    # =========================================================================
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_path = output_dir / "xgboost_model.json"
+    model.save_model(str(model_path))
+    print(f"\n  Model saved to: {model_path}")
+
+    print("\n" + "=" * 80)
+    print("XGBoost Baseline Complete!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
