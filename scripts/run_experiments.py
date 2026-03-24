@@ -39,6 +39,7 @@ SSL_PARADIGMS = ["mae", "jepa", "contrastive"]
 DATASETS = ["miiv", "eicu", "combined"]
 TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
 SEEDS = [42, 123, 456]
+SEEDS_EXTENDED = [42, 123, 456, 789, 1011]  # 5 seeds for cheap baselines
 LABEL_FRACTIONS_FULL = [0.01, 0.05, 0.1, 0.25, 0.5]
 LABEL_FRACTIONS_TREND = [0.1]
 LABEL_FRACTIONS_PILOT = [0.01, 0.1, 0.5]
@@ -128,8 +129,8 @@ PROTO_B = {"freeze_encoder": False, "max_epochs": 100, "patience": 10, "lr": 3e-
 class Run:
     id: str
     sprint: str
-    run_type: str  # "pretrain" | "finetune" | "supervised"
-    paradigm: str  # "mae" | "jepa" | "contrastive" | "supervised"
+    run_type: str  # "pretrain" | "finetune" | "supervised" | "gru_d" | "xgboost"
+    paradigm: str  # "mae" | "jepa" | "contrastive" | "supervised" | "gru_d" | "xgboost"
     dataset: str
     seed: int
     output_dir: str
@@ -149,6 +150,10 @@ class Run:
             return self._finetune_cmd(runs_by_id)
         elif self.run_type == "supervised":
             return self._supervised_cmd()
+        elif self.run_type == "gru_d":
+            return self._gru_d_cmd()
+        elif self.run_type == "xgboost":
+            return self._xgboost_cmd()
         else:
             raise ValueError(f"Unknown run_type: {self.run_type}")
 
@@ -213,6 +218,44 @@ class Run:
             "run",
             "python",
             "scripts/training/supervised.py",
+            f"dataset={self.dataset}",
+            f"tasks={self.task}",
+            f"seed={self.seed}",
+            f"sprint={self.sprint}",
+            f"hydra.run.dir={self.output_dir}",
+        ]
+        if self.label_fraction < 1.0:
+            cmd.append(f"label_fraction={self.label_fraction}")
+        for k, v in self.extra_overrides.items():
+            cmd.append(f"{k}={v}")
+        return cmd
+
+    def _gru_d_cmd(self) -> list[str]:
+        cmd = [
+            "uv",
+            "run",
+            "python",
+            "scripts/training/supervised.py",
+            "--config-name",
+            "gru_d",
+            f"dataset={self.dataset}",
+            f"tasks={self.task}",
+            f"seed={self.seed}",
+            f"sprint={self.sprint}",
+            f"hydra.run.dir={self.output_dir}",
+        ]
+        if self.label_fraction < 1.0:
+            cmd.append(f"label_fraction={self.label_fraction}")
+        for k, v in self.extra_overrides.items():
+            cmd.append(f"{k}={v}")
+        return cmd
+
+    def _xgboost_cmd(self) -> list[str]:
+        cmd = [
+            "uv",
+            "run",
+            "python",
+            "scripts/training/xgboost_baseline.py",
             f"dataset={self.dataset}",
             f"tasks={self.task}",
             f"seed={self.seed}",
@@ -359,10 +402,52 @@ class MatrixBuilder:
         self.runs.append(run)
         return run
 
+    def _add_gru_d(
+        self, sprint: str, dataset: str, seed: int, task: str, label_fraction: float = 1.0
+    ) -> Run:
+        name = f"gru_d_{task}_{dataset}_seed{seed}"
+        if label_fraction < 1.0:
+            frac_str = str(label_fraction).replace(".", "")
+            name += f"_frac{frac_str}"
+        run = Run(
+            id=f"s{sprint}_{name}",
+            sprint=sprint,
+            run_type="gru_d",
+            paradigm="gru_d",
+            dataset=dataset,
+            seed=seed,
+            output_dir=_output_dir(sprint, name),
+            task=task,
+            label_fraction=label_fraction,
+        )
+        self.runs.append(run)
+        return run
+
+    def _add_xgboost(
+        self, sprint: str, dataset: str, seed: int, task: str, label_fraction: float = 1.0
+    ) -> Run:
+        name = f"xgboost_{task}_{dataset}_seed{seed}"
+        if label_fraction < 1.0:
+            frac_str = str(label_fraction).replace(".", "")
+            name += f"_frac{frac_str}"
+        run = Run(
+            id=f"s{sprint}_{name}",
+            sprint=sprint,
+            run_type="xgboost",
+            paradigm="xgboost",
+            dataset=dataset,
+            seed=seed,
+            output_dir=_output_dir(sprint, name),
+            task=task,
+            label_fraction=label_fraction,
+        )
+        self.runs.append(run)
+        return run
+
     # --- Sprint builders ---
 
     def build_sprint1(self):
-        """MIMIC, all tasks, Protocol B + supervised, seed=42."""
+        """MIMIC, all tasks, Protocol B + supervised + baselines, seed=42."""
         ds, seed, sprint = "miiv", 42, "1"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -370,6 +455,8 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, False, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
+            self._add_gru_d(sprint, ds, seed, task)
+            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint1b(self):
         """LR sensitivity, MIMIC, mortality_24h, seed=42."""
@@ -398,7 +485,7 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
 
     def build_sprint3(self):
-        """eICU, both protocols + supervised, seed=42."""
+        """eICU, both protocols + supervised + baselines, seed=42."""
         ds, seed, sprint = "eicu", 42, "3"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -407,9 +494,11 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
+            self._add_gru_d(sprint, ds, seed, task)
+            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint4(self):
-        """Combined, both protocols + supervised, seed=42."""
+        """Combined, both protocols + supervised + baselines, seed=42."""
         ds, seed, sprint = "combined", 42, "4"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -418,6 +507,8 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
+            self._add_gru_d(sprint, ds, seed, task)
+            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint5(self):
         """Seeds 123, 456 for datasets miiv, eicu, combined."""
@@ -431,6 +522,8 @@ class MatrixBuilder:
                         self._add_finetune(sprint, p, ds, seed, task, True, pt)
                 for task in TASKS:
                     self._add_supervised(sprint, ds, seed, task)
+                    self._add_gru_d(sprint, ds, seed, task)
+                    self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint6(self):
         """Label efficiency ablation — reuses Phase 1 encoders."""
@@ -451,9 +544,13 @@ class MatrixBuilder:
                 # Supervised label efficiency
                 for frac in LABEL_FRACTIONS_FULL:
                     self._add_supervised(sprint, ds, seed, "mortality_24h", frac)
+                    self._add_gru_d(sprint, ds, seed, "mortality_24h", frac)
+                    self._add_xgboost(sprint, ds, seed, "mortality_24h", frac)
                 for task in TASKS[1:]:
                     for frac in LABEL_FRACTIONS_TREND:
                         self._add_supervised(sprint, ds, seed, task, frac)
+                        self._add_gru_d(sprint, ds, seed, task, frac)
+                        self._add_xgboost(sprint, ds, seed, task, frac)
 
     def build_sprint7p(self):
         """Model capacity pilot — test whether bigger models widen SSL-supervised gap.
@@ -559,6 +656,143 @@ class MatrixBuilder:
                         sprint, p, "miiv", seed, "mortality_24h", False, pt, name_extra=extra
                     )
 
+    def build_sprint10(self):
+        """Seeds 789, 1011 for Sprints 1-8 scope (SSL + supervised)."""
+        sprint = "10"
+        new_seeds = [789, 1011]
+
+        # --- Core experiments (Sprint 1-4 scope) ---
+        for seed in new_seeds:
+            for ds in DATASETS:
+                for p in SSL_PARADIGMS:
+                    pt = self._add_pretrain(sprint, p, ds, seed)
+                    for task in TASKS:
+                        self._add_finetune(sprint, p, ds, seed, task, False, pt)
+                        self._add_finetune(sprint, p, ds, seed, task, True, pt)
+                for task in TASKS:
+                    self._add_supervised(sprint, ds, seed, task)
+
+        # --- Label efficiency (Sprint 6 scope) ---
+        for seed in new_seeds:
+            for ds in DATASETS:
+                for p in SSL_PARADIGMS:
+                    pt = self._get_pretrain(p, ds, seed)
+                    for frac in LABEL_FRACTIONS_FULL:
+                        self._add_finetune(sprint, p, ds, seed, "mortality_24h", False, pt, frac)
+                        self._add_finetune(sprint, p, ds, seed, "mortality_24h", True, pt, frac)
+                    for task in TASKS[1:]:
+                        for frac in LABEL_FRACTIONS_TREND:
+                            self._add_finetune(sprint, p, ds, seed, task, False, pt, frac)
+                            self._add_finetune(sprint, p, ds, seed, task, True, pt, frac)
+                for frac in LABEL_FRACTIONS_FULL:
+                    self._add_supervised(sprint, ds, seed, "mortality_24h", frac)
+                for task in TASKS[1:]:
+                    for frac in LABEL_FRACTIONS_TREND:
+                        self._add_supervised(sprint, ds, seed, task, frac)
+
+        # --- Cross-dataset transfer (Sprint 7 scope) ---
+        for seed in new_seeds:
+            for source_ds, target_ds in TRANSFER_PAIRS:
+                for p in SSL_PARADIGMS:
+                    pt = self._get_pretrain(p, source_ds, seed)
+                    for task in TASKS:
+                        self._add_finetune(
+                            sprint,
+                            p,
+                            target_ds,
+                            seed,
+                            task,
+                            False,
+                            pt,
+                            source_dataset=source_ds,
+                        )
+
+        # --- HP ablations (Sprint 8 scope) ---
+        for seed in new_seeds:
+            for p in SSL_PARADIGMS:
+                for lr in LR_ABLATION:
+                    extra = {"optimizer.lr": lr}
+                    pt = self._add_pretrain(sprint, p, "miiv", seed, extra)
+                    self._add_finetune(
+                        sprint,
+                        p,
+                        "miiv",
+                        seed,
+                        "mortality_24h",
+                        False,
+                        pt,
+                        name_extra=extra,
+                    )
+                for mr in MASK_RATIO_ABLATION:
+                    extra = {"ssl.mask_ratio": mr}
+                    pt = self._add_pretrain(sprint, p, "miiv", seed, extra)
+                    self._add_finetune(
+                        sprint,
+                        p,
+                        "miiv",
+                        seed,
+                        "mortality_24h",
+                        False,
+                        pt,
+                        name_extra=extra,
+                    )
+
+    def build_sprint11(self):
+        """Classical baselines (XGBoost + GRU-D), all datasets/tasks, 5 seeds."""
+        sprint = "11"
+        for seed in SEEDS_EXTENDED:
+            for ds in DATASETS:
+                for task in TASKS:
+                    self._add_xgboost(sprint, ds, seed, task)
+                    self._add_gru_d(sprint, ds, seed, task)
+                # Baseline label-efficiency (mirrors Sprint 6 baseline scope)
+                for frac in LABEL_FRACTIONS_FULL:
+                    self._add_gru_d(sprint, ds, seed, "mortality_24h", frac)
+                    self._add_xgboost(sprint, ds, seed, "mortality_24h", frac)
+                for task_name in TASKS[1:]:
+                    for frac in LABEL_FRACTIONS_TREND:
+                        self._add_gru_d(sprint, ds, seed, task_name, frac)
+                        self._add_xgboost(sprint, ds, seed, task_name, frac)
+
+    def build_sprint12(self):
+        """SMART (NeurIPS 2024) as external SSL reference, 5 seeds.
+
+        SMART uses its own encoder (MART architecture, d_model=32) and element-wise
+        masking — NOT part of the controlled comparison (different architecture).
+        Included as an external SSL SOTA reference point in the appendix.
+        """
+        sprint = "12"
+        # model=smart selects the MART encoder; ssl=smart is set via paradigm arg
+        pretrain_extra = {"model": "smart"}
+        finetune_extra = {"model": "smart"}
+
+        for seed in SEEDS_EXTENDED:
+            for ds in DATASETS:
+                # Pretrain (ssl=smart is set by _pretrain_cmd via self.paradigm)
+                pt = self._add_pretrain(sprint, "smart", ds, seed, pretrain_extra)
+                # Both protocols + all tasks
+                for task in TASKS:
+                    self._add_finetune(
+                        sprint,
+                        "smart",
+                        ds,
+                        seed,
+                        task,
+                        False,
+                        pt,
+                        extra=finetune_extra,
+                    )
+                    self._add_finetune(
+                        sprint,
+                        "smart",
+                        ds,
+                        seed,
+                        task,
+                        True,
+                        pt,
+                        extra=finetune_extra,
+                    )
+
     def build_all(self) -> list[Run]:
         """Build full experiment matrix. Order matters for dedup."""
         self.build_sprint1()
@@ -572,6 +806,9 @@ class MatrixBuilder:
         self.build_sprint7p()
         self.build_sprint7()
         self.build_sprint8()
+        self.build_sprint10()
+        self.build_sprint11()
+        self.build_sprint12()
         return self.runs
 
 
