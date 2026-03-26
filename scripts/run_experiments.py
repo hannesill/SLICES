@@ -1300,12 +1300,11 @@ def cmd_retry(args):
 
 
 def cmd_warmup(args):
-    """Pre-build tensor caches for requested sprints.
+    """Pre-build raw tensor caches for requested sprints.
 
-    Instantiates ICUDataModule for each unique (dataset, task, seed, label_fraction)
-    combination sequentially. This populates the tensor cache so that parallel
-    experiment runs can load preprocessed data from disk instead of each process
-    independently loading and converting raw parquet files (which causes OOM).
+    Creates one raw tensor cache per dataset (not per task/seed/fraction).
+    The cache stores unnormalized tensors; normalization is applied at runtime.
+    This means only ~0.8GB total cache instead of 140GB+.
     """
     if args.revision:
         print(f"Note: --revision={args.revision} ignored (warmup is revision-independent)")
@@ -1327,47 +1326,35 @@ def cmd_warmup(args):
         all_by_id = {r.id: r for r in all_runs}
         runs = [all_by_id[d] for d in deps_needed if d in all_by_id] + runs
 
-    # Collect unique (dataset, task, seed, label_fraction) combos
-    # task=None for pretrain, task=<name> for finetune/supervised
-    combos: dict[tuple, None] = {}  # ordered set via dict
+    # Collect unique datasets — raw tensor cache is per-dataset only
+    datasets: dict[str, None] = {}  # ordered set via dict
     for r in runs:
-        if r.run_type == "pretrain":
-            key = (r.dataset, None, r.seed, 1.0)
-        else:
-            key = (r.dataset, r.task, r.seed, r.label_fraction)
-        combos[key] = None
+        datasets[r.dataset] = None
 
     print(f"Warming up tensor caches for sprint(s) {', '.join(sprints)}")
-    print(f"  {len(combos)} unique (dataset, task, seed, label_fraction) combinations\n")
+    print(f"  {len(datasets)} unique datasets to cache\n")
 
     import subprocess
     import sys
 
-    for i, (dataset, task, seed, label_fraction) in enumerate(combos, 1):
+    for i, dataset in enumerate(datasets, 1):
         processed_dir = f"data/processed/{dataset}"
-        task_str = task or "(pretrain/no task)"
-        frac_str = f", frac={label_fraction}" if label_fraction < 1.0 else ""
-        print(f"[{i}/{len(combos)}] {dataset} / {task_str} / seed={seed}{frac_str}")
+        print(f"[{i}/{len(datasets)}] {dataset}")
 
-        # Run each warmup in a subprocess so that memory is fully returned to
-        # the OS between iterations. Python's allocator retains freed memory,
-        # so in-process iteration causes cumulative RSS growth and OOM on the
-        # combined dataset (~23 GB peak per run).
+        # Run in a subprocess so that memory is fully returned to the OS.
+        # Uses task_name=None (unsupervised) to load ALL stays without
+        # any task-specific filtering — this populates the raw cache.
         result = subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "from slices.data.datamodule import ICUDataModule; "
-                f"dm = ICUDataModule("
-                f"  processed_dir={processed_dir!r},"
-                f"  task_name={task!r},"
-                f"  batch_size=1,"
-                f"  num_workers=0,"
-                f"  seed={seed},"
-                f"  label_fraction={label_fraction},"
+                "from slices.data.dataset import ICUDataset; "
+                f"ds = ICUDataset("
+                f"  data_dir={processed_dir!r},"
+                f"  task_name=None,"
+                f"  normalize=False,"
                 f"); "
-                "dm.setup(); "
-                f"print(len(dm.dataset))",
+                f"print(len(ds))",
             ],
             capture_output=True,
             text=True,
@@ -1379,7 +1366,7 @@ def cmd_warmup(args):
             stderr_tail = result.stderr.strip().split("\n")[-3:]
             print(f"  -> ERROR: {' '.join(stderr_tail)}")
 
-    print("\nWarmup complete. Tensor caches saved to data/processed/<dataset>/.tensor_cache/")
+    print("\nWarmup complete. Raw tensor caches saved to data/processed/<dataset>/.tensor_cache/")
     print("You can now run experiments in parallel without OOM.")
 
 

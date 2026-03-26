@@ -9,7 +9,7 @@ import hashlib
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import torch
 import yaml
@@ -112,106 +112,67 @@ def save_normalization_stats(
 
 
 def get_tensor_cache_key(
-    normalize: bool,
     seq_length: int,
     n_features: int,
-    train_indices: Optional[List[int]],
-    excluded_stay_ids: Optional[Set[int]],
 ) -> str:
-    """Generate a hash key for tensor caching based on preprocessing parameters.
+    """Generate a hash key for raw tensor caching based on shape parameters.
 
-    The cache key includes:
-    - normalize flag
-    - seq_length
-    - hash of train_indices (for normalization stats consistency)
-    - hash of excluded_stay_ids (for filtering consistency)
+    The cache stores raw (unnormalized) tensors for the full dataset.
+    Normalization is applied at runtime using run-specific train_indices,
+    so the cache key only depends on tensor shape parameters.
 
     Args:
-        normalize: Whether normalization is enabled.
         seq_length: Sequence length.
         n_features: Number of features.
-        train_indices: Optional list of training indices.
-        excluded_stay_ids: Optional set of excluded stay IDs.
 
     Returns:
         Hash string to use as cache identifier.
     """
-    # Create a deterministic string representation of parameters
     params = {
-        "normalize": normalize,
         "seq_length": seq_length,
         "n_features": n_features,
     }
-
-    # Hash train_indices if provided (too large to store directly)
-    if train_indices is not None:
-        indices_str = ",".join(map(str, sorted(train_indices)))
-        indices_hash = hashlib.md5(indices_str.encode()).hexdigest()[:8]
-        params["train_indices_hash"] = indices_hash
-    else:
-        params["train_indices_hash"] = "none"
-
-    # Hash excluded_stay_ids if provided (ensures cache invalidation when filtering changes)
-    if excluded_stay_ids:
-        excluded_str = ",".join(map(str, sorted(excluded_stay_ids)))
-        excluded_hash = hashlib.md5(excluded_str.encode()).hexdigest()[:8]
-        params["excluded_stays_hash"] = excluded_hash
-    else:
-        params["excluded_stays_hash"] = "none"
-
-    # Create overall hash
     params_str = str(sorted(params.items()))
     return hashlib.md5(params_str.encode()).hexdigest()[:12]
 
 
 def get_tensor_cache_path(
     data_dir: Path,
-    normalize: bool,
     seq_length: int,
     n_features: int,
-    train_indices: Optional[List[int]],
-    excluded_stay_ids: Optional[Set[int]],
 ) -> Path:
-    """Get the path to the tensor cache file.
+    """Get the path to the raw tensor cache file.
 
     Args:
         data_dir: Path to data directory.
-        normalize: Whether normalization is enabled.
         seq_length: Sequence length.
         n_features: Number of features.
-        train_indices: Optional list of training indices.
-        excluded_stay_ids: Optional set of excluded stay IDs.
 
     Returns:
         Path to the tensor cache file.
     """
-    cache_key = get_tensor_cache_key(
-        normalize, seq_length, n_features, train_indices, excluded_stay_ids
-    )
+    cache_key = get_tensor_cache_key(seq_length, n_features)
     cache_dir = data_dir / ".tensor_cache"
     return cache_dir / f"tensors_{cache_key}.pt"
 
 
-def _try_load_cache(
-    cache_path: Path, n_features: int, seq_length: int, normalize: bool
-) -> Optional[Dict[str, Any]]:
-    """Try to load and validate a tensor cache file.
+def _try_load_cache(cache_path: Path, n_features: int, seq_length: int) -> Optional[Dict[str, Any]]:
+    """Try to load and validate a raw tensor cache file.
 
     Args:
         cache_path: Path to the cache file.
         n_features: Expected number of features.
         seq_length: Expected sequence length.
-        normalize: Expected normalize flag.
 
     Returns:
-        Dictionary with cached tensors if valid, None otherwise.
+        Dictionary with cached raw tensors if valid, None otherwise.
     """
     if not cache_path.exists():
         return None
 
     try:
         logger.debug(f"Loading cached tensors from {cache_path.name}")
-        cached = torch.load(cache_path, weights_only=True, mmap=True)
+        cached = torch.load(cache_path, weights_only=True)
 
         # Validate cache metadata
         if cached.get("n_features") != n_features:
@@ -219,9 +180,6 @@ def _try_load_cache(
             return None
         if cached.get("seq_length") != seq_length:
             logger.debug("Cached tensors have different sequence length, recomputing")
-            return None
-        if cached.get("normalize") != normalize:
-            logger.debug("Cached tensors have different normalize flag, recomputing")
             return None
 
         # Validate tensor shapes (support both old list and new stacked format)
@@ -246,7 +204,7 @@ def _try_load_cache(
             cached["mask_tensor"] = masks
 
         n_samples = timeseries.shape[0] if hasattr(timeseries, "shape") else len(timeseries)
-        logger.info(f"Loaded {n_samples:,} cached samples")
+        logger.info(f"Loaded {n_samples:,} cached raw samples")
         return cached
 
     except Exception as e:
@@ -256,75 +214,58 @@ def _try_load_cache(
 
 def load_cached_tensors(
     data_dir: Path,
-    normalize: bool,
     seq_length: int,
     n_features: int,
-    train_indices: Optional[List[int]],
-    excluded_stay_ids: Optional[Set[int]],
 ) -> Optional[Dict[str, Any]]:
-    """Load cached preprocessed tensors if they exist and are valid.
+    """Load cached raw tensors if they exist and are valid.
+
+    The cache stores raw (unnormalized) tensors for the full dataset.
+    Normalization and stay filtering are applied after loading.
 
     Args:
         data_dir: Path to data directory.
-        normalize: Whether normalization is enabled.
         seq_length: Sequence length.
         n_features: Number of features.
-        train_indices: Optional list of training indices.
-        excluded_stay_ids: Optional set of excluded stay IDs.
 
     Returns:
-        Dictionary with cached tensors and metadata if valid, None otherwise.
+        Dictionary with cached raw tensors and metadata if valid, None otherwise.
     """
-    cache_path = get_tensor_cache_path(
-        data_dir, normalize, seq_length, n_features, train_indices, excluded_stay_ids
-    )
-    return _try_load_cache(cache_path, n_features, seq_length, normalize)
+    cache_path = get_tensor_cache_path(data_dir, seq_length, n_features)
+    return _try_load_cache(cache_path, n_features, seq_length)
 
 
 def save_cached_tensors(
     data_dir: Path,
     timeseries_tensor: torch.Tensor,
     mask_tensor: torch.Tensor,
-    feature_means: torch.Tensor,
-    feature_stds: torch.Tensor,
-    normalize: bool,
     seq_length: int,
     n_features: int,
-    train_indices: Optional[List[int]],
-    excluded_stay_ids: Optional[Set[int]],
 ) -> None:
-    """Save preprocessed tensors to cache file.
+    """Save raw tensors to cache file.
+
+    Stores raw (unnormalized) tensors for the full dataset. Normalization
+    and stay filtering are applied at runtime after loading.
 
     Args:
         data_dir: Path to data directory.
-        timeseries_tensor: Preprocessed timeseries tensor.
+        timeseries_tensor: Raw timeseries tensor (unnormalized).
         mask_tensor: Observation mask tensor.
-        feature_means: Per-feature means.
-        feature_stds: Per-feature stds.
-        normalize: Whether normalization is enabled.
         seq_length: Sequence length.
         n_features: Number of features.
-        train_indices: Optional list of training indices.
-        excluded_stay_ids: Optional set of excluded stay IDs.
     """
-    cache_path = get_tensor_cache_path(
-        data_dir, normalize, seq_length, n_features, train_indices, excluded_stay_ids
-    )
+    cache_path = get_tensor_cache_path(data_dir, seq_length, n_features)
     cache_dir = cache_path.parent
     cache_dir.mkdir(exist_ok=True)
 
     cache_data = {
         "timeseries_tensor": timeseries_tensor,
         "mask_tensor": mask_tensor,
-        "feature_means": feature_means,
-        "feature_stds": feature_stds,
         "n_features": n_features,
         "seq_length": seq_length,
-        "normalize": normalize,
     }
 
     try:
-        logger.debug(f"Saving tensors to cache: {cache_path.name}")
+        logger.debug(f"Saving raw tensors to cache: {cache_path.name}")
         torch.save(cache_data, cache_path)
     except Exception as e:
         logger.warning(f"Failed to save tensor cache to {cache_path}: {e}")

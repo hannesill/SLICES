@@ -187,107 +187,102 @@ class ICUDataset(Dataset):
         )
 
     def _load_data(self) -> None:
-        """Load data from Parquet files into memory."""
+        """Load data from Parquet files into memory.
+
+        Uses a two-phase approach for efficiency:
+        1. Load raw tensors from cache (or extract from parquet on cache miss)
+        2. Filter excluded stays, then normalize using run-specific train_indices
+
+        The raw tensor cache is shared across all runs for the same dataset,
+        regardless of task, seed, or label_fraction. This reduces cache size
+        from ~140GB (one per run config) to ~0.8GB (one per dataset).
+        """
         logger.info("Loading data from Parquet files...")
 
-        # Load timeseries (dense format with nested lists)
         timeseries_path = self.data_dir / "timeseries.parquet"
-        logger.debug(f"Loading timeseries from {timeseries_path.name}")
-        self.timeseries_df = pl.read_parquet(timeseries_path)
 
-        # Warn for large datasets that may cause memory issues
-        n_stays = len(self.timeseries_df)
-        if n_stays > LARGE_DATASET_WARNING_THRESHOLD:
-            logger.warning(
-                f"Large dataset detected ({n_stays:,} stays). "
-                "Loading entire dataset into memory."
-            )
-
-        # Load static features
+        # Load static features and labels (always needed)
         static_path = self.data_dir / "static.parquet"
         logger.debug(f"Loading static features from {static_path.name}")
         self.static_df = pl.read_parquet(static_path)
 
-        # Load labels
         labels_path = self.data_dir / "labels.parquet"
         logger.debug(f"Loading labels from {labels_path.name}")
         self.labels_df = pl.read_parquet(labels_path)
 
-        # Pre-filter excluded stays if provided (from DataModule)
-        if self._excluded_stay_ids:
-            logger.debug(f"Pre-filtering {len(self._excluded_stay_ids):,} excluded stays")
-            self.timeseries_df = self.timeseries_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            self.static_df = self.static_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            self.labels_df = self.labels_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            logger.debug(f"Filtered down to {len(self.timeseries_df):,} stays")
+        # Phase 1: Get raw tensors (from cache or parquet)
+        cached_tensors = load_cached_tensors(self.data_dir, self.seq_length, self.n_features)
+        if cached_tensors is not None:
+            timeseries_tensor = cached_tensors["timeseries_tensor"]
+            masks_tensor = cached_tensors["mask_tensor"]
+            # Load stay_ids from parquet (lightweight, just one column)
+            all_stay_ids = pl.read_parquet(timeseries_path, columns=["stay_id"])[
+                "stay_id"
+            ].to_list()
+            logger.info("Using cached raw tensors")
+        else:
+            # Extract from parquet and save raw cache
+            logger.debug(f"Loading timeseries from {timeseries_path.name}")
+            timeseries_df = pl.read_parquet(timeseries_path)
 
-        # Create stay_id -> index mapping
+            n_stays = len(timeseries_df)
+            if n_stays > LARGE_DATASET_WARNING_THRESHOLD:
+                logger.warning(
+                    f"Large dataset detected ({n_stays:,} stays). "
+                    "Loading entire dataset into memory."
+                )
+
+            all_stay_ids = timeseries_df["stay_id"].to_list()
+
+            timeseries_tensor, masks_tensor = extract_tensors_from_dataframe(
+                timeseries_df, self.seq_length, self.n_features
+            )
+            del timeseries_df
+
+            # Save raw tensors to cache (shared across all runs for this dataset)
+            save_cached_tensors(
+                self.data_dir,
+                timeseries_tensor,
+                masks_tensor,
+                self.seq_length,
+                self.n_features,
+            )
+
+        # Phase 2: Filter excluded stays, then normalize
+
+        # Apply stay exclusion filtering (task-specific, e.g. missing labels)
+        if self._excluded_stay_ids:
+            logger.debug(f"Filtering {len(self._excluded_stay_ids):,} excluded stays")
+            keep_indices = [
+                i for i, sid in enumerate(all_stay_ids) if sid not in self._excluded_stay_ids
+            ]
+            idx_tensor = torch.tensor(keep_indices, dtype=torch.long)
+            timeseries_tensor = timeseries_tensor[idx_tensor]
+            masks_tensor = masks_tensor[idx_tensor]
+            self.stay_ids = [all_stay_ids[i] for i in keep_indices]
+
+            # Filter static and labels DataFrames to match
+            excluded_list = list(self._excluded_stay_ids)
+            self.static_df = self.static_df.filter(~pl.col("stay_id").is_in(excluded_list))
+            self.labels_df = self.labels_df.filter(~pl.col("stay_id").is_in(excluded_list))
+            logger.debug(f"Filtered down to {len(self.stay_ids):,} stays")
+        else:
+            self.stay_ids = all_stay_ids
+
+        # Build stay_id -> index mapping
         logger.debug("Building stay_id index mapping")
-        self.stay_ids = self.timeseries_df["stay_id"].to_list()
         self.stay_id_to_idx = {sid: idx for idx, sid in enumerate(self.stay_ids)}
         logger.info(f"Loaded {len(self.stay_ids):,} stays")
 
-        # Try to load cached preprocessed tensors first (big speedup on subsequent runs)
-        cached_tensors = load_cached_tensors(
-            self.data_dir,
-            self.normalize,
-            self.seq_length,
-            self.n_features,
-            self.train_indices,
-            self._excluded_stay_ids,
+        # Try to load existing normalization stats (for reproducibility)
+        cached_stats = load_normalization_stats(self.data_dir, self.train_indices, self.normalize)
+
+        # Apply normalization and imputation
+        self._precompute_tensors(
+            precomputed_tensors=(timeseries_tensor, masks_tensor),
+            train_indices=self.train_indices,
+            cached_stats=cached_stats,
         )
-        if cached_tensors is not None:
-            # Use cached tensors (stacked format)
-            self._timeseries_tensor = cached_tensors["timeseries_tensor"]
-            self._mask_tensor = cached_tensors["mask_tensor"]
-            self.feature_means = cached_tensors["feature_means"]
-            self.feature_stds = cached_tensors["feature_stds"]
-            logger.info("Using cached preprocessed tensors")
-            # Free raw DataFrame — not needed when using cached tensors
-            del self.timeseries_df
-        else:
-            # Extract tensors directly from Polars DataFrame.
-            # Uses explode() for zero-copy extraction instead of to_list(),
-            # which creates Python objects and can OOM on large datasets.
-            timeseries_tensor, masks_tensor = extract_tensors_from_dataframe(
-                self.timeseries_df, self.seq_length, self.n_features
-            )
-
-            # Free raw DataFrame immediately to reduce peak memory.
-            # get_preprocessing_stages() reloads from parquet on demand.
-            del self.timeseries_df
-
-            # Try to load existing normalization stats (for reproducibility)
-            cached_stats = load_normalization_stats(
-                self.data_dir, self.train_indices, self.normalize
-            )
-
-            # Apply normalization and imputation (steps 2 and 3)
-            self._precompute_tensors(
-                precomputed_tensors=(timeseries_tensor, masks_tensor),
-                train_indices=self.train_indices,
-                cached_stats=cached_stats,
-            )
-
-            # Save preprocessed tensors to cache for next run
-            save_cached_tensors(
-                self.data_dir,
-                self._timeseries_tensor,
-                self._mask_tensor,
-                self.feature_means,
-                self.feature_stds,
-                self.normalize,
-                self.seq_length,
-                self.n_features,
-                self.train_indices,
-                self._excluded_stay_ids,
-            )
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
