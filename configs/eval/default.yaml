@@ -27,7 +27,9 @@ metrics:
   # Decision threshold for binary classification
   threshold: 0.5
 
-# Fairness analysis configuration (not yet implemented)
+# Fairness analysis configuration
+# Enable in-training fairness eval via eval.fairness.enabled=true, or use
+# scripts/eval/evaluate_fairness.py for post-run batch evaluation.
 # fairness:
 #   enabled: false
 #   protected_attributes:
