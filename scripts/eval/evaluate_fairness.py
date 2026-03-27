@@ -189,9 +189,11 @@ def find_best_checkpoint(
 ) -> Optional[Path]:
     """Find the best .ckpt file in the run's checkpoint directory.
 
-    Globs for finetune-*.ckpt or supervised-*.ckpt (excluding last.ckpt),
-    parses the metric value from the filename, and returns the best one.
-    Falls back to the most recently modified non-last checkpoint.
+    Search strategy:
+    1. Look for metric-named .ckpt files directly in checkpoints/ (standard case)
+    2. Look for .ckpt files in subdirectories (Lightning creates subdirs when the
+       monitor metric contains '/' — e.g. val/auprc becomes a directory separator)
+    3. Fall back to last.ckpt
 
     Args:
         output_dir: Run output directory (from W&B config).
@@ -206,38 +208,43 @@ def find_best_checkpoint(
         log.warning("  Checkpoint dir not found: %s", ckpt_dir)
         return None
 
-    # Glob for all .ckpt files, exclude last.ckpt
-    ckpts = [p for p in ckpt_dir.glob("*.ckpt") if p.name != "last.ckpt"]
+    # Strategy 1: Direct .ckpt files (excluding last*.ckpt variants)
+    ckpts = [p for p in ckpt_dir.glob("*.ckpt") if not p.name.startswith("last")]
+
+    # Strategy 2: .ckpt files in subdirectories (Lightning '/' in metric name issue)
     if not ckpts:
-        # Fall back to last.ckpt if nothing else exists
-        last = ckpt_dir / "last.ckpt"
-        if last.exists():
-            log.info("  Only last.ckpt found, using it")
-            return last
-        log.warning("  No checkpoints found in %s", ckpt_dir)
-        return None
+        ckpts = list(ckpt_dir.glob("*/*.ckpt"))
 
-    # Try to parse metric value from filename: prefix-{epoch}-{metric}.ckpt
-    # e.g. finetune-012-val/auprc=0.8432.ckpt or finetune-012-0.8432.ckpt
-    metric_pattern = re.compile(r"[-=](\d+\.\d+)\.ckpt$")
-    scored = []
-    for p in ckpts:
-        match = metric_pattern.search(p.name)
-        if match:
-            scored.append((float(match.group(1)), p))
+    # Parse metric values from filenames if we found any candidates
+    if ckpts:
+        metric_pattern = re.compile(r"[-=](\d+\.\d+)\.ckpt$")
+        scored = []
+        for p in ckpts:
+            match = metric_pattern.search(p.name)
+            if match:
+                scored.append((float(match.group(1)), p))
 
-    if scored:
-        # Regression: lower metric is better (val/mse); classification: higher (val/auprc)
-        pick_lowest = task_type == "regression"
-        scored.sort(key=lambda x: x[0], reverse=not pick_lowest)
-        best = scored[0][1]
-        log.info("  Best checkpoint: %s (metric=%.4f)", best.name, scored[0][0])
-        return best
+        if scored:
+            # Regression: lower is better (val/mse); classification: higher (val/auprc)
+            pick_lowest = task_type == "regression"
+            scored.sort(key=lambda x: x[0], reverse=not pick_lowest)
+            best = scored[0][1]
+            log.info("  Best checkpoint: %s (metric=%.4f)", best.name, scored[0][0])
+            return best
 
-    # Fallback: most recently modified
-    ckpts.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    log.info("  Using most recent checkpoint: %s", ckpts[0].name)
-    return ckpts[0]
+        # Non-last checkpoints exist but no parseable metric — pick most recent
+        ckpts.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        log.info("  Using most recent checkpoint: %s", ckpts[0].name)
+        return ckpts[0]
+
+    # Strategy 3: Fall back to last.ckpt
+    last = ckpt_dir / "last.ckpt"
+    if last.exists():
+        log.info("  Using last.ckpt (no best checkpoint found)")
+        return last
+
+    log.warning("  No checkpoints found in %s", ckpt_dir)
+    return None
 
 
 # ---------------------------------------------------------------------------
