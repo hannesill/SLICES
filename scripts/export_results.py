@@ -107,6 +107,28 @@ TEST_METRICS = [
     "test/r2",
     # Universal
     "test/loss",
+    # Fairness (populated by scripts/eval/evaluate_fairness.py)
+    "fairness/gender/worst_group_auroc",
+    "fairness/gender/worst_group_auprc",
+    "fairness/gender/auroc_gap",
+    "fairness/gender/auprc_gap",
+    "fairness/gender/demographic_parity_diff",
+    "fairness/gender/equalized_odds_diff",
+    "fairness/gender/disparate_impact_ratio",
+    "fairness/age_group/worst_group_auroc",
+    "fairness/age_group/worst_group_auprc",
+    "fairness/age_group/auroc_gap",
+    "fairness/age_group/auprc_gap",
+    "fairness/age_group/demographic_parity_diff",
+    "fairness/age_group/equalized_odds_diff",
+    "fairness/age_group/disparate_impact_ratio",
+    "fairness/race/worst_group_auroc",
+    "fairness/race/worst_group_auprc",
+    "fairness/race/auroc_gap",
+    "fairness/race/auprc_gap",
+    "fairness/race/demographic_parity_diff",
+    "fairness/race/equalized_odds_diff",
+    "fairness/race/disparate_impact_ratio",
 ]
 
 VAL_METRICS = [

@@ -9,6 +9,7 @@ This module provides:
 
 from slices.eval.fairness_evaluator import FairnessEvaluator
 from slices.eval.imputation import ImputationEvaluator
+from slices.eval.inference import run_inference
 from slices.eval.metrics import (
     MetricConfig,
     build_metrics,
@@ -24,4 +25,5 @@ __all__ = [
     "ImputationEvaluator",
     "bootstrap_ci",
     "paired_bootstrap_test",
+    "run_inference",
 ]

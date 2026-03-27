@@ -322,29 +322,13 @@ def run_fairness_evaluation(
     print("=" * 80)
 
     from slices.eval.fairness_evaluator import FairnessEvaluator
+    from slices.eval.inference import run_inference
 
-    model.eval()
-    all_preds, all_labels, all_stay_ids = [], [], []
-    for batch in datamodule.test_dataloader():
-        with torch.no_grad():
-            outputs = model(
-                batch["timeseries"].to(model.device),
-                batch["mask"].to(model.device),
-            )
-        probs = outputs["probs"]
-        if probs.dim() > 1 and probs.shape[1] == 2:
-            all_preds.append(probs[:, 1].cpu())
-        else:
-            all_preds.append(probs.cpu())
-        all_labels.append(batch["label"].cpu())
-        all_stay_ids.extend(
-            batch["stay_id"].tolist()
-            if isinstance(batch["stay_id"], torch.Tensor)
-            else batch["stay_id"]
-        )
-
-    predictions = torch.cat(all_preds)
-    labels_tensor = torch.cat(all_labels)
+    predictions, labels_tensor, all_stay_ids = run_inference(
+        model,
+        datamodule.test_dataloader(),
+        device=model.device,
+    )
 
     evaluator = FairnessEvaluator(
         static_df=datamodule.dataset.static_df,
