@@ -135,10 +135,14 @@ def fetch_eval_runs(
 
 
 def has_fairness_metrics(run) -> bool:
-    """Check if run summary already contains fairness/* keys."""
+    """Check if run summary already contains fairness/* keys.
+
+    Uses ``summary_metrics`` (populated from the batch query) instead of
+    ``summary._json_dict`` which triggers a per-run GraphQL reload.
+    """
     try:
-        summary = dict(run.summary._json_dict)
-        return any(k.startswith("fairness/") for k in summary)
+        sm = run.summary_metrics or {}
+        return any(k.startswith("fairness/") for k in sm)
     except Exception:
         return False
 
