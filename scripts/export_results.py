@@ -272,7 +272,7 @@ def _load_run_data(run) -> tuple[dict, dict, str, str, str, list[str], str, str]
     """
     # Access all lazy-loaded properties together so retries cover them all
     config = dict(run.config)
-    summary = dict(run.summary._json_dict)
+    summary = dict(run.summary_metrics or {})
     return (
         config,
         summary,
