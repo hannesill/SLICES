@@ -6,6 +6,7 @@ from .factory import build_ssl_objective, get_ssl_config_class
 from .jepa import JEPAConfig, JEPAObjective
 from .mae import MAEConfig, MAEObjective
 from .smart import SMARTObjective, SMARTSSLConfig
+from .ts2vec import TS2VecConfig, TS2VecObjective
 
 __all__ = [
     "BaseSSLObjective",
@@ -18,6 +19,8 @@ __all__ = [
     "MAEObjective",
     "SMARTObjective",
     "SMARTSSLConfig",
+    "TS2VecConfig",
+    "TS2VecObjective",
     "build_ssl_objective",
     "get_ssl_config_class",
 ]
