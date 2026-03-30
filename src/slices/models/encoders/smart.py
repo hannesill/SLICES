@@ -266,7 +266,6 @@ class VarAttentionBlock(nn.Module):
         scale = self.d_head**-0.5
         attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, n_heads, V, V)
         attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
         attn_out = torch.matmul(attn_weights, v)  # (B, n_heads, V, (T+1)*d_head)
 
         # Unpack temporal dimension from output
@@ -412,10 +411,11 @@ class SMARTEncoder(BaseEncoder):
         nn.init.normal_(self.query, std=0.02)
 
         # Positional encoding for temporal dimension
+        # Original SMART has no dropout in positional encoding
         self.pos_encoder = PositionalEncoding(
             d_model=config.d_model,
             max_seq_length=config.max_seq_length + 1,  # +1 for query token
-            dropout=config.dropout,
+            dropout=0.0,
         )
 
         # MART blocks
@@ -430,9 +430,6 @@ class SMARTEncoder(BaseEncoder):
                 for _ in range(config.n_layers)
             ]
         )
-
-        # Final layer norm
-        self.final_norm = nn.LayerNorm(config.d_model)
 
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
@@ -492,9 +489,6 @@ class SMARTEncoder(BaseEncoder):
         # Apply MART blocks
         for block in self.blocks:
             x = block(x, mask, padding_mask)
-
-        # Final layer norm
-        x = self.final_norm(x)
 
         # Apply pooling
         return self._apply_pooling(x, mask)

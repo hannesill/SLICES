@@ -337,7 +337,7 @@ class TestSMARTEncoderInitialization:
         assert hasattr(encoder, "query")
         assert hasattr(encoder, "pos_encoder")
         assert hasattr(encoder, "blocks")
-        assert hasattr(encoder, "final_norm")
+        # No final_norm — matches original SMART which has no post-block LayerNorm
 
     def test_smart_encoder_query_token_shape(self):
         """Test that query tokens have correct shape."""
