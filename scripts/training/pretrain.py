@@ -33,6 +33,7 @@ _SSL_MODEL_COMPAT = {
     "mae": {"transformer"},
     "jepa": {"transformer"},
     "contrastive": {"transformer"},
+    "ts2vec": {"transformer"},
     "smart": {"smart"},
 }
 

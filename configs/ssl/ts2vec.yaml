@@ -1,0 +1,35 @@
+# @package ssl
+# TS2Vec-style Temporal Contrastive SSL Configuration
+#
+# Addresses the augmentation limitation of the standard contrastive objective
+# by combining timestamp masking with input-level Gaussian noise and
+# hierarchical temporal contrastive loss.
+#
+# Key differences from standard contrastive:
+# - Input-level noise augmentation (not just masking)
+# - Independent masks (not complementary)
+# - Per-timestep temporal contrastive loss (not instance-level)
+# - Hierarchical max-pool over multiple temporal scales
+#
+# Reference: Yue et al., "TS2Vec", AAAI 2022.
+
+name: ts2vec
+
+# Masking (same default for comparability with other objectives)
+mask_ratio: 0.5
+
+# Input-level augmentation
+noise_scale: 0.01  # Gaussian noise std applied to observed values (0 = masking only)
+crop_ratio: 1.0    # Sub-sequence crop ratio (1.0 = no crop, 0.5 = half-length)
+
+# Projection head parameters (match standard contrastive for fair comparison)
+proj_hidden_dim: 256   # Hidden dimension of per-timestep projection MLP
+proj_output_dim: 64    # Output dimension (contrastive embedding space)
+
+# Temperature for temporal NT-Xent (lower than instance-level because the
+# per-timestep similarity matrix is larger and sparser)
+temperature: 0.05
+
+# Hierarchical temporal pooling: number of max-pool scales [1, 2, 4, ...]
+# 4 scales at T=48 gives pool sizes [1, 2, 4, 8]
+n_hierarchical_scales: 4

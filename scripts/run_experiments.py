@@ -793,6 +793,21 @@ class MatrixBuilder:
                         extra=finetune_extra,
                     )
 
+    def build_sprint13(self):
+        """TS2Vec temporal contrastive variant, 5 seeds.
+
+        Addresses the "contrastive was set up to fail" vulnerability by giving
+        the contrastive paradigm its natural augmentations (noise + masking)
+        and a temporal contrastive loss. Same encoder, same training budget.
+        Protocol B (full finetune) only — matches the primary evaluation protocol.
+        """
+        sprint = "13"
+        for seed in SEEDS_EXTENDED:
+            for ds in DATASETS:
+                pt = self._add_pretrain(sprint, "ts2vec", ds, seed)
+                for task in TASKS:
+                    self._add_finetune(sprint, "ts2vec", ds, seed, task, False, pt)
+
     def build_all(self) -> list[Run]:
         """Build full experiment matrix. Order matters for dedup."""
         self.build_sprint1()
@@ -809,6 +824,7 @@ class MatrixBuilder:
         self.build_sprint10()
         self.build_sprint11()
         self.build_sprint12()
+        self.build_sprint13()
         return self.runs
 
 
