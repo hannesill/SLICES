@@ -144,7 +144,7 @@ ALL_METRICS = TEST_METRICS + VAL_METRICS
 SIZED_MODELS = {128: "default", 256: "large"}
 
 # Phases that correspond to evaluation runs (not pretraining).
-EVAL_PHASES = ["finetune", "supervised", "gru_d", "xgboost"]
+EVAL_PHASES = ["finetune", "supervised", "gru_d", "xgboost", "baseline"]
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +346,13 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     sprint_str = str(config.get("sprint", ""))
     experiment_type = EXPERIMENT_TYPES.get(sprint_str, "unknown")
 
+    # Sprint 10 contains both core (label_fraction=1.0) and label_efficiency
+    # (label_fraction<1.0) runs. Reclassify the sub-1.0 runs so they merge
+    # with Sprint 6 label_efficiency during aggregation.
+    label_frac = config.get("label_fraction", 1.0)
+    if experiment_type == "core" and label_frac is not None and float(label_frac) < 1.0:
+        experiment_type = "label_efficiency"
+
     row = {
         "wandb_run_id": run_id,
         "wandb_run_url": run_url,
@@ -419,12 +426,13 @@ def build_per_seed_df(runs: list) -> pd.DataFrame:
     df = df.sort_values("created_at", ascending=False)
     before = len(df)
 
-    core_mask = df["experiment_type"] == "core"
-    core_dedup_cols = [c for c in CORE_FINGERPRINT + ["seed"] if c in df.columns]
+    cross_sprint_types = {"core", "label_efficiency"}
+    cross_sprint_mask = df["experiment_type"].isin(cross_sprint_types)
+    cross_sprint_dedup_cols = [c for c in CORE_FINGERPRINT + ["seed"] if c in df.columns]
     ablation_dedup_cols = [c for c in ABLATION_FINGERPRINT + ["seed"] if c in df.columns]
 
-    core_df = df[core_mask].drop_duplicates(subset=core_dedup_cols, keep="first")
-    non_core_df = df[~core_mask].drop_duplicates(subset=ablation_dedup_cols, keep="first")
+    core_df = df[cross_sprint_mask].drop_duplicates(subset=cross_sprint_dedup_cols, keep="first")
+    non_core_df = df[~cross_sprint_mask].drop_duplicates(subset=ablation_dedup_cols, keep="first")
     df = pd.concat([core_df, non_core_df], ignore_index=True)
 
     after = len(df)
@@ -502,17 +510,25 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     - Core runs (Sprints 1-5, 10): group WITHOUT sprint to merge seeds across sprints
     - Non-core runs (ablations, label efficiency, etc.): group WITH sprint
     """
-    core_mask = per_seed_df["experiment_type"] == "core"
-    core = per_seed_df[core_mask]
-    non_core = per_seed_df[~core_mask]
+    # Cross-sprint types: seeds were added across sprints for the same config,
+    # so aggregate WITHOUT sprint to merge them.
+    cross_sprint_types = {"core", "label_efficiency"}
+    cross_sprint_mask = per_seed_df["experiment_type"].isin(cross_sprint_types)
+    cross_sprint = per_seed_df[cross_sprint_mask]
+    per_sprint = per_seed_df[~cross_sprint_mask]
 
     parts = []
-    if len(core) > 0:
-        print(f"  Aggregating {len(core)} core runs (cross-sprint)...", file=sys.stderr)
-        parts.append(_aggregate_group(core, CORE_FINGERPRINT))
-    if len(non_core) > 0:
-        print(f"  Aggregating {len(non_core)} non-core runs (per-sprint)...", file=sys.stderr)
-        parts.append(_aggregate_group(non_core, ABLATION_FINGERPRINT))
+    if len(cross_sprint) > 0:
+        print(
+            f"  Aggregating {len(cross_sprint)} cross-sprint runs (core + label_efficiency)...",
+            file=sys.stderr,
+        )
+        parts.append(_aggregate_group(cross_sprint, CORE_FINGERPRINT))
+    if len(per_sprint) > 0:
+        print(
+            f"  Aggregating {len(per_sprint)} per-sprint runs (ablations, etc.)...", file=sys.stderr
+        )
+        parts.append(_aggregate_group(per_sprint, ABLATION_FINGERPRINT))
 
     if not parts:
         return pd.DataFrame()
