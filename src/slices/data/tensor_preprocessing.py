@@ -60,6 +60,20 @@ def extract_tensors_from_dataframe(
         raw_masks = timeseries_df["mask"].to_list()
         return convert_raw_to_tensors(raw_timeseries, raw_masks, seq_length, n_features)
 
+    # Check if stored sequence length differs from requested — fall back to
+    # convert_raw_to_tensors which handles truncation/padding correctly
+    stored_seq_length = int(ts_lens.min())  # type: ignore[arg-type]
+    if stored_seq_length != seq_length:
+        logger.info(
+            "Stored sequence length (%d) differs from requested (%d),"
+            " falling back to list conversion for truncation/padding",
+            stored_seq_length,
+            seq_length,
+        )
+        raw_timeseries = timeseries_df["timeseries"].to_list()
+        raw_masks = timeseries_df["mask"].to_list()
+        return convert_raw_to_tensors(raw_timeseries, raw_masks, seq_length, n_features)
+
     # Fast path: explode nested lists to flat array, then reshape.
     # This stays in Arrow/numpy memory without creating Python objects.
     # Extract columns as Series first, then process sequentially to limit

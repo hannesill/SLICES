@@ -138,7 +138,10 @@ def main(cfg: DictConfig) -> None:
         OmegaConf.set_struct(cfg, True)
 
     # Validate data prerequisites
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
+    task_name_for_validation = cfg.task.get("task_name", "mortality_24h")
+    validate_data_prerequisites(
+        cfg.data.processed_dir, cfg.dataset, task_names=[task_name_for_validation]
+    )
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
@@ -299,6 +302,9 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
+    eval_checkpoint_source = "none"
+    best_ckpt_load_ok = False
+    best_ckpt_error = None
 
     if best_ckpt:
         print(f"\n Loading best checkpoint: {best_ckpt}")
@@ -306,8 +312,34 @@ def main(cfg: DictConfig) -> None:
             checkpoint = torch.load(best_ckpt, map_location="cpu", weights_only=False)
             model.load_state_dict(checkpoint["state_dict"])
             print("  - Loaded best checkpoint weights")
+            eval_checkpoint_source = "best"
+            best_ckpt_load_ok = True
         except Exception as e:
-            print(f"  - Warning: Could not load checkpoint ({e}), using final model")
+            best_ckpt_error = str(e)
+            allow_fallback = cfg.training.get("allow_best_ckpt_fallback", False)
+            if allow_fallback:
+                print(
+                    f"  - WARNING: Could not load best checkpoint ({e}),"
+                    " falling back to final model"
+                )
+                eval_checkpoint_source = "final"
+            else:
+                if logger:
+                    logger.experiment.summary.update(
+                        {
+                            "_eval_checkpoint_source": "failed",
+                            "_best_ckpt_path": best_ckpt,
+                            "_best_ckpt_load_ok": False,
+                            "_best_ckpt_error": best_ckpt_error,
+                        }
+                    )
+                    logger.experiment.finish()
+                raise RuntimeError(
+                    f"Best checkpoint load failed: {e}. "
+                    f"Set training.allow_best_ckpt_fallback=true to use final model instead."
+                ) from e
+    else:
+        eval_checkpoint_source = "final"
 
     encoder_path = save_encoder_weights(model, cfg, cfg.output_dir)
     print(f"\n Encoder saved to: {encoder_path}")
@@ -392,10 +424,18 @@ def main(cfg: DictConfig) -> None:
                 else:
                     print("  -> WARNING: Model performs at or below random baseline!")
 
-    # Log test results and baseline metrics to W&B summary
+    # Log test results, baseline metrics, and checkpoint provenance to W&B summary
     if logger:
         if test_results:
             logger.experiment.summary.update(test_results[0])
+            logger.experiment.summary.update(
+                {
+                    "_eval_checkpoint_source": eval_checkpoint_source,
+                    "_best_ckpt_path": best_ckpt or "",
+                    "_best_ckpt_load_ok": best_ckpt_load_ok,
+                    "_best_ckpt_error": best_ckpt_error or "",
+                }
+            )
         if baseline_metrics:
             logger.experiment.summary.update(baseline_metrics)
 

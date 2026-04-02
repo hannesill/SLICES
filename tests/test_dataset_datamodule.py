@@ -1019,8 +1019,9 @@ class TestCollateFn:
             train_indices=[0, 1, 2, 3],  # Only first 4 samples are training
         )
 
-        stats_file = data_dir / "normalization_stats.yaml"
-        assert stats_file.exists(), "normalization_stats.yaml should be created"
+        # Stats are now hash-keyed: normalization_stats_<hash>.yaml
+        stats_files = list(data_dir.glob("normalization_stats_*.yaml"))
+        assert len(stats_files) >= 1, "normalization_stats_<hash>.yaml should be created"
 
         # Get stats from first dataset
         means1 = dataset1.feature_means.clone()
@@ -1254,10 +1255,13 @@ class TestDatasetImportWarnings:
             f"Found 'import warnings' inside functions: {inline_imports}. " "Move to module level."
         )
 
-    def test_module_level_import_exists(self):
-        """dataset.py should have warnings imported at module level."""
-        import slices.data.dataset as mod
+    def test_tensor_cache_has_warnings_import(self):
+        """tensor_cache.py should have warnings imported at module level.
+
+        Warning logic for normalization stats lives in tensor_cache.py, not dataset.py.
+        """
+        import slices.data.tensor_cache as mod
 
         assert hasattr(mod, "warnings") or "warnings" in dir(
             mod
-        ), "dataset.py should import warnings at module level"
+        ), "tensor_cache.py should import warnings at module level"

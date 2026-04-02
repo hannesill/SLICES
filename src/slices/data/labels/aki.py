@@ -23,6 +23,8 @@ class AKILabelBuilder(LabelBuilder):
     Label = null if no creatinine in the prediction window.
     """
 
+    SEMANTIC_VERSION = "1.0.0"
+
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build AKI labels from stays and timeseries data.
 

@@ -366,12 +366,26 @@ def run_fairness_evaluation(
 # =============================================================================
 
 
-def validate_data_prerequisites(processed_dir: str, dataset: str) -> None:
+def validate_data_prerequisites(
+    processed_dir: str,
+    dataset: str,
+    task_names: Optional[List[str]] = None,
+) -> None:
     """Validate that required data files exist before training.
+
+    Checks file existence and, if task_names are provided, validates the label
+    manifest in metadata.yaml to ensure labels were built with the current
+    builder version and task config.
 
     Raises:
         FileNotFoundError: If required files are missing.
+        RuntimeError: If label manifest indicates stale labels.
     """
+
+    import yaml
+
+    from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+
     path = Path(processed_dir)
 
     if not path.exists():
@@ -387,12 +401,70 @@ def validate_data_prerequisites(processed_dir: str, dataset: str) -> None:
             f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
         )
 
-    stats_path = path / "normalization_stats.yaml"
-    if not stats_path.exists():
-        raise FileNotFoundError(
-            f"normalization_stats.yaml not found in {path}\n"
-            f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
-        )
+    # Validate label manifest if task_names are provided
+    if task_names:
+        metadata_path = path / "metadata.yaml"
+        if not metadata_path.exists():
+            raise FileNotFoundError(
+                f"metadata.yaml not found in {path} — cannot validate label freshness.\n"
+                f"Re-run extraction: uv run python scripts/preprocessing/"
+                f"extract_ricu.py dataset={dataset}"
+            )
+
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+
+        label_manifest = metadata.get("label_manifest")
+        if label_manifest is None:
+            raise RuntimeError(
+                f"metadata.yaml in {path} has no label_manifest. "
+                "Labels were extracted before manifest support was added.\n"
+                f"Re-run extraction: uv run python scripts/preprocessing/"
+                f"extract_ricu.py dataset={dataset}"
+            )
+
+        # Load current task configs and compare against manifest
+        tasks_path = Path(__file__).parent.parent / "data" / "tasks"
+        for task_name in task_names:
+            config_file = tasks_path / f"{task_name}.yaml"
+            if not config_file.exists():
+                continue
+
+            with open(config_file) as f:
+                config_dict = yaml.safe_load(f)
+            current_config = LabelConfig(**config_dict)
+            current_hash = LabelBuilder.config_hash(current_config)
+
+            builder = LabelBuilderFactory.create(current_config)
+            current_version = builder.SEMANTIC_VERSION
+
+            manifest_entry = label_manifest.get(task_name)
+            if manifest_entry is None:
+                raise RuntimeError(
+                    f"Task '{task_name}' not found in label manifest. "
+                    "Labels were extracted without this task.\n"
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
+
+            stored_version = manifest_entry.get("builder_version")
+            stored_hash = manifest_entry.get("config_hash")
+
+            if stored_version != current_version:
+                raise RuntimeError(
+                    f"Label builder version mismatch for task '{task_name}': "
+                    f"stored={stored_version}, current={current_version}. "
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
+
+            if stored_hash != current_hash:
+                raise RuntimeError(
+                    f"Task config changed for '{task_name}': "
+                    f"stored_hash={stored_hash}, current_hash={current_hash}. "
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
 
 
 # =============================================================================

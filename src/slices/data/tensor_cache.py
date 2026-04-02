@@ -7,6 +7,8 @@ Extracted from ICUDataset for modularity.
 
 import hashlib
 import logging
+import os
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +19,21 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _compute_split_hash(train_indices: List[int], normalize: bool) -> str:
+    """Compute a stable hash from sorted train indices and normalize flag.
+
+    Used to key normalization stats files so concurrent runs with different
+    splits write to different files instead of overwriting each other.
+    """
+    content = f"{sorted(train_indices)}|{normalize}"
+    return hashlib.md5(content.encode()).hexdigest()[:12]
+
+
+def _normalization_stats_path(data_dir: Path, split_hash: str) -> Path:
+    """Return the hash-keyed normalization stats file path."""
+    return data_dir / f"normalization_stats_{split_hash}.yaml"
+
+
 def load_normalization_stats(
     data_dir: Path,
     current_train_indices: Optional[List[int]],
@@ -24,11 +41,11 @@ def load_normalization_stats(
 ) -> Optional[Dict[str, Any]]:
     """Load cached normalization statistics from file if they exist and match current split.
 
-    Validates that cached statistics were computed on the same training set to prevent
-    data leakage from validation/test sets.
+    Looks for a hash-keyed file first (normalization_stats_<hash>.yaml), then
+    falls back to the legacy normalization_stats.yaml with set-comparison validation.
 
     Args:
-        data_dir: Path to data directory containing normalization_stats.yaml.
+        data_dir: Path to data directory containing normalization stats.
         current_train_indices: List of training indices for current split,
                              or None for unsupervised.
         normalize: Whether normalization is enabled.
@@ -40,15 +57,33 @@ def load_normalization_stats(
     if not normalize:
         return None
 
-    stats_path = data_dir / "normalization_stats.yaml"
-    if not stats_path.exists():
+    # Hash-keyed path (new format) — hash guarantees index match
+    if current_train_indices is not None:
+        split_hash = _compute_split_hash(current_train_indices, normalize)
+        hashed_path = _normalization_stats_path(data_dir, split_hash)
+        if hashed_path.exists():
+            try:
+                with open(hashed_path) as f:
+                    stats = yaml.safe_load(f)
+                logger.debug(f"Loaded normalization stats from {hashed_path}")
+                return stats
+            except Exception as e:
+                warnings.warn(
+                    f"Failed to load normalization stats from {hashed_path}: {e}. "
+                    "Will recompute statistics.",
+                    UserWarning,
+                )
+                return None
+
+    # Legacy fallback — validate by comparing train_indices sets
+    legacy_path = data_dir / "normalization_stats.yaml"
+    if not legacy_path.exists():
         return None
 
     try:
-        with open(stats_path) as f:
+        with open(legacy_path) as f:
             stats = yaml.safe_load(f)
 
-        # Validate that cached stats were computed on the same training split
         cached_train_indices = stats.get("train_indices")
         current_train_set = set(current_train_indices) if current_train_indices else None
         cached_train_set = set(cached_train_indices) if cached_train_indices else None
@@ -66,7 +101,7 @@ def load_normalization_stats(
         return stats
     except Exception as e:
         warnings.warn(
-            f"Failed to load normalization stats from {stats_path}: {e}. "
+            f"Failed to load normalization stats from {legacy_path}: {e}. "
             "Will recompute statistics.",
             UserWarning,
         )
@@ -81,7 +116,11 @@ def save_normalization_stats(
     train_indices: Optional[List[int]],
     normalize: bool,
 ) -> None:
-    """Save computed normalization statistics to file for reproducibility.
+    """Save computed normalization statistics to a hash-keyed file atomically.
+
+    Uses tempfile + os.replace for atomic writes, preventing corruption from
+    concurrent runs. The file is keyed by a hash of train_indices + normalize,
+    so different splits write to different files.
 
     Args:
         data_dir: Path to data directory.
@@ -91,19 +130,34 @@ def save_normalization_stats(
         train_indices: Optional list of training indices used to compute stats.
         normalize: Whether normalization is enabled.
     """
-    stats_path = data_dir / "normalization_stats.yaml"
+    if train_indices is not None:
+        split_hash = _compute_split_hash(train_indices, normalize)
+        stats_path = _normalization_stats_path(data_dir, split_hash)
+    else:
+        split_hash = "unsupervised"
+        stats_path = data_dir / "normalization_stats.yaml"
 
     stats = {
         "feature_means": feature_means.tolist(),
         "feature_stds": feature_stds.tolist(),
         "feature_names": feature_names,
-        "train_indices": train_indices,
+        "split_hash": split_hash,
+        "train_indices_count": len(train_indices) if train_indices else 0,
         "normalize": normalize,
     }
 
     try:
-        with open(stats_path, "w") as f:
-            yaml.dump(stats, f, default_flow_style=False)
+        fd, tmp_path = tempfile.mkstemp(dir=data_dir, suffix=".yaml.tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                yaml.dump(stats, f, default_flow_style=False)
+            os.replace(tmp_path, stats_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         warnings.warn(
             f"Failed to save normalization stats to {stats_path}: {e}",

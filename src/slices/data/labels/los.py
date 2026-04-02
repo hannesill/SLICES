@@ -17,6 +17,8 @@ class LOSLabelBuilder(LabelBuilder):
     Clips at 0.0 (stays exactly at boundary get 0).
     """
 
+    SEMANTIC_VERSION = "1.0.0"
+
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         self.validate_inputs(raw_data)
         stays = raw_data["stays"]

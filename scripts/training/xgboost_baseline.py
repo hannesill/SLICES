@@ -125,8 +125,13 @@ def main(cfg: DictConfig) -> None:
     print("1. Setting up DataModule")
     print("=" * 80)
 
+    from slices.training.utils import validate_data_prerequisites
+
     task_name = cfg.task.get("task_name", "mortality_24h")
     task_type = cfg.task.get("task_type", "binary")
+
+    # Validate data prerequisites including label freshness
+    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset, task_names=[task_name])
 
     datamodule = ICUDataModule(
         processed_dir=cfg.data.processed_dir,

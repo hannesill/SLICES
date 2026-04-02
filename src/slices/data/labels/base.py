@@ -1,5 +1,7 @@
 """Base classes for label extraction."""
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -46,6 +48,26 @@ class LabelBuilder(ABC):
     LabelBuilders implement the logic to convert raw clinical data
     (e.g., mortality flags, creatinine values) into prediction labels.
     """
+
+    SEMANTIC_VERSION: str = "1.0.0"
+
+    @staticmethod
+    def config_hash(config: LabelConfig) -> str:
+        """Compute a deterministic hash of the label-affecting config fields.
+
+        Returns:
+            16-char hex digest of the config's label-relevant fields.
+        """
+        hashable = {
+            "task_name": config.task_name,
+            "task_type": config.task_type,
+            "prediction_window_hours": config.prediction_window_hours,
+            "observation_window_hours": config.observation_window_hours,
+            "gap_hours": config.gap_hours,
+            "label_params": config.label_params,
+        }
+        content = json.dumps(hashable, sort_keys=True, default=str)
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     def __init__(self, config: LabelConfig) -> None:
         """Initialize label builder with configuration.

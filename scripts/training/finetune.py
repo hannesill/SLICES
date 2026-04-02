@@ -72,7 +72,8 @@ def main(cfg: DictConfig) -> None:
         del ckpt
 
     # Validate data prerequisites
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
+    task_name = cfg.task.get("task_name", "mortality_24h")
+    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset, task_names=[task_name])
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
@@ -83,8 +84,6 @@ def main(cfg: DictConfig) -> None:
     print("\n" + "=" * 80)
     print("1. Setting up DataModule")
     print("=" * 80)
-
-    task_name = cfg.task.get("task_name", "mortality_24h")
 
     datamodule = ICUDataModule(
         processed_dir=cfg.data.processed_dir,
@@ -230,6 +229,9 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
+    eval_checkpoint_source = "none"
+    best_ckpt_load_ok = False
+    best_ckpt_error = None
 
     if best_ckpt:
         print(f"\n Best checkpoint: {best_ckpt}")
@@ -237,11 +239,37 @@ def main(cfg: DictConfig) -> None:
             checkpoint = torch.load(best_ckpt, map_location="cpu", weights_only=False)
             model.load_state_dict(checkpoint["state_dict"])
             print("  - Loaded best checkpoint weights")
+            eval_checkpoint_source = "best"
+            best_ckpt_load_ok = True
         except Exception as e:
-            print(f"  - Warning: Could not load checkpoint ({e}), using final model")
+            best_ckpt_error = str(e)
+            allow_fallback = cfg.training.get("allow_best_ckpt_fallback", False)
+            if allow_fallback:
+                print(
+                    f"  - WARNING: Could not load best checkpoint ({e}),"
+                    " falling back to final model"
+                )
+                eval_checkpoint_source = "final"
+            else:
+                # Log failure to W&B before crashing
+                if logger:
+                    logger.experiment.summary.update(
+                        {
+                            "_eval_checkpoint_source": "failed",
+                            "_best_ckpt_path": best_ckpt,
+                            "_best_ckpt_load_ok": False,
+                            "_best_ckpt_error": best_ckpt_error,
+                        }
+                    )
+                    logger.experiment.finish()
+                raise RuntimeError(
+                    f"Best checkpoint load failed: {e}. "
+                    f"Set training.allow_best_ckpt_fallback=true to use final model instead."
+                ) from e
         test_results = trainer.test(model, datamodule=datamodule)
     else:
         print("\n  No best checkpoint found, testing with final model")
+        eval_checkpoint_source = "final"
         test_results = trainer.test(model, datamodule=datamodule)
 
     # =========================================================================
@@ -267,6 +295,14 @@ def main(cfg: DictConfig) -> None:
 
         if logger:
             logger.experiment.summary.update(test_results[0])
+            logger.experiment.summary.update(
+                {
+                    "_eval_checkpoint_source": eval_checkpoint_source,
+                    "_best_ckpt_path": best_ckpt or "",
+                    "_best_ckpt_load_ok": best_ckpt_load_ok,
+                    "_best_ckpt_error": best_ckpt_error or "",
+                }
+            )
 
     print(f"\n Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")

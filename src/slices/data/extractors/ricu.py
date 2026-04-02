@@ -28,6 +28,7 @@ from rich.progress import (
 
 from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
+from slices.data.labels import LabelBuilder, LabelBuilderFactory
 
 from .base import BaseExtractor, ExtractorConfig
 
@@ -161,6 +162,55 @@ class RicuExtractor(BaseExtractor):
         df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
         if source_name == "timeseries":
             df = self._encode_categorical_columns(df)
+        elif source_name == "mortality_info":
+            df = self._migrate_mortality_schema(df)
+        return df
+
+    @staticmethod
+    def _migrate_mortality_schema(df: pl.DataFrame) -> pl.DataFrame:
+        """Migrate legacy mortality parquet (date_of_death only) to new schema.
+
+        If the parquet has the old single-column format, infer precision from
+        the Polars dtype so the label builder can use precision-aware logic.
+        """
+        if "death_time_precision" in df.columns:
+            return df  # already new schema
+
+        if "date_of_death" not in df.columns:
+            return df
+
+        dod_dtype = df["date_of_death"].dtype
+        if dod_dtype == pl.Date:
+            # Date-only column — treat as date precision
+            df = df.with_columns(
+                pl.lit(None).cast(pl.Datetime("us", "UTC")).alias("death_time"),
+                pl.col("date_of_death").cast(pl.Date).alias("death_date"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("date"))
+                .otherwise(pl.lit(None))
+                .alias("death_time_precision"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("legacy"))
+                .otherwise(pl.lit(None))
+                .alias("death_source"),
+            )
+        else:
+            # Datetime column — could be true timestamp or midnight-cast date.
+            # For MIIV legacy data this is midnight-cast dod; for eICU it's
+            # a true offset-derived timestamp. Mark as "timestamp" since that
+            # was the prior behavior; the new R extraction fixes MIIV properly.
+            df = df.with_columns(
+                pl.col("date_of_death").cast(pl.Datetime("us", "UTC")).alias("death_time"),
+                pl.lit(None).cast(pl.Date).alias("death_date"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("timestamp"))
+                .otherwise(pl.lit(None))
+                .alias("death_time_precision"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("legacy"))
+                .otherwise(pl.lit(None))
+                .alias("death_source"),
+            )
         return df
 
     def run(self) -> None:
@@ -317,6 +367,15 @@ class RicuExtractor(BaseExtractor):
 
             self._validate_labels(labels, stay_ids)
 
+            # Build label manifest for freshness checking at training time
+            label_manifest = {}
+            for tc in task_configs:
+                builder = LabelBuilderFactory.create(tc)
+                label_manifest[tc.task_name] = {
+                    "builder_version": builder.SEMANTIC_VERSION,
+                    "config_hash": LabelBuilder.config_hash(tc),
+                }
+
             metadata = {
                 "dataset": self._get_dataset_name(),
                 "feature_set": self.config.feature_set,
@@ -328,6 +387,7 @@ class RicuExtractor(BaseExtractor):
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
+                "label_manifest": label_manifest,
                 "extraction_config": {
                     "parquet_root": str(self.parquet_root),
                     "output_dir": str(self.output_dir),
