@@ -217,6 +217,68 @@ def main():
     tasks_b = set(meta_b.get("task_names", []))
     common_tasks = sorted(tasks_a & tasks_b)
 
+    # Merge label manifests from source datasets for freshness checking.
+    # Both source datasets must have manifests, and for each common task
+    # the builder_version and config_hash must agree — otherwise the
+    # combined labels would mix stale and fresh data.
+    manifest_a = meta_a.get("label_manifest", {})
+    manifest_b = meta_b.get("label_manifest", {})
+
+    if not manifest_a:
+        print(
+            f"\n  ERROR: {names[0]} has no label_manifest in metadata.yaml.\n"
+            f"  Re-run extraction for {names[0]} before combining.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not manifest_b:
+        print(
+            f"\n  ERROR: {names[1]} has no label_manifest in metadata.yaml.\n"
+            f"  Re-run extraction for {names[1]} before combining.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    combined_manifest = {}
+    for task in common_tasks:
+        entry_a = manifest_a.get(task)
+        entry_b = manifest_b.get(task)
+
+        if entry_a is None and entry_b is None:
+            continue
+        if entry_a is None or entry_b is None:
+            present = names[0] if entry_a else names[1]
+            missing = names[1] if entry_a else names[0]
+            print(
+                f"\n  ERROR: Task '{task}' has a manifest entry in {present} "
+                f"but not in {missing}.\n"
+                f"  Re-run extraction for {missing} with task '{task}'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if entry_a.get("builder_version") != entry_b.get("builder_version"):
+            print(
+                f"\n  ERROR: builder_version mismatch for task '{task}':\n"
+                f"    {names[0]}: {entry_a.get('builder_version')}\n"
+                f"    {names[1]}: {entry_b.get('builder_version')}\n"
+                f"  Re-run extraction for both datasets.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if entry_a.get("config_hash") != entry_b.get("config_hash"):
+            print(
+                f"\n  ERROR: config_hash mismatch for task '{task}':\n"
+                f"    {names[0]}: {entry_a.get('config_hash')}\n"
+                f"    {names[1]}: {entry_b.get('config_hash')}\n"
+                f"  Both datasets must be extracted with the same task config.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        combined_manifest[task] = entry_a
+
     combined_metadata = {
         "dataset": "combined",
         "source_datasets": names,
@@ -227,6 +289,7 @@ def main():
         "seq_length_hours": meta_a.get("seq_length_hours", 48),
         "min_stay_hours": meta_a.get("min_stay_hours", 48),
         "task_names": common_tasks,
+        "label_manifest": combined_manifest,
         "n_stays": len(static_combined),
         "stays_per_dataset": {
             names[0]: len(data_a["static"]),

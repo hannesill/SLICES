@@ -141,6 +141,10 @@ class Run:
     extra_overrides: dict = field(default_factory=dict)
     # For transfer learning: dataset the encoder was pretrained on
     source_dataset: str | None = None
+    # Upstream pretrain metadata for provenance tracking in finetune runs
+    upstream_pretrain_lr: float | None = None
+    upstream_pretrain_mask_ratio: float | None = None
+    experiment_subtype: str | None = None  # "lr_ablation" | "mask_ablation" | None
 
     def build_command(self, runs_by_id: dict[str, Run]) -> list[str]:
         """Build the subprocess command for this run."""
@@ -210,6 +214,13 @@ class Run:
             cmd.append(f"label_fraction={self.label_fraction}")
         for k, v in self.extra_overrides.items():
             cmd.append(f"{k}={v}")
+        # Propagate upstream pretrain metadata so it lands in W&B config
+        if self.upstream_pretrain_lr is not None:
+            cmd.append(f"+upstream_pretrain_lr={self.upstream_pretrain_lr}")
+        if self.upstream_pretrain_mask_ratio is not None:
+            cmd.append(f"+upstream_pretrain_mask_ratio={self.upstream_pretrain_mask_ratio}")
+        if self.experiment_subtype is not None:
+            cmd.append(f"+experiment_subtype={self.experiment_subtype}")
         return cmd
 
     def _supervised_cmd(self) -> list[str]:
@@ -340,6 +351,9 @@ class MatrixBuilder:
         extra: dict | None = None,
         source_dataset: str | None = None,
         name_extra: dict | None = None,
+        upstream_pretrain_lr: float | None = None,
+        upstream_pretrain_mask_ratio: float | None = None,
+        experiment_subtype: str | None = None,
     ) -> Run:
         """Add a finetune run.
 
@@ -347,6 +361,9 @@ class MatrixBuilder:
             extra: Hydra overrides added to the finetune command AND name.
             name_extra: Dict used only for directory/ID disambiguation
                 (e.g. pretrain ablation params). Not passed to command.
+            upstream_pretrain_lr: LR used in the upstream pretrain run (for provenance).
+            upstream_pretrain_mask_ratio: Mask ratio used in upstream pretrain run.
+            experiment_subtype: "lr_ablation", "mask_ablation", or None.
         """
         prefix = "probe" if freeze else "finetune"
         name = f"{prefix}_{paradigm}_{task}_{dataset}_seed{seed}"
@@ -377,6 +394,9 @@ class MatrixBuilder:
             freeze_encoder=freeze,
             extra_overrides=extra or {},
             source_dataset=source_dataset,
+            upstream_pretrain_lr=upstream_pretrain_lr,
+            upstream_pretrain_mask_ratio=upstream_pretrain_mask_ratio,
+            experiment_subtype=experiment_subtype,
         )
         self.runs.append(run)
         return run
@@ -465,7 +485,18 @@ class MatrixBuilder:
             for lr in LR_ABLATION:
                 extra = {"optimizer.lr": lr}
                 pt = self._add_pretrain(sprint, p, ds, seed, extra)
-                self._add_finetune(sprint, p, ds, seed, task, False, pt, name_extra=extra)
+                self._add_finetune(
+                    sprint,
+                    p,
+                    ds,
+                    seed,
+                    task,
+                    False,
+                    pt,
+                    name_extra=extra,
+                    upstream_pretrain_lr=lr,
+                    experiment_subtype="lr_ablation",
+                )
 
     def build_sprint1c(self):
         """Mask ratio sensitivity, MIMIC, mortality_24h, seed=42."""
@@ -474,7 +505,18 @@ class MatrixBuilder:
             for mr in MASK_RATIO_ABLATION:
                 extra = {"ssl.mask_ratio": mr}
                 pt = self._add_pretrain(sprint, p, ds, seed, extra)
-                self._add_finetune(sprint, p, ds, seed, task, False, pt, name_extra=extra)
+                self._add_finetune(
+                    sprint,
+                    p,
+                    ds,
+                    seed,
+                    task,
+                    False,
+                    pt,
+                    name_extra=extra,
+                    upstream_pretrain_mask_ratio=mr,
+                    experiment_subtype="mask_ablation",
+                )
 
     def build_sprint2(self):
         """MIMIC Protocol A, seed=42 — reuses Sprint 1 pretrains."""
@@ -646,14 +688,32 @@ class MatrixBuilder:
                     extra = {"optimizer.lr": lr}
                     pt = self._add_pretrain(sprint, p, "miiv", seed, extra)
                     self._add_finetune(
-                        sprint, p, "miiv", seed, "mortality_24h", False, pt, name_extra=extra
+                        sprint,
+                        p,
+                        "miiv",
+                        seed,
+                        "mortality_24h",
+                        False,
+                        pt,
+                        name_extra=extra,
+                        upstream_pretrain_lr=lr,
+                        experiment_subtype="lr_ablation",
                     )
                 # Mask ratio ablation
                 for mr in MASK_RATIO_ABLATION:
                     extra = {"ssl.mask_ratio": mr}
                     pt = self._add_pretrain(sprint, p, "miiv", seed, extra)
                     self._add_finetune(
-                        sprint, p, "miiv", seed, "mortality_24h", False, pt, name_extra=extra
+                        sprint,
+                        p,
+                        "miiv",
+                        seed,
+                        "mortality_24h",
+                        False,
+                        pt,
+                        name_extra=extra,
+                        upstream_pretrain_mask_ratio=mr,
+                        experiment_subtype="mask_ablation",
                     )
 
     def build_sprint10(self):
@@ -722,6 +782,8 @@ class MatrixBuilder:
                         False,
                         pt,
                         name_extra=extra,
+                        upstream_pretrain_lr=lr,
+                        experiment_subtype="lr_ablation",
                     )
                 for mr in MASK_RATIO_ABLATION:
                     extra = {"ssl.mask_ratio": mr}
@@ -735,6 +797,8 @@ class MatrixBuilder:
                         False,
                         pt,
                         name_extra=extra,
+                        upstream_pretrain_mask_ratio=mr,
+                        experiment_subtype="mask_ablation",
                     )
 
     def build_sprint11(self):

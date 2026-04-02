@@ -615,9 +615,10 @@ extract_mortality_data <- function(dataset, dict) {
     extract_mortality_generic(dataset, dict)
   )
 
-  # Ensure expected columns
-  expected <- c("stay_id", "date_of_death", "hospital_expire_flag",
-                "dischtime", "discharge_location")
+  # Ensure expected columns (new precision-aware schema + legacy)
+  expected <- c("stay_id", "date_of_death", "death_time", "death_date",
+                "death_time_precision", "death_source",
+                "hospital_expire_flag", "dischtime", "discharge_location")
   for (col in expected) {
     if (!col %in% names(result)) result[[col]] <- NA
   }
@@ -636,6 +637,7 @@ extract_mortality_miiv <- function(dataset, dict) {
 
   df <- data.frame(stay_id = icu$stay_id, stringsAsFactors = FALSE)
 
+  # Get date-only dod from patients table
   if (!is.null(pat)) {
     pat_sub <- pat[, intersect(c("subject_id", "dod"), names(pat)),
                    drop = FALSE]
@@ -646,10 +648,11 @@ extract_mortality_miiv <- function(dataset, dict) {
     names(df)[names(df) == "dod"] <- "date_of_death"
   }
 
+  # Get deathtime + other columns from admissions table
   if (!is.null(adm)) {
     adm_cols <- intersect(
       c("hadm_id", "hospital_expire_flag", "dischtime",
-        "discharge_location"),
+        "discharge_location", "deathtime"),
       names(adm)
     )
     if (length(adm_cols) > 1) {
@@ -661,6 +664,38 @@ extract_mortality_miiv <- function(dataset, dict) {
       df$hadm_id <- NULL
     }
   }
+
+  # Build precision-aware death schema:
+  # - death_time: exact timestamp from admissions.deathtime (preferred)
+  # - death_date: date-only from patients.dod
+  # - death_time_precision: "timestamp" / "date" / "unknown"
+  # - death_source: which column the death info comes from
+  has_deathtime <- "deathtime" %in% names(df) & !is.na(df$deathtime)
+  has_dod <- "date_of_death" %in% names(df) & !is.na(df$date_of_death)
+
+  df$death_time <- as.POSIXct(rep(NA, nrow(df)), tz = "UTC")
+  df$death_date <- as.Date(rep(NA, nrow(df)))
+  df$death_time_precision <- NA_character_
+  df$death_source <- NA_character_
+
+  # Prefer admissions.deathtime (exact timestamp)
+  if ("deathtime" %in% names(df)) {
+    idx_dt <- !is.na(df$deathtime)
+    df$death_time[idx_dt] <- df$deathtime[idx_dt]
+    df$death_time_precision[idx_dt] <- "timestamp"
+    df$death_source[idx_dt] <- "admissions.deathtime"
+  }
+
+  # Fall back to patients.dod (date-only) for rows without deathtime
+  if ("date_of_death" %in% names(df)) {
+    idx_dod_only <- is.na(df$death_time) & !is.na(df$date_of_death)
+    df$death_date[idx_dod_only] <- as.Date(df$date_of_death[idx_dod_only])
+    df$death_time_precision[idx_dod_only] <- "date"
+    df$death_source[idx_dod_only] <- "patients.dod"
+  }
+
+  # Clean up intermediate column
+  df$deathtime <- NULL
 
   df
 }
@@ -689,7 +724,7 @@ extract_mortality_mimic <- function(dataset, dict) {
   if (!is.null(adm)) {
     adm_cols <- intersect(
       c("hadm_id", "hospital_expire_flag", "dischtime",
-        "discharge_location"),
+        "discharge_location", "deathtime"),
       names(adm)
     )
     if (length(adm_cols) > 1) {
@@ -702,6 +737,28 @@ extract_mortality_mimic <- function(dataset, dict) {
       df$hadm_id <- NULL
     }
   }
+
+  # Build precision-aware death schema (same logic as miiv)
+  df$death_time <- as.POSIXct(rep(NA, nrow(df)), tz = "UTC")
+  df$death_date <- as.Date(rep(NA, nrow(df)))
+  df$death_time_precision <- NA_character_
+  df$death_source <- NA_character_
+
+  if ("deathtime" %in% names(df)) {
+    idx_dt <- !is.na(df$deathtime)
+    df$death_time[idx_dt] <- df$deathtime[idx_dt]
+    df$death_time_precision[idx_dt] <- "timestamp"
+    df$death_source[idx_dt] <- "admissions.deathtime"
+  }
+
+  if ("date_of_death" %in% names(df)) {
+    idx_dod_only <- is.na(df$death_time) & !is.na(df$date_of_death)
+    df$death_date[idx_dod_only] <- as.Date(df$date_of_death[idx_dod_only])
+    df$death_time_precision[idx_dod_only] <- "date"
+    df$death_source[idx_dod_only] <- "patients.dod"
+  }
+
+  df$deathtime <- NULL
 
   df
 }
@@ -758,6 +815,12 @@ extract_mortality_eicu <- function(dataset, dict) {
     } else {
       NA_character_
     },
+    # Precision-aware schema: eICU timestamps are derived from offsets
+    # (minute-level precision) — these are true timestamps, not date-only.
+    death_time           = dod,
+    death_date           = as.Date(rep(NA, nrow(pat))),
+    death_time_precision = ifelse(expired, "timestamp", NA_character_),
+    death_source         = ifelse(expired, "derived", NA_character_),
     stringsAsFactors = FALSE
   )
   df
@@ -769,12 +832,17 @@ extract_mortality_generic <- function(dataset, dict) {
   if (!"death" %in% avail) {
     message("  Warning: 'death' concept not available; returning empty mortality.")
     wins <- stay_windows(dataset, interval = hours(1L))
+    n <- nrow(as.data.frame(wins))
     return(data.frame(
       stay_id              = as.data.frame(wins)[[id_var(wins)]],
-      date_of_death        = NA,
+      date_of_death        = as.POSIXct(rep(NA, n), tz = "UTC"),
       hospital_expire_flag = NA_integer_,
-      dischtime            = NA,
+      dischtime            = as.POSIXct(rep(NA, n), tz = "UTC"),
       discharge_location   = NA_character_,
+      death_time           = as.POSIXct(rep(NA, n), tz = "UTC"),
+      death_date           = as.Date(rep(NA, n)),
+      death_time_precision = NA_character_,
+      death_source         = NA_character_,
       stringsAsFactors     = FALSE
     ))
   }
@@ -782,13 +850,18 @@ extract_mortality_generic <- function(dataset, dict) {
   death_raw <- load_concepts("death", src = dataset, concepts = dict)
   death_df <- as.data.frame(death_raw)
   id_name <- id_var(death_raw)
+  n <- nrow(death_df)
 
   df <- data.frame(
     stay_id              = death_df[[id_name]],
-    date_of_death        = NA,
+    date_of_death        = as.POSIXct(rep(NA, n), tz = "UTC"),
     hospital_expire_flag = as.integer(death_df$death),
-    dischtime            = NA,
+    dischtime            = as.POSIXct(rep(NA, n), tz = "UTC"),
     discharge_location   = NA_character_,
+    death_time           = as.POSIXct(rep(NA, n), tz = "UTC"),
+    death_date           = as.Date(rep(NA, n)),
+    death_time_precision = NA_character_,
+    death_source         = NA_character_,
     stringsAsFactors     = FALSE
   )
   df

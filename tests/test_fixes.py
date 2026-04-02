@@ -1,0 +1,571 @@
+"""Regression tests for FIXES.md Issues 2-9.
+
+Tests label manifest validation, normalization stats integrity,
+sequence-length override, checkpoint provenance, mortality precision,
+and exporter dedup logic.
+"""
+
+from datetime import datetime, timedelta
+
+import polars as pl
+import pytest
+import torch
+import yaml
+from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+from slices.data.labels.aki import AKILabelBuilder
+from slices.data.labels.los import LOSLabelBuilder
+from slices.data.labels.mortality import MortalityLabelBuilder
+from slices.data.tensor_cache import (
+    _compute_split_hash,
+    load_normalization_stats,
+    save_normalization_stats,
+)
+from slices.data.tensor_preprocessing import (
+    extract_tensors_from_dataframe,
+)
+
+# ============================================================================
+# Issue 3: Label manifest freshness checking
+# ============================================================================
+
+
+class TestLabelManifest:
+    """Tests for label builder versioning and config hashing."""
+
+    def test_all_builders_have_semantic_version(self):
+        """Every label builder subclass must define SEMANTIC_VERSION."""
+        assert hasattr(MortalityLabelBuilder, "SEMANTIC_VERSION")
+        assert hasattr(AKILabelBuilder, "SEMANTIC_VERSION")
+        assert hasattr(LOSLabelBuilder, "SEMANTIC_VERSION")
+
+    def test_config_hash_deterministic(self):
+        """Same config produces same hash."""
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+        )
+        h1 = LabelBuilder.config_hash(config)
+        h2 = LabelBuilder.config_hash(config)
+        assert h1 == h2
+        assert len(h1) == 16
+
+    def test_config_hash_changes_on_window_change(self):
+        """Different prediction_window_hours produces different hash."""
+        config_24 = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+        )
+        config_48 = LabelConfig(
+            task_name="mortality_48h",
+            task_type="binary",
+            prediction_window_hours=48,
+            observation_window_hours=48,
+        )
+        assert LabelBuilder.config_hash(config_24) != LabelBuilder.config_hash(config_48)
+
+    def test_config_hash_changes_on_gap_change(self):
+        """Different gap_hours produces different hash."""
+        config_0 = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            gap_hours=0,
+        )
+        config_6 = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            gap_hours=6,
+        )
+        assert LabelBuilder.config_hash(config_0) != LabelBuilder.config_hash(config_6)
+
+    def test_validate_data_prerequisites_version_mismatch(self, tmp_path):
+        """Builder version mismatch should raise RuntimeError."""
+        from slices.training.utils import validate_data_prerequisites
+
+        # Create metadata with old version
+        metadata = {
+            "label_manifest": {
+                "mortality_24h": {
+                    "builder_version": "0.0.1",  # old version
+                    "config_hash": "will_not_match",
+                }
+            }
+        }
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(RuntimeError, match="Label builder version mismatch"):
+            validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+    def test_validate_data_prerequisites_missing_manifest_raises(self, tmp_path):
+        """Missing label_manifest should abort training."""
+        from slices.training.utils import validate_data_prerequisites
+
+        metadata = {"task_names": ["mortality_24h"]}  # no label_manifest
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(RuntimeError, match="no label_manifest"):
+            validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+    def test_validate_data_prerequisites_missing_metadata_raises(self, tmp_path):
+        """Missing metadata.yaml should abort training."""
+        from slices.training.utils import validate_data_prerequisites
+
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        # No metadata.yaml at all
+
+        with pytest.raises(FileNotFoundError, match="metadata.yaml not found"):
+            validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+    def test_validate_data_prerequisites_missing_task_in_manifest_raises(self, tmp_path):
+        """Task missing from manifest should abort training."""
+        from slices.training.utils import validate_data_prerequisites
+
+        metadata = {
+            "label_manifest": {
+                "mortality_hospital": {
+                    "builder_version": "1.0.0",
+                    "config_hash": "abc123",
+                }
+                # mortality_24h is NOT in the manifest
+            }
+        }
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(RuntimeError, match="not found in label manifest"):
+            validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+    def test_validate_data_prerequisites_matching_passes(self, tmp_path):
+        """Matching manifest should pass cleanly."""
+        from slices.training.utils import validate_data_prerequisites
+
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = LabelBuilderFactory.create(config)
+        metadata = {
+            "label_manifest": {
+                "mortality_24h": {
+                    "builder_version": builder.SEMANTIC_VERSION,
+                    "config_hash": LabelBuilder.config_hash(config),
+                }
+            }
+        }
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        # Should not raise — but we need the task YAML to exist for validation.
+        # Since validate_data_prerequisites looks for configs/tasks/*.yaml,
+        # it will skip tasks where the config file doesn't exist.
+        # So this test verifies the no-crash path.
+        validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+
+# ============================================================================
+# Issue 9: Hash-keyed normalization stats cache
+# ============================================================================
+
+
+class TestNormalizationStatsCache:
+    """Tests for hash-keyed normalization stats files."""
+
+    def test_split_hash_deterministic(self):
+        """Same indices produce same hash."""
+        indices = [0, 5, 10, 15]
+        h1 = _compute_split_hash(indices, normalize=True)
+        h2 = _compute_split_hash(indices, normalize=True)
+        assert h1 == h2
+
+    def test_split_hash_differs_for_different_indices(self):
+        """Different indices produce different hash."""
+        h1 = _compute_split_hash([0, 1, 2], normalize=True)
+        h2 = _compute_split_hash([0, 1, 3], normalize=True)
+        assert h1 != h2
+
+    def test_split_hash_differs_for_normalize_flag(self):
+        """Same indices but different normalize flag produce different hash."""
+        h1 = _compute_split_hash([0, 1, 2], normalize=True)
+        h2 = _compute_split_hash([0, 1, 2], normalize=False)
+        assert h1 != h2
+
+    def test_split_hash_order_invariant(self):
+        """Hash is the same regardless of input order (sorted internally)."""
+        h1 = _compute_split_hash([5, 0, 10], normalize=True)
+        h2 = _compute_split_hash([0, 5, 10], normalize=True)
+        assert h1 == h2
+
+    def test_save_load_roundtrip(self, tmp_path):
+        """Save and load stats with hash-keyed filenames."""
+        means = torch.tensor([1.0, 2.0, 3.0])
+        stds = torch.tensor([0.5, 1.0, 1.5])
+        names = ["a", "b", "c"]
+        indices = [0, 1, 2, 3, 4]
+
+        save_normalization_stats(tmp_path, means, stds, names, indices, normalize=True)
+
+        loaded = load_normalization_stats(tmp_path, indices, normalize=True)
+        assert loaded is not None
+        assert loaded["feature_means"] == means.tolist()
+        assert loaded["feature_stds"] == stds.tolist()
+
+    def test_different_splits_different_files(self, tmp_path):
+        """Different splits write to different files."""
+        means = torch.tensor([1.0, 2.0])
+        stds = torch.tensor([0.5, 1.0])
+        names = ["a", "b"]
+
+        save_normalization_stats(tmp_path, means, stds, names, [0, 1, 2], normalize=True)
+        save_normalization_stats(tmp_path, means * 2, stds * 2, names, [3, 4, 5], normalize=True)
+
+        stats_files = list(tmp_path.glob("normalization_stats_*.yaml"))
+        assert len(stats_files) == 2
+
+        loaded1 = load_normalization_stats(tmp_path, [0, 1, 2], normalize=True)
+        loaded2 = load_normalization_stats(tmp_path, [3, 4, 5], normalize=True)
+        assert loaded1["feature_means"] != loaded2["feature_means"]
+
+    def test_legacy_fallback(self, tmp_path):
+        """Legacy normalization_stats.yaml is loaded when hash-keyed file doesn't exist."""
+        indices = [0, 1, 2]
+        legacy_stats = {
+            "feature_means": [1.0, 2.0],
+            "feature_stds": [0.5, 1.0],
+            "feature_names": ["a", "b"],
+            "train_indices": indices,
+            "normalize": True,
+        }
+        with open(tmp_path / "normalization_stats.yaml", "w") as f:
+            yaml.dump(legacy_stats, f)
+
+        loaded = load_normalization_stats(tmp_path, indices, normalize=True)
+        assert loaded is not None
+        assert loaded["feature_means"] == [1.0, 2.0]
+
+
+# ============================================================================
+# Issue 4: Sequence-length override
+# ============================================================================
+
+
+class TestSeqLengthOverride:
+    """Tests for sequence-length mismatch handling in tensor extraction."""
+
+    def _make_df(self, n_samples: int, stored_len: int, n_features: int) -> pl.DataFrame:
+        """Create a test DataFrame with nested list columns."""
+        rows = []
+        for i in range(n_samples):
+            ts_row = [[float(j + i * 0.1) for _ in range(n_features)] for j in range(stored_len)]
+            mask_row = [[True for _ in range(n_features)] for _ in range(stored_len)]
+            rows.append({"timeseries": ts_row, "mask": mask_row})
+        return pl.DataFrame(rows)
+
+    def test_override_shorter_than_stored(self):
+        """Requesting shorter seq_length should truncate."""
+        df = self._make_df(n_samples=3, stored_len=48, n_features=2)
+        ts, masks = extract_tensors_from_dataframe(df, seq_length=24, n_features=2)
+        assert ts.shape == (3, 24, 2)
+        assert masks.shape == (3, 24, 2)
+
+    def test_override_longer_than_stored(self):
+        """Requesting longer seq_length should pad."""
+        df = self._make_df(n_samples=3, stored_len=24, n_features=2)
+        ts, masks = extract_tensors_from_dataframe(df, seq_length=48, n_features=2)
+        assert ts.shape == (3, 48, 2)
+        assert masks.shape == (3, 48, 2)
+        # Padded positions should have NaN in timeseries and False in masks
+        assert torch.isnan(ts[0, 24, 0])
+        assert not masks[0, 24, 0]
+
+    def test_override_equal_to_stored(self):
+        """Requesting same seq_length should use fast path."""
+        df = self._make_df(n_samples=3, stored_len=48, n_features=2)
+        ts, masks = extract_tensors_from_dataframe(df, seq_length=48, n_features=2)
+        assert ts.shape == (3, 48, 2)
+        assert masks.shape == (3, 48, 2)
+
+
+# ============================================================================
+# Issue 2: Mortality timestamp precision
+# ============================================================================
+
+
+class TestMortalityPrecision:
+    """Tests for precision-aware mortality label building."""
+
+    def _make_mortality_data(self, stays, deaths):
+        """Helper to create raw_data dict for mortality builder.
+
+        stays: list of (stay_id, intime, outtime)
+        deaths: list of (stay_id, death_time, death_date, precision, source,
+                         hospital_expire_flag)
+        """
+        stays_df = pl.DataFrame(
+            {
+                "stay_id": [s[0] for s in stays],
+                "intime": [s[1] for s in stays],
+                "outtime": [s[2] for s in stays],
+            }
+        )
+        mort_df = pl.DataFrame(
+            {
+                "stay_id": [d[0] for d in deaths],
+                "death_time": [d[1] for d in deaths],
+                "death_date": [d[2] for d in deaths],
+                "death_time_precision": [d[3] for d in deaths],
+                "death_source": [d[4] for d in deaths],
+                "hospital_expire_flag": [d[5] for d in deaths],
+                "dischtime": [None for _ in deaths],
+                "discharge_location": [None for _ in deaths],
+                "date_of_death": [d[1] if d[1] else None for d in deaths],
+            },
+            schema={
+                "stay_id": pl.Int64,
+                "death_time": pl.Datetime("us"),
+                "death_date": pl.Date,
+                "death_time_precision": pl.Utf8,
+                "death_source": pl.Utf8,
+                "hospital_expire_flag": pl.Int32,
+                "dischtime": pl.Datetime("us"),
+                "discharge_location": pl.Utf8,
+                "date_of_death": pl.Datetime("us"),
+            },
+        )
+        return {"stays": stays_df, "mortality_info": mort_df}
+
+    def test_timestamp_precision_exact(self):
+        """Exact timestamp within prediction window → positive."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        # Death at hour 60 (within 48-72 prediction window)
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, base + timedelta(hours=60), None, "timestamp", "admissions.deathtime", 1)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] == 1
+
+    def test_timestamp_precision_outside_window(self):
+        """Exact timestamp after prediction window → negative."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        # Death at hour 80 (after 72h prediction end)
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, base + timedelta(hours=80), None, "timestamp", "admissions.deathtime", 1)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] == 0
+
+    def test_date_only_fully_inside_window(self):
+        """Date-only death where entire day falls inside prediction window → positive."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        # Prediction window: hour 48-72 = Jan 3 00:00 to Jan 4 00:00
+        # Death date: Jan 3 (00:00-23:59) — entirely within window
+        from datetime import date
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, None, date(2020, 1, 3), "date", "patients.dod", 1)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] == 1
+
+    def test_date_only_overlapping_boundary_is_null(self):
+        """Date-only death overlapping prediction window boundary → null."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        # Prediction window: hour 48-72 = Jan 3 00:00 to Jan 4 00:00
+        # Death date: Jan 4 (00:00-23:59) — overlaps pred_end boundary
+        from datetime import date
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=120))],
+            deaths=[(1, None, date(2020, 1, 4), "date", "patients.dod", 1)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] is None
+
+    def test_date_only_before_observation_end(self):
+        """Date-only death before observation window end → null (excluded)."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        # Death date: Jan 1 — before obs_end (Jan 3 00:00).
+        # Patient also left ICU during obs (outtime < obs_end).
+        from datetime import date
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=20))],  # short stay
+            deaths=[(1, None, date(2020, 1, 1), "date", "patients.dod", 1)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] is None
+
+    def test_survived_patient(self):
+        """Patient who survived → label 0."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, None, None, None, None, 0)],
+        )
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] == 0
+
+    def test_legacy_schema_migration(self):
+        """Legacy data with only date_of_death should be migrated correctly."""
+        merged = pl.DataFrame(
+            {
+                "stay_id": [1],
+                "intime": [datetime(2020, 1, 1)],
+                "outtime": [datetime(2020, 1, 5)],
+                "date_of_death": [datetime(2020, 1, 3, 12, 0, 0)],
+                "hospital_expire_flag": [1],
+            }
+        )
+        result = MortalityLabelBuilder._ensure_precision_columns(merged)
+        assert "death_time_precision" in result.columns
+        assert "death_time" in result.columns
+        assert result["death_time_precision"][0] == "timestamp"
+
+
+# ============================================================================
+# Issue 6: Exporter LR/mask_ratio decode and historical recovery
+# ============================================================================
+
+
+class TestExporterHistoricalRecovery:
+    """Tests for _recover_pretrain_metadata run-name parsing."""
+
+    def test_lr_decode_matches_run_experiments_encoding(self):
+        """Decode table must match str(v).replace('.','') encoding from run_experiments.py."""
+        # These are the exact values from LR_ABLATION = [2e-4, 5e-4, 2e-3]
+        assert str(2e-4).replace(".", "") == "00002"
+        assert str(5e-4).replace(".", "") == "00005"
+        assert str(2e-3).replace(".", "") == "0002"
+
+        from scripts.export_results import _LR_DECODE
+
+        assert _LR_DECODE["00002"] == 2e-4
+        assert _LR_DECODE["00005"] == 5e-4
+        assert _LR_DECODE["0002"] == 2e-3
+
+    def test_mr_decode_matches_run_experiments_encoding(self):
+        """Decode table must match str(v).replace('.','') encoding."""
+        assert str(0.3).replace(".", "") == "03"
+        assert str(0.75).replace(".", "") == "075"
+
+        from scripts.export_results import _MR_DECODE
+
+        assert _MR_DECODE["03"] == 0.3
+        assert _MR_DECODE["075"] == 0.75
+
+    def test_recover_lr_from_output_dir(self):
+        """Historical LR ablation finetunes recovered from output_dir pattern."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {"output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed789_lr00002"}
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
+        assert up_lr == 2e-4
+        assert subtype == "lr_ablation"
+
+    def test_recover_mask_ratio_from_output_dir(self):
+        """Historical mask_ratio ablation finetunes recovered from output_dir."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {
+            "output_dir": "outputs/sprint1c/finetune_jepa_mortality_24h_miiv_seed42_mask_ratio03"
+        }
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
+        assert up_mr == 0.3
+        assert subtype == "mask_ablation"
+
+    def test_new_runs_use_config_directly(self):
+        """New runs with explicit upstream fields skip name parsing."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {"upstream_pretrain_lr": 5e-4, "experiment_subtype": "lr_ablation"}
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("irrelevant_name", config)
+        assert up_lr == 5e-4
+        assert subtype == "lr_ablation"
+
+    def test_core_run_returns_none(self):
+        """Core runs (no HP ablation) return None for all fields."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {"output_dir": "outputs/sprint1/finetune_mae_mortality_24h_miiv_seed42"}
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
+        assert up_lr is None
+        assert up_mr is None
+        assert subtype is None

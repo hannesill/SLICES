@@ -23,6 +23,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -72,7 +73,13 @@ CORE_FINGERPRINT = [
 
 # For non-core runs: sprint distinguishes pretrain configs that aren't captured
 # in the finetune W&B config (e.g., which LR/mask_ratio the pretrain used).
-ABLATION_FINGERPRINT = CORE_FINGERPRINT + ["sprint"]
+# upstream_pretrain_lr/mask_ratio ensure HP ablation rows with different pretrain
+# configs are not collapsed (fixes Sprint 1b, 1c, 8, 10 dedup collisions).
+ABLATION_FINGERPRINT = CORE_FINGERPRINT + [
+    "sprint",
+    "upstream_pretrain_lr",
+    "upstream_pretrain_mask_ratio",
+]
 
 # Legacy fingerprint used for deduplication (includes sprint + all config dims).
 DEDUP_FINGERPRINT = [
@@ -285,6 +292,52 @@ def _load_run_data(run) -> tuple[dict, dict, str, str, str, list[str], str, str]
     )
 
 
+# Lookup tables for decoding run-name-encoded HP values.
+# run_experiments.py encodes: str(v).replace(".", "")
+#   str(2e-4)="0.0002" -> "00002", str(5e-4)="0.0005" -> "00005",
+#   str(2e-3)="0.002" -> "0002", str(0.3)="0.3" -> "03", str(0.75)="0.75" -> "075"
+_LR_DECODE = {
+    "00002": 2e-4,
+    "00005": 5e-4,
+    "0002": 2e-3,
+}
+_MR_DECODE = {"03": 0.3, "075": 0.75}
+
+
+def _recover_pretrain_metadata(
+    run_name: str, config: dict
+) -> tuple[float | None, float | None, str | None]:
+    """Recover upstream pretrain metadata from config (new runs) or run name (historical).
+
+    Returns (upstream_pretrain_lr, upstream_pretrain_mask_ratio, experiment_subtype).
+    """
+    # New runs have explicit fields
+    up_lr = config.get("upstream_pretrain_lr")
+    up_mr = config.get("upstream_pretrain_mask_ratio")
+    subtype = config.get("experiment_subtype")
+    if up_lr is not None or up_mr is not None:
+        return up_lr, up_mr, subtype
+
+    # Historical recovery: parse from run name / output_dir
+    output_dir = config.get("output_dir", run_name)
+
+    lr_match = re.search(r"_lr([^_]+)", output_dir)
+    if lr_match:
+        lr_str = lr_match.group(1)
+        up_lr = _LR_DECODE.get(lr_str)
+        if up_lr is not None:
+            subtype = "lr_ablation"
+
+    mr_match = re.search(r"_mask_ratio([^_]+)", output_dir)
+    if mr_match:
+        mr_str = mr_match.group(1)
+        up_mr = _MR_DECODE.get(mr_str)
+        if up_mr is not None:
+            subtype = subtype or "mask_ablation"
+
+    return up_lr, up_mr, subtype
+
+
 def extract_run(run, metric_keys: list[str]) -> dict:
     """Extract config + metrics from a W&B run in a single retry-protected call."""
     config, summary, run_id, run_url, run_name, tags, group, created_at = _retry(
@@ -353,6 +406,13 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     if experiment_type == "core" and label_frac is not None and float(label_frac) < 1.0:
         experiment_type = "label_efficiency"
 
+    # Recover upstream pretrain metadata (from config for new runs, run name for historical)
+    up_lr, up_mr, experiment_subtype = _recover_pretrain_metadata(run_name, config)
+
+    # Reclassify HP ablation runs that would otherwise stay as "core"
+    if experiment_type == "core" and experiment_subtype in ("lr_ablation", "mask_ablation"):
+        experiment_type = "hp_ablation"
+
     row = {
         "wandb_run_id": run_id,
         "wandb_run_url": run_url,
@@ -373,6 +433,13 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "source_dataset": source_dataset,
         "revision": config.get("revision", None),
         "phase": phase,
+        "upstream_pretrain_lr": up_lr,
+        "upstream_pretrain_mask_ratio": up_mr,
+        "experiment_subtype": experiment_subtype,
+        "_eval_checkpoint_source": summary.get("_eval_checkpoint_source", None),
+        "_best_ckpt_path": summary.get("_best_ckpt_path", None),
+        "_best_ckpt_load_ok": summary.get("_best_ckpt_load_ok", None),
+        "_best_ckpt_error": summary.get("_best_ckpt_error", None),
     }
     row.update(metrics)
     return row
@@ -447,6 +514,14 @@ def build_per_seed_df(runs: list) -> pd.DataFrame:
     sort_cols = [c for c in ["sprint", "paradigm", "dataset", "task", "seed"] if c in df.columns]
     if sort_cols:
         df = df.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+
+    # Row count validation by experiment_type for auditability
+    if "experiment_type" in df.columns:
+        counts = df["experiment_type"].value_counts().sort_index()
+        print("\n  Row counts by experiment_type after dedup:", file=sys.stderr)
+        for etype, count in counts.items():
+            print(f"    {etype}: {count}", file=sys.stderr)
+        print(f"    TOTAL: {len(df)}", file=sys.stderr)
 
     return df
 

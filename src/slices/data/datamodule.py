@@ -210,23 +210,27 @@ class ICUDataModule(L.LightningDataModule):
             self.test_ratio,
         )
 
+        # Save full train indices for normalization BEFORE subsampling.
+        # Normalization must always use the full training split to avoid
+        # noisy stats at low label fractions and pretrain/finetune mismatch.
+        normalization_train_indices = list(self.train_indices)
+
         # Subsample training indices for label-efficiency ablations
         if self.label_fraction < 1.0:
             self.train_indices = subsample_train_indices(
                 self.train_indices, self.label_fraction, self.seed
             )
 
-        # Create dataset with training indices for normalization
-        # IMPORTANT: Use handle_missing_labels='raise' because we already filtered
-        # missing labels in compute_patient_level_splits. If any are still missing,
-        # it indicates a bug.
+        # Create dataset with FULL training indices for normalization.
+        # self.train_indices (possibly subsampled) is used by train_dataloader
+        # to create a Subset for optimization.
         logger.debug("[Step 2/3] Creating ICUDataset")
         self.dataset = ICUDataset(
             data_dir=self.processed_dir,
             task_name=self.task_name,
             seq_length=self.seq_length,
             normalize=self.normalize,
-            train_indices=self.train_indices,
+            train_indices=normalization_train_indices,
             # Use 'raise' since we pre-filtered - any missing labels now is a bug
             handle_missing_labels="raise" if self.task_name else "filter",
             # Pass excluded stays so Dataset can validate consistency
