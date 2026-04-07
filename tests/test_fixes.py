@@ -752,3 +752,31 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["project_name"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
+
+
+class TestExperimentRunnerMatrix:
+    """Tests for thesis-final sprint matrix coverage."""
+
+    def test_sprint7p_expanded_to_five_seeds(self):
+        from scripts.run_experiments import BASELINE_SPRINTS, SEEDS_EXTENDED, MatrixBuilder
+
+        builder = MatrixBuilder()
+        builder.build_sprint7p()
+
+        assert len(builder.runs) == 100
+        assert sorted({run.seed for run in builder.runs}) == SEEDS_EXTENDED
+        assert BASELINE_SPRINTS["7p"] == ["6", "10"]
+
+    def test_sprint13_includes_both_protocols(self):
+        from scripts.run_experiments import MatrixBuilder
+
+        builder = MatrixBuilder()
+        builder.build_sprint13()
+
+        assert len(builder.runs) == 135
+        pretrains = [run for run in builder.runs if run.run_type == "pretrain"]
+        finetunes = [run for run in builder.runs if run.run_type == "finetune"]
+
+        assert len(pretrains) == 15
+        assert sum(run.freeze_encoder is True for run in finetunes) == 60
+        assert sum(run.freeze_encoder is False for run in finetunes) == 60

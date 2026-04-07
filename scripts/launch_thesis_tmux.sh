@@ -13,7 +13,7 @@ BATCH_SIZE_FAIRNESS="${BATCH_SIZE_FAIRNESS:-64}"
 DEVICE_FAIRNESS="${DEVICE_FAIRNESS:-auto}"
 INCLUDE_SPRINT12="${INCLUDE_SPRINT12:-0}"
 INCLUDE_SPRINT13="${INCLUDE_SPRINT13:-1}"
-INCLUDE_SPRINT7P="${INCLUDE_SPRINT7P:-0}"
+INCLUDE_SPRINT7P="${INCLUDE_SPRINT7P:-1}"
 RUN_EXPORT="${RUN_EXPORT:-1}"
 STATUS_INTERVAL="${STATUS_INTERVAL:-60}"
 RESULTS_DIR="${RESULTS_DIR:-results/${WANDB_PROJECT}_${REVISION}}"
@@ -34,7 +34,6 @@ mkdir -p "$LOG_DIR"
 main_sprints=(1 1b 1c 2 3 4 5 6 7 8 10 11)
 fairness_sprints=(1 2 3 4 5 10)
 tag_sprints=(1b 1c 2 5 6 7 8)
-warmup_sprints=("${main_sprints[@]}")
 appendix_sprints=()
 
 if [[ "$INCLUDE_SPRINT13" == "1" ]]; then
@@ -51,6 +50,10 @@ fi
 if [[ "$INCLUDE_SPRINT12" == "1" ]]; then
   appendix_sprints+=(12)
   fairness_sprints+=(12)
+fi
+
+warmup_sprints=("${main_sprints[@]}")
+if [[ "$INCLUDE_SPRINT12" == "1" ]]; then
   warmup_sprints+=(12)
 fi
 

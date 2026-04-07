@@ -59,6 +59,16 @@ EXPERIMENT_TYPES = {
 }
 
 CROSS_SPRINT_TYPES = {"core", "label_efficiency", "transfer", "hp_ablation"}
+FIXED_SEED_EXPERIMENT_TYPES = {
+    "core",
+    "label_efficiency",
+    "transfer",
+    "hp_ablation",
+    "capacity_pilot",
+    "classical_baselines",
+    "smart_reference",
+    "temporal_contrastive",
+}
 
 # For core runs: sprint is noise — same config across sprints, different seeds.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
@@ -634,7 +644,7 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     parts = []
     if len(cross_sprint) > 0:
         print(
-            f"  Aggregating {len(cross_sprint)} cross-sprint runs (core + label_efficiency)...",
+            f"  Aggregating {len(cross_sprint)} cross-sprint runs (merged experiment families)...",
             file=sys.stderr,
         )
         parts.append(_aggregate_group(cross_sprint, CORE_FINGERPRINT))
@@ -671,18 +681,19 @@ def validate(
 ) -> list[str]:
     """Validate results and return warning strings.
 
-    Only warns about core configs with fewer seeds than expected.
-    Non-core configs have variable seed counts by design.
+    Warns when fixed-seed experiment families have fewer seeds than expected.
     """
     warnings = []
 
-    # Check core configs for expected seed count
+    # Check fixed-seed experiment families for expected seed count
     if "experiment_type" in aggregated_df.columns:
-        core = aggregated_df[aggregated_df["experiment_type"] == "core"]
-        low_seed = core[core["n_seeds"] < expected_core_seeds]
+        fixed_seed = aggregated_df[
+            aggregated_df["experiment_type"].isin(FIXED_SEED_EXPERIMENT_TYPES)
+        ]
+        low_seed = fixed_seed[fixed_seed["n_seeds"] < expected_core_seeds]
         if len(low_seed) > 0:
             warnings.append(
-                f"WARNING: {len(low_seed)}/{len(core)} core configs have fewer "
+                f"WARNING: {len(low_seed)}/{len(fixed_seed)} fixed-seed configs have fewer "
                 f"than {expected_core_seeds} seeds:"
             )
             for _, row in low_seed.iterrows():
@@ -692,7 +703,10 @@ def validate(
                     if c in row and row[c] is not None
                 )
                 seeds = json.loads(row["seed_list"]) if pd.notna(row.get("seed_list")) else []
-                warnings.append(f"  {desc} — n_seeds={row['n_seeds']}, seeds={seeds}")
+                warnings.append(
+                    f"  experiment_type={row['experiment_type']}, {desc} — "
+                    f"n_seeds={row['n_seeds']}, seeds={seeds}"
+                )
 
     # Check for runs with no test metrics at all
     test_cols = [c for c in TEST_METRICS if c in per_seed_df.columns]
