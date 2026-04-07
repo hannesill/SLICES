@@ -10,6 +10,8 @@ Usage:
     uv run python scripts/run_experiments.py run --sprint 1 --parallel 4
     uv run python scripts/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
     uv run python scripts/run_experiments.py run --sprint 1 --revision v2 --reason "fix LR"
+    uv run python scripts/run_experiments.py run --sprint 1 2 \\
+        --project slices-thesis --entity myteam
     uv run python scripts/run_experiments.py status
     uv run python scripts/run_experiments.py status --sprint 1
     uv run python scripts/run_experiments.py retry --failed --parallel 4
@@ -935,6 +937,24 @@ def apply_revision(runs: list[Run], revision: str, reason: str | None = None) ->
     return runs
 
 
+def apply_wandb_target(
+    runs: list[Run],
+    project: str | None = None,
+    entity: str | None = None,
+) -> list[Run]:
+    """Inject W&B project/entity overrides into generated runs."""
+    if project is None and entity is None:
+        return runs
+
+    for run in runs:
+        if project is not None:
+            run.extra_overrides["project_name"] = project
+            run.extra_overrides["logging.wandb_project"] = project
+        if entity is not None:
+            run.extra_overrides["logging.wandb_entity"] = entity
+    return runs
+
+
 # ---------------------------------------------------------------------------
 # State Management
 # ---------------------------------------------------------------------------
@@ -1320,10 +1340,14 @@ def cmd_run(args):
     # Apply revision transform if requested
     if args.revision:
         runs = apply_revision(runs, args.revision, args.reason)
+    runs = apply_wandb_target(runs, args.project, args.entity)
 
     print(f"Sprint(s) {', '.join(sprints)}: {len(runs)} runs")
     if args.revision:
         print(f"Revision: {args.revision}" + (f" ({args.reason})" if args.reason else ""))
+    if args.project or args.entity:
+        target = f"{args.entity}/{args.project}" if args.entity else args.project
+        print(f"W&B target: {target}")
     run_scheduler(runs, state, args.parallel, args.dry_run)
 
 
@@ -1345,6 +1369,7 @@ def cmd_retry(args):
             all_runs = rest + revised
         else:
             all_runs = apply_revision(all_runs, args.revision, args.reason)
+    all_runs = apply_wandb_target(all_runs, args.project, args.entity)
 
     state = load_state()
     recover_stale_running(state)
@@ -1376,6 +1401,9 @@ def cmd_retry(args):
 
     save_state(state)
     print(f"Retrying {len(runs_to_retry)} runs")
+    if args.project or args.entity:
+        target = f"{args.entity}/{args.project}" if args.entity else args.project
+        print(f"W&B target: {target}")
     run_scheduler(runs_to_retry, state, args.parallel, dry_run=False)
 
 
@@ -1532,6 +1560,18 @@ def main():
     p_run.add_argument("--dry-run", action="store_true", help="Print runs without executing")
     p_run.add_argument("--revision", type=str, default=None, help="Revision name (e.g. v2)")
     p_run.add_argument("--reason", type=str, default=None, help="Reason for rerun")
+    p_run.add_argument(
+        "--project",
+        type=str,
+        default=os.environ.get("WANDB_PROJECT"),
+        help="W&B project override for launched runs (default: WANDB_PROJECT env var)",
+    )
+    p_run.add_argument(
+        "--entity",
+        type=str,
+        default=os.environ.get("WANDB_ENTITY"),
+        help="W&B entity override for launched runs (default: WANDB_ENTITY env var)",
+    )
 
     # status
     p_status = sub.add_parser("status", help="Show experiment status")
@@ -1545,6 +1585,18 @@ def main():
     p_retry.add_argument("--sprint", nargs="+", default=None, help="Scope retry to sprint(s)")
     p_retry.add_argument("--revision", type=str, default=None, help="Revision name to retry")
     p_retry.add_argument("--reason", type=str, default=None, help="Reason for rerun")
+    p_retry.add_argument(
+        "--project",
+        type=str,
+        default=os.environ.get("WANDB_PROJECT"),
+        help="W&B project override for relaunched runs (default: WANDB_PROJECT env var)",
+    )
+    p_retry.add_argument(
+        "--entity",
+        type=str,
+        default=os.environ.get("WANDB_ENTITY"),
+        help="W&B entity override for relaunched runs (default: WANDB_ENTITY env var)",
+    )
 
     # warmup
     p_warmup = sub.add_parser(
@@ -1568,7 +1620,10 @@ def main():
     )
     p_tag.add_argument("--dry-run", action="store_true", help="Show what would be tagged")
     p_tag.add_argument(
-        "--project", type=str, default="slices", help="W&B project name (default: slices)"
+        "--project",
+        type=str,
+        default=os.environ.get("WANDB_PROJECT", "slices"),
+        help="W&B project name (default: WANDB_PROJECT env var or 'slices')",
     )
     p_tag.add_argument(
         "--entity",

@@ -672,3 +672,83 @@ class TestExporterHistoricalRecovery:
         assert up_lr is None
         assert up_mr is None
         assert subtype is None
+
+    def test_infer_model_size_for_capacity_variants(self):
+        """Exporter should preserve Sprint 7p medium/large labels."""
+        from scripts.export_results import _infer_model_size
+
+        assert _infer_model_size({"encoder": {"d_model": 64, "n_layers": 2}}) == "default"
+        assert _infer_model_size({"sprint": "7p", "encoder": {"d_model": 128, "n_layers": 4}}) == (
+            "medium"
+        )
+        assert _infer_model_size({"sprint": "7p", "encoder": {"d_model": 256, "n_layers": 4}}) == (
+            "large"
+        )
+
+    def test_extract_run_reclassifies_transfer_and_sprint13(self):
+        """Sprint-10 transfer seeds and Sprint 13 should export with stable experiment types."""
+        from scripts.export_results import extract_run
+
+        class DummyRun:
+            def __init__(self, config, tags, name):
+                self.config = config
+                self.summary_metrics = {}
+                self.id = "dummy"
+                self.url = "https://example.com"
+                self.name = name
+                self.tags = tags
+                self.group = "g"
+                self.created_at = "2026-04-07T00:00:00"
+
+        transfer = DummyRun(
+            config={
+                "sprint": "10",
+                "dataset": "eicu",
+                "paradigm": "mae",
+                "source_dataset": "miiv",
+                "seed": 789,
+                "encoder": {"d_model": 64, "n_layers": 2},
+                "training": {"freeze_encoder": False},
+                "task": {"task_name": "mortality_24h"},
+            },
+            tags=["phase:finetune"],
+            name="finetune_mae_mortality_24h_eicu_from_miiv_seed789",
+        )
+        assert extract_run(transfer, [])["experiment_type"] == "transfer"
+
+        ts2vec = DummyRun(
+            config={
+                "sprint": "13",
+                "dataset": "miiv",
+                "paradigm": "ts2vec",
+                "seed": 42,
+                "encoder": {"d_model": 64, "n_layers": 2},
+                "training": {"freeze_encoder": False},
+                "task": {"task_name": "mortality_24h"},
+            },
+            tags=["phase:finetune"],
+            name="finetune_ts2vec_mortality_24h_miiv_seed42",
+        )
+        assert extract_run(ts2vec, [])["experiment_type"] == "temporal_contrastive"
+
+
+class TestExperimentRunnerWandbOverrides:
+    """Tests for clean project/entity overrides in the experiment runner."""
+
+    def test_apply_wandb_target_injects_project_and_entity(self):
+        from scripts.run_experiments import Run, apply_wandb_target
+
+        run = Run(
+            id="s1_supervised_mortality_24h_miiv_seed42",
+            sprint="1",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/supervised_mortality_24h_miiv_seed42",
+        )
+
+        result = apply_wandb_target([run], project="slices-thesis", entity="hannes-ill")
+        assert result[0].extra_overrides["project_name"] == "slices-thesis"
+        assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
+        assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
