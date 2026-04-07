@@ -75,18 +75,77 @@ def validate_no_id_collision(static_a: pl.DataFrame, static_b: pl.DataFrame) -> 
 
 
 def validate_feature_compatibility(meta_a: dict, meta_b: dict) -> None:
-    """Verify both datasets have the same feature set."""
-    features_a = set(meta_a.get("feature_names", []))
-    features_b = set(meta_b.get("feature_names", []))
+    """Verify both datasets share the same preprocessing contract."""
+    features_a = list(meta_a.get("feature_names", []))
+    features_b = list(meta_b.get("feature_names", []))
 
     if features_a != features_b:
-        only_a = features_a - features_b
-        only_b = features_b - features_a
+        set_a = set(features_a)
+        set_b = set(features_b)
+        if set_a == set_b:
+            raise ValueError(
+                "Feature order mismatch between datasets. "
+                "The same features appear in a different order, which would silently "
+                "corrupt combined tensors."
+            )
+
+        only_a = set_a - set_b
+        only_b = set_b - set_a
         raise ValueError(
             f"Feature mismatch between datasets.\n"
             f"  Only in dataset A: {only_a}\n"
             f"  Only in dataset B: {only_b}\n"
             "Both datasets must have the same features for combined training."
+        )
+
+    invariant_fields = (
+        "feature_set",
+        "seq_length_hours",
+        "min_stay_hours",
+        "label_horizon_hours",
+    )
+    mismatches = []
+    for field in invariant_fields:
+        value_a = meta_a.get(field)
+        value_b = meta_b.get(field)
+        if value_a != value_b:
+            mismatches.append((field, value_a, value_b))
+
+    if mismatches:
+        details = "\n".join(
+            f"  {field}: dataset A={value_a}, dataset B={value_b}"
+            for field, value_a, value_b in mismatches
+        )
+        raise ValueError(
+            "Dataset preprocessing invariants do not match.\n"
+            f"{details}\n"
+            "Re-extract both datasets with the same preprocessing settings before combining."
+        )
+
+
+def validate_frame_schema(name: str, df_a: pl.DataFrame, df_b: pl.DataFrame) -> None:
+    """Verify matching column order and dtypes for a dataframe pair."""
+    if df_a.columns != df_b.columns:
+        raise ValueError(
+            f"{name} schema mismatch between datasets.\n"
+            f"  Dataset A columns: {df_a.columns}\n"
+            f"  Dataset B columns: {df_b.columns}\n"
+            "Column order must match exactly before concatenation."
+        )
+
+    dtype_mismatches = [
+        (col, df_a[col].dtype, df_b[col].dtype)
+        for col in df_a.columns
+        if df_a[col].dtype != df_b[col].dtype
+    ]
+    if dtype_mismatches:
+        details = "\n".join(
+            f"  {col}: dataset A={dtype_a}, dataset B={dtype_b}"
+            for col, dtype_a, dtype_b in dtype_mismatches
+        )
+        raise ValueError(
+            f"{name} dtype mismatch between datasets.\n{details}\n"
+            "Re-extract both datasets with matching schemas before combining."
         )
 
 
@@ -164,6 +223,7 @@ def main():
     # Validate feature compatibility
     print("\nValidating feature compatibility...")
     validate_feature_compatibility(data_a["metadata"], data_b["metadata"])
+    validate_frame_schema("timeseries", data_a["timeseries"], data_b["timeseries"])
     print("  Features match.")
 
     # Check for natural ID collisions

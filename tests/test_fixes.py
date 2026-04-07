@@ -17,12 +17,14 @@ from slices.data.labels.los import LOSLabelBuilder
 from slices.data.labels.mortality import MortalityLabelBuilder
 from slices.data.tensor_cache import (
     _compute_split_hash,
+    get_data_fingerprint,
+    get_preprocessing_fingerprint,
+    load_cached_tensors,
     load_normalization_stats,
+    save_cached_tensors,
     save_normalization_stats,
 )
-from slices.data.tensor_preprocessing import (
-    extract_tensors_from_dataframe,
-)
+from slices.data.tensor_preprocessing import extract_tensors_from_dataframe
 
 # ============================================================================
 # Issue 3: Label manifest freshness checking
@@ -171,11 +173,31 @@ class TestLabelManifest:
         with open(tmp_path / "metadata.yaml", "w") as f:
             yaml.dump(metadata, f)
 
-        # Should not raise — but we need the task YAML to exist for validation.
-        # Since validate_data_prerequisites looks for configs/tasks/*.yaml,
-        # it will skip tasks where the config file doesn't exist.
-        # So this test verifies the no-crash path.
+        # Should not raise when the manifest matches the checked task config.
         validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
+
+    def test_validate_data_prerequisites_missing_task_config_raises(self, tmp_path):
+        """Missing task config should fail closed instead of skipping validation."""
+        from slices.training.utils import validate_data_prerequisites
+
+        metadata = {
+            "label_manifest": {
+                "definitely_missing_task": {
+                    "builder_version": "1.0.0",
+                    "config_hash": "abc123",
+                }
+            }
+        }
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(FileNotFoundError, match="Task config not found"):
+            validate_data_prerequisites(
+                str(tmp_path),
+                "miiv",
+                task_names=["definitely_missing_task"],
+            )
 
 
 # ============================================================================
@@ -250,6 +272,8 @@ class TestNormalizationStatsCache:
             "feature_names": ["a", "b"],
             "train_indices": indices,
             "normalize": True,
+            "data_fingerprint": get_data_fingerprint(tmp_path),
+            "preprocessing_fingerprint": get_preprocessing_fingerprint(),
         }
         with open(tmp_path / "normalization_stats.yaml", "w") as f:
             yaml.dump(legacy_stats, f)
@@ -257,6 +281,85 @@ class TestNormalizationStatsCache:
         loaded = load_normalization_stats(tmp_path, indices, normalize=True)
         assert loaded is not None
         assert loaded["feature_means"] == [1.0, 2.0]
+
+    def test_legacy_stats_without_fingerprints_are_ignored(self, tmp_path):
+        """Legacy stats without freshness fingerprints should not be trusted."""
+        indices = [0, 1, 2]
+        legacy_stats = {
+            "feature_means": [1.0, 2.0],
+            "feature_stds": [0.5, 1.0],
+            "feature_names": ["a", "b"],
+            "train_indices": indices,
+            "normalize": True,
+        }
+        with open(tmp_path / "normalization_stats.yaml", "w") as f:
+            yaml.dump(legacy_stats, f)
+
+        loaded = load_normalization_stats(tmp_path, indices, normalize=True)
+        assert loaded is None
+
+    def test_hash_keyed_stats_invalidated_on_fingerprint_mismatch(self, tmp_path, monkeypatch):
+        """Hash-keyed normalization stats should be invalidated when fingerprints change."""
+        import slices.data.tensor_cache as cache_mod
+
+        monkeypatch.setattr(cache_mod, "get_data_fingerprint", lambda data_dir: "data-v1")
+        monkeypatch.setattr(cache_mod, "get_preprocessing_fingerprint", lambda: "prep-v1")
+
+        means = torch.tensor([1.0, 2.0])
+        stds = torch.tensor([0.5, 1.0])
+        save_normalization_stats(tmp_path, means, stds, ["a", "b"], [0, 1, 2], normalize=True)
+        assert load_normalization_stats(tmp_path, [0, 1, 2], normalize=True) is not None
+
+        monkeypatch.setattr(cache_mod, "get_preprocessing_fingerprint", lambda: "prep-v2")
+        assert load_normalization_stats(tmp_path, [0, 1, 2], normalize=True) is None
+
+
+class TestRawTensorCacheFreshness:
+    """Tests for raw tensor cache invalidation."""
+
+    def test_tensor_cache_invalidated_on_data_fingerprint_mismatch(self, tmp_path, monkeypatch):
+        """Raw tensor cache should be ignored when processed data changes."""
+        import slices.data.tensor_cache as cache_mod
+
+        monkeypatch.setattr(cache_mod, "get_data_fingerprint", lambda data_dir: "data-v1")
+        monkeypatch.setattr(cache_mod, "get_preprocessing_fingerprint", lambda: "prep-v1")
+
+        timeseries = torch.zeros((2, 4, 3), dtype=torch.float32)
+        masks = torch.ones((2, 4, 3), dtype=torch.bool)
+        save_cached_tensors(tmp_path, timeseries, masks, seq_length=4, n_features=3)
+        loaded = load_cached_tensors(tmp_path, seq_length=4, n_features=3)
+        assert loaded is not None
+
+        monkeypatch.setattr(cache_mod, "get_data_fingerprint", lambda data_dir: "data-v2")
+        assert load_cached_tensors(tmp_path, seq_length=4, n_features=3) is None
+
+
+class TestCombinedDatasetValidation:
+    """Tests for combined-dataset compatibility checks."""
+
+    def test_feature_order_mismatch_raises(self):
+        """Same feature set in different order should fail closed."""
+        import importlib
+
+        mod = importlib.import_module("scripts.preprocessing.create_combined_dataset")
+
+        meta_a = {"feature_names": ["hr", "map"], "seq_length_hours": 48, "min_stay_hours": 48}
+        meta_b = {"feature_names": ["map", "hr"], "seq_length_hours": 48, "min_stay_hours": 48}
+
+        with pytest.raises(ValueError, match="Feature order mismatch"):
+            mod.validate_feature_compatibility(meta_a, meta_b)
+
+    def test_invariant_mismatch_raises(self):
+        """Different preprocessing invariants should fail before merge."""
+        import importlib
+
+        mod = importlib.import_module("scripts.preprocessing.create_combined_dataset")
+
+        meta_a = {"feature_names": ["hr", "map"], "seq_length_hours": 48, "min_stay_hours": 48}
+        meta_b = {"feature_names": ["hr", "map"], "seq_length_hours": 72, "min_stay_hours": 48}
+
+        with pytest.raises(ValueError, match="preprocessing invariants"):
+            mod.validate_feature_compatibility(meta_a, meta_b)
 
 
 # ============================================================================

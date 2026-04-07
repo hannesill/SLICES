@@ -22,6 +22,10 @@ import polars as pl
 import yaml
 from omegaconf import DictConfig
 from slices.constants import TEST_RATIO, TRAIN_RATIO, VAL_RATIO
+from slices.data.tensor_cache import (
+    get_data_fingerprint,
+    get_preprocessing_fingerprint,
+)
 
 
 def _atomic_yaml_write(path: Path, data: dict) -> None:
@@ -269,6 +273,10 @@ def main(cfg: DictConfig) -> None:
         feature_names=feature_names,
         seq_length=seq_length,
     )
+    stats["normalize"] = True
+    stats["split_hash"] = None
+    stats["data_fingerprint"] = get_data_fingerprint(processed_dir)
+    stats["preprocessing_fingerprint"] = get_preprocessing_fingerprint()
 
     # Save normalization stats
     stats_path = processed_dir / "normalization_stats.yaml"

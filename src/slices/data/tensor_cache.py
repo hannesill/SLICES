@@ -6,10 +6,13 @@ Extracted from ICUDataset for modularity.
 """
 
 import hashlib
+import inspect
+import json
 import logging
 import os
 import tempfile
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +20,90 @@ import torch
 import yaml
 
 logger = logging.getLogger(__name__)
+_CACHE_FINGERPRINT_VERSION = "2026-04-07"
+
+
+def _fingerprint_payload(payload: Dict[str, Any]) -> str:
+    """Return a short stable fingerprint for a JSON-serializable payload."""
+    content = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.md5(content.encode()).hexdigest()[:12]
+
+
+def _path_signature(path: Path) -> Dict[str, Any]:
+    """Return a lightweight fingerprint for a file or directory path."""
+    if not path.exists():
+        return {"exists": False}
+
+    stat = path.stat()
+    signature: Dict[str, Any] = {
+        "exists": True,
+        "is_dir": path.is_dir(),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+    if path.is_dir():
+        signature["children"] = sorted(child.name for child in path.iterdir())
+
+    return signature
+
+
+def get_data_fingerprint(data_dir: Path) -> str:
+    """Fingerprint the processed dataset contents used to build caches."""
+    payload = {
+        "version": _CACHE_FINGERPRINT_VERSION,
+        "metadata": _path_signature(data_dir / "metadata.yaml"),
+        "static": _path_signature(data_dir / "static.parquet"),
+        "timeseries": _path_signature(data_dir / "timeseries.parquet"),
+        "labels": _path_signature(data_dir / "labels.parquet"),
+    }
+    return _fingerprint_payload(payload)
+
+
+@lru_cache(maxsize=1)
+def get_preprocessing_fingerprint() -> str:
+    """Fingerprint the tensor-preprocessing code path that builds caches."""
+    from slices.data import tensor_preprocessing as tp
+
+    payload = {"version": _CACHE_FINGERPRINT_VERSION}
+    for name in (
+        "extract_tensors_from_dataframe",
+        "convert_raw_to_tensors",
+        "compute_normalization_stats",
+        "apply_normalization_and_imputation",
+    ):
+        payload[name] = inspect.getsource(getattr(tp, name))
+    return _fingerprint_payload(payload)
+
+
+def _validate_cache_fingerprints(
+    cached: Dict[str, Any],
+    *,
+    artifact_name: str,
+    expected_data_fingerprint: str,
+    expected_preprocessing_fingerprint: str,
+) -> bool:
+    """Return True when cached metadata matches current data and code fingerprints."""
+    cached_data_fingerprint = cached.get("data_fingerprint")
+    cached_preprocessing_fingerprint = cached.get("preprocessing_fingerprint")
+
+    if not cached_data_fingerprint or not cached_preprocessing_fingerprint:
+        warnings.warn(
+            f"{artifact_name} cache is missing freshness fingerprints. "
+            "Ignoring cache and recomputing.",
+            UserWarning,
+        )
+        return False
+
+    if cached_data_fingerprint != expected_data_fingerprint:
+        logger.debug("%s data fingerprint mismatch, recomputing", artifact_name)
+        return False
+
+    if cached_preprocessing_fingerprint != expected_preprocessing_fingerprint:
+        logger.debug("%s preprocessing fingerprint mismatch, recomputing", artifact_name)
+        return False
+
+    return True
 
 
 def _compute_split_hash(train_indices: List[int], normalize: bool) -> str:
@@ -57,6 +144,9 @@ def load_normalization_stats(
     if not normalize:
         return None
 
+    expected_data_fingerprint = get_data_fingerprint(data_dir)
+    expected_preprocessing_fingerprint = get_preprocessing_fingerprint()
+
     # Hash-keyed path (new format) — hash guarantees index match
     if current_train_indices is not None:
         split_hash = _compute_split_hash(current_train_indices, normalize)
@@ -65,6 +155,13 @@ def load_normalization_stats(
             try:
                 with open(hashed_path) as f:
                     stats = yaml.safe_load(f)
+                if not _validate_cache_fingerprints(
+                    stats,
+                    artifact_name="Normalization stats",
+                    expected_data_fingerprint=expected_data_fingerprint,
+                    expected_preprocessing_fingerprint=expected_preprocessing_fingerprint,
+                ):
+                    return None
                 logger.debug(f"Loaded normalization stats from {hashed_path}")
                 return stats
             except Exception as e:
@@ -96,6 +193,14 @@ def load_normalization_stats(
                 "Recomputing statistics to prevent data leakage.",
                 UserWarning,
             )
+            return None
+
+        if not _validate_cache_fingerprints(
+            stats,
+            artifact_name="Legacy normalization stats",
+            expected_data_fingerprint=expected_data_fingerprint,
+            expected_preprocessing_fingerprint=expected_preprocessing_fingerprint,
+        ):
             return None
 
         return stats
@@ -143,7 +248,10 @@ def save_normalization_stats(
         "feature_names": feature_names,
         "split_hash": split_hash,
         "train_indices_count": len(train_indices) if train_indices else 0,
+        "train_indices": train_indices,
         "normalize": normalize,
+        "data_fingerprint": get_data_fingerprint(data_dir),
+        "preprocessing_fingerprint": get_preprocessing_fingerprint(),
     }
 
     try:
@@ -210,7 +318,14 @@ def get_tensor_cache_path(
     return cache_dir / f"tensors_{cache_key}.pt"
 
 
-def _try_load_cache(cache_path: Path, n_features: int, seq_length: int) -> Optional[Dict[str, Any]]:
+def _try_load_cache(
+    cache_path: Path,
+    n_features: int,
+    seq_length: int,
+    *,
+    expected_data_fingerprint: str,
+    expected_preprocessing_fingerprint: str,
+) -> Optional[Dict[str, Any]]:
     """Try to load and validate a raw tensor cache file.
 
     Args:
@@ -234,6 +349,13 @@ def _try_load_cache(cache_path: Path, n_features: int, seq_length: int) -> Optio
             return None
         if cached.get("seq_length") != seq_length:
             logger.debug("Cached tensors have different sequence length, recomputing")
+            return None
+        if not _validate_cache_fingerprints(
+            cached,
+            artifact_name="Tensor",
+            expected_data_fingerprint=expected_data_fingerprint,
+            expected_preprocessing_fingerprint=expected_preprocessing_fingerprint,
+        ):
             return None
 
         # Validate tensor shapes (support both old list and new stacked format)
@@ -285,7 +407,13 @@ def load_cached_tensors(
         Dictionary with cached raw tensors and metadata if valid, None otherwise.
     """
     cache_path = get_tensor_cache_path(data_dir, seq_length, n_features)
-    return _try_load_cache(cache_path, n_features, seq_length)
+    return _try_load_cache(
+        cache_path,
+        n_features,
+        seq_length,
+        expected_data_fingerprint=get_data_fingerprint(data_dir),
+        expected_preprocessing_fingerprint=get_preprocessing_fingerprint(),
+    )
 
 
 def save_cached_tensors(
@@ -316,6 +444,8 @@ def save_cached_tensors(
         "mask_tensor": mask_tensor,
         "n_features": n_features,
         "seq_length": seq_length,
+        "data_fingerprint": get_data_fingerprint(data_dir),
+        "preprocessing_fingerprint": get_preprocessing_fingerprint(),
     }
 
     try:

@@ -428,7 +428,10 @@ def validate_data_prerequisites(
         for task_name in task_names:
             config_file = tasks_path / f"{task_name}.yaml"
             if not config_file.exists():
-                continue
+                raise FileNotFoundError(
+                    f"Task config not found for '{task_name}': {config_file}. "
+                    "Cannot validate label freshness safely."
+                )
 
             with open(config_file) as f:
                 config_dict = yaml.safe_load(f)

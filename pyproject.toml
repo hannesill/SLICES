@@ -78,7 +78,11 @@ disable_error_code = [
 
 [dependency-groups]
 dev = [
+    "black>=23.0",
+    "mypy>=1.0",
     "pytest>=9.0.1",
+    "pytest-cov>=4.0",
     "python-pptx>=1.0.2",
     "ruff>=0.14.8",
+    "types-PyYAML>=6.0",
 ]
