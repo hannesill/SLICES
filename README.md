@@ -21,6 +21,11 @@
 
 How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
 
+The formal thesis corpus now also includes two targeted extensions:
+
+- `Sprint 7p`: a focused capacity study that scales MAE and supervised encoders on MIIV `mortality_24h`
+- `Sprint 13`: a TS2Vec temporal-contrastive extension that tests whether a stronger contrastive-family instantiation changes the conclusion
+
 ### The Comparison Triangle
 
 | Comparison | What Varies | What It Tests |
@@ -37,7 +42,7 @@ Fair comparison of SSL objectives for clinical time series is currently impossib
 
 ## SSL Paradigms
 
-All observation-level objectives share the same `ObservationTransformerEncoder` (one token per observed measurement) and the same masking logic (`masking.py`), differing only in what they predict and how they compute loss:
+The controlled thesis objectives share the same timestep-level obs-aware Transformer encoder and differ only in the SSL objective and masking logic:
 
 | Objective | Predicts | Target | Loss |
 |---|---|---|---|
@@ -45,7 +50,7 @@ All observation-level objectives share the same `ObservationTransformerEncoder` 
 | **JEPA** | Latent representations at masked positions | EMA target encoder representations | MSE / Cosine |
 | **Contrastive** | Global embedding similarity across views | Positive pair agreement (NT-Xent) | Cross-entropy |
 
-**SMART** (NeurIPS 2024) is also included in the codebase as a sanity check and to demonstrate the framework's extensibility — it uses its own MART encoder and element-wise masking, so it is not part of the controlled thesis experiments.
+**TS2Vec** is included as a formal temporal-contrastive thesis extension (Sprint `13`). **SMART** (NeurIPS 2024) remains an appendix-only external reference because it swaps in its own MART encoder and element-wise masking, so it is not part of the controlled thesis comparison.
 
 ## Pipeline
 
@@ -111,6 +116,9 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
 # Contrastive (SimCLR-style with two masked views)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
 
+# TS2Vec (formal thesis extension for the contrastive family)
+uv run python scripts/training/pretrain.py dataset=miiv ssl=ts2vec
+
 # SMART (sanity check / extensibility demo — not part of thesis experiments)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
 ```
@@ -125,6 +133,14 @@ uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/.../e
 
 ```bash
 uv run python scripts/training/supervised.py dataset=miiv
+```
+
+### 5. Thesis Reruns
+
+```bash
+WANDB_PROJECT=slices-thesis \
+WANDB_ENTITY=your-wandb-entity \
+bash scripts/launch_thesis_tmux.sh
 ```
 
 ## Project Structure
@@ -151,7 +167,8 @@ SLICES/
 │   │   │   ├── mae.py              # Masked Autoencoder
 │   │   │   ├── jepa.py             # Joint-Embedding Predictive Architecture
 │   │   │   ├── contrastive.py      # SimCLR-style contrastive
-│   │   │   └── smart.py            # SMART (sanity check / extensibility demo)
+│   │   │   ├── ts2vec.py           # Temporal contrastive extension
+│   │   │   └── smart.py            # SMART (appendix-only external reference)
 │   │   ├── heads/                  # Task heads (MLP, Linear)
 │   │   └── common.py               # Shared utilities
 │   ├── training/
@@ -163,12 +180,12 @@ SLICES/
 │       ├── fairness.py             # Per-group AUROC, demographic parity
 │       └── imputation.py           # SSL reconstruction quality
 ├── configs/                        # Hydra configs
-│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/smart)
+│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/ts2vec/smart)
 │   ├── finetune.yaml
 │   ├── supervised.yaml
 │   ├── data/                       # Dataset configs
 │   ├── model/                      # Encoder configs
-│   ├── ssl/                        # SSL objective configs (mae, jepa, contrastive, smart)
+│   ├── ssl/                        # SSL objective configs (mae, jepa, contrastive, ts2vec, smart)
 │   └── tasks/                      # Downstream task definitions
 ├── scripts/                        # Entry point scripts
 │   ├── preprocessing/
@@ -195,7 +212,7 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfi
 
 | Group | Options | Purpose |
 |---|---|---|
-| `ssl/` | `mae`, `jepa`, `contrastive`, `smart` | SSL objective hyperparameters |
+| `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` | SSL objective hyperparameters |
 | `model/` | `transformer`, `observation_transformer`, `smart` | Encoder architecture |
 | `data/` | `ricu` | Dataset and paths |
 | `tasks/` | `mortality`, `los`, `aki`, ... | Downstream task definitions |
