@@ -16,6 +16,7 @@ Usage:
     uv run python scripts/export_results.py --sprint 1 --validate-seeds 3
     uv run python scripts/export_results.py --paradigm mae jepa --dataset miiv
     uv run python scripts/export_results.py --output-dir results/sprint1 --sprint 1
+    uv run python scripts/export_results.py --project slices-thesis --revision thesis-v1
 """
 from __future__ import annotations
 
@@ -54,7 +55,10 @@ EXPERIMENT_TYPES = {
     "7p": "capacity_pilot",
     "11": "classical_baselines",
     "12": "smart_reference",
+    "13": "temporal_contrastive",
 }
+
+CROSS_SPRINT_TYPES = {"core", "label_efficiency", "transfer", "hp_ablation"}
 
 # For core runs: sprint is noise — same config across sprints, different seeds.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
@@ -146,9 +150,12 @@ VAL_METRICS = [
 
 ALL_METRICS = TEST_METRICS + VAL_METRICS
 
-# d_model values that indicate non-default capacity (Sprint 7p pilot).
-# Default d_model=128 maps to "default"; other values are named here.
-SIZED_MODELS = {128: "default", 256: "large"}
+# Canonical model variants used in the thesis matrix.
+MODEL_VARIANTS = {
+    (64, 2): "default",
+    (128, 4): "medium",
+    (256, 4): "large",
+}
 
 # Phases that correspond to evaluation runs (not pretraining).
 EVAL_PHASES = ["finetune", "supervised", "gru_d", "xgboost", "baseline"]
@@ -167,6 +174,7 @@ def fetch_all_runs(
     paradigm: list[str] | None = None,
     dataset: list[str] | None = None,
     phase: list[str] | None = None,
+    revision: list[str] | None = None,
 ) -> list:
     """Fetch runs from W&B with server-side filtering.
 
@@ -197,6 +205,9 @@ def fetch_all_runs(
     if phase and len(phase) == 1:
         tag_filters.append(f"phase:{phase[0]}")
 
+    if revision and len(revision) == 1:
+        tag_filters.append(f"revision:{revision[0]}")
+
     if tag_filters:
         filters["tags"] = {"$all": tag_filters}
 
@@ -210,6 +221,7 @@ def fetch_all_runs(
     paradigm_set = set(paradigm) if paradigm and len(paradigm) > 1 else None
     dataset_set = set(dataset) if dataset and len(dataset) > 1 else None
     phase_set = set(phase) if phase and len(phase) > 1 else None
+    revision_set = set(revision) if revision and len(revision) > 1 else None
 
     runs = []
     for run in runs_iter:
@@ -226,6 +238,9 @@ def fetch_all_runs(
                 continue
         if phase_set:
             if not any(f"phase:{p}" in tags for p in phase_set):
+                continue
+        if revision_set:
+            if not any(f"revision:{r}" in tags for r in revision_set):
                 continue
 
         runs.append(run)
@@ -338,6 +353,32 @@ def _recover_pretrain_metadata(
     return up_lr, up_mr, subtype
 
 
+def _infer_model_size(config: dict) -> str:
+    """Infer model-size label from the encoder config."""
+    d_model = _get_nested(config, "encoder.d_model")
+    n_layers = _get_nested(config, "encoder.n_layers")
+    sprint = str(config.get("sprint", ""))
+
+    if d_model is None:
+        return "default"
+
+    variant = MODEL_VARIANTS.get((d_model, n_layers))
+    if variant is not None:
+        return variant
+
+    if sprint == "7p":
+        if d_model == 128:
+            return "medium"
+        if d_model == 256:
+            return "large"
+
+    if d_model == 64:
+        return "default"
+    if n_layers is None:
+        return f"d{d_model}"
+    return f"d{d_model}_L{n_layers}"
+
+
 def extract_run(run, metric_keys: list[str]) -> dict:
     """Extract config + metrics from a W&B run in a single retry-protected call."""
     config, summary, run_id, run_url, run_name, tags, group, created_at = _retry(
@@ -353,13 +394,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     else:
         protocol = None
 
-    # Derive model_size from encoder.d_model
-    d_model = _get_nested(config, "encoder.d_model")
-    if d_model is not None and d_model != 128:
-        # Sprint 7p capacity pilot: medium=128, large=256
-        model_size = SIZED_MODELS.get(d_model, f"d{d_model}")
-    else:
-        model_size = "default"
+    model_size = _infer_model_size(config)
 
     # Detect source_dataset for transfer runs from run name or config
     source_dataset = config.get("source_dataset", None)
@@ -412,6 +447,10 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     # Reclassify HP ablation runs that would otherwise stay as "core"
     if experiment_type == "core" and experiment_subtype in ("lr_ablation", "mask_ablation"):
         experiment_type = "hp_ablation"
+
+    # Sprint 10 also adds transfer seeds for Sprint 7 scope.
+    if experiment_type == "core" and source_dataset is not None:
+        experiment_type = "transfer"
 
     row = {
         "wandb_run_id": run_id,
@@ -493,7 +532,7 @@ def build_per_seed_df(runs: list) -> pd.DataFrame:
     df = df.sort_values("created_at", ascending=False)
     before = len(df)
 
-    cross_sprint_types = {"core", "label_efficiency"}
+    cross_sprint_types = CROSS_SPRINT_TYPES
     cross_sprint_mask = df["experiment_type"].isin(cross_sprint_types)
     cross_sprint_dedup_cols = [c for c in CORE_FINGERPRINT + ["seed"] if c in df.columns]
     ablation_dedup_cols = [c for c in ABLATION_FINGERPRINT + ["seed"] if c in df.columns]
@@ -587,7 +626,7 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     """
     # Cross-sprint types: seeds were added across sprints for the same config,
     # so aggregate WITHOUT sprint to merge them.
-    cross_sprint_types = {"core", "label_efficiency"}
+    cross_sprint_types = CROSS_SPRINT_TYPES
     cross_sprint_mask = per_seed_df["experiment_type"].isin(cross_sprint_types)
     cross_sprint = per_seed_df[cross_sprint_mask]
     per_sprint = per_seed_df[~cross_sprint_mask]
@@ -724,6 +763,11 @@ def main():
         help=f"Filter to specific phase(s) (default: {EVAL_PHASES})",
     )
     parser.add_argument(
+        "--revision",
+        nargs="+",
+        help="Filter to specific revision tag(s), e.g. --revision thesis-v1",
+    )
+    parser.add_argument(
         "--state",
         default="finished",
         help="Run state filter (default: finished)",
@@ -753,6 +797,7 @@ def main():
         paradigm=args.paradigm,
         dataset=args.dataset,
         phase=args.phase,
+        revision=args.revision,
     )
 
     if not runs:
