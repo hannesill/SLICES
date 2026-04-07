@@ -173,7 +173,7 @@ SLICES/
 ├── scripts/                        # Entry point scripts
 │   ├── preprocessing/
 │   └── training/
-└── tests/                          # pytest test suite (940+ tests)
+└── tests/                          # pytest test suite (900+ tests)
 ```
 
 ## Configuration

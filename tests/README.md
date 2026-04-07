@@ -16,17 +16,17 @@ uv run pytest tests/ --cov=slices --cov-report=html --cov-report=term
 
 ### Run specific test file
 ```bash
-uv run pytest tests/test_data_io.py -v
+uv run pytest tests/test_dataset_datamodule.py -v
 ```
 
 ### Run specific test class
 ```bash
-uv run pytest tests/test_data_io.py::TestCsvToParquetAll -v
+uv run pytest tests/test_dataset_datamodule.py::TestICUDataset -v
 ```
 
 ### Run specific test function
 ```bash
-uv run pytest tests/test_data_io.py::TestCsvToParquetAll::test_successful_conversion -v
+uv run pytest tests/test_fixes.py::TestNormalizationStatsCache::test_legacy_stats_without_fingerprints_are_ignored -v
 ```
 
 ### Run tests matching a pattern
@@ -47,18 +47,18 @@ uv run pytest tests/ -vv
 | `test_package.py` | Package structure, imports, and dependencies | Package-level validation |
 | `test_extractor_config.py` | ExtractorConfig validation | Input validation, defaults |
 | `test_base_extractor.py` | BaseExtractor abstract class | Core extraction logic, `run()` method, dense conversion |
-| `test_data_io.py` | CSV-to-Parquet conversion | File I/O, data integrity |
 | `test_dataset_datamodule.py` | ICUDataset and ICUDataModule | Data loading, imputation, normalization, patient-level splits |
 | `test_extractor_integration.py` | Extractor + task system integration | Multi-task extraction, label computation |
 | `test_task_builders.py` | Task label extraction | Mortality tasks, boundary conditions |
-| `test_timeseries_extraction.py` | Time-series extraction pipeline | Hourly binning, feature mapping, edge cases |
+| `test_ricu_extractor.py` | RICU extractor compatibility | Chunked parquet ingestion, schema migration, extraction edge cases |
+| `test_fixes.py` | Regression coverage for experiment-integrity fixes | Label freshness, cache invalidation, combined-dataset safety |
 
 ## Test Categories
 
 ### Unit Tests
 - `test_extractor_config.py` - Configuration validation
 - `test_base_extractor.py` - Core extractor methods
-- `test_data_io.py` - Data I/O utilities
+- `test_transforms.py` - SSL/data augmentation utilities
 - `test_task_builders.py` - Task builders
 
 ### Integration Tests
@@ -66,7 +66,7 @@ uv run pytest tests/ -vv
 - `test_dataset_datamodule.py` - Data loading pipeline
 
 ### Edge Case Tests
-- `test_timeseries_extraction.py::TestTimeSeriesEdgeCases` - Empty data, extreme values
+- `test_ricu_extractor.py::TestRicuExtractorEdgeCases` - Missing schema pieces, chunked input, legacy migration
 - `test_task_builders.py::TestMortalityBoundaryConditions` - Boundary conditions
 
 ## Writing New Tests

@@ -29,7 +29,7 @@ mae = MAEObjective(encoder, mae_config)
 loss, metrics = mae(x, obs_mask)
 ```
 
-**See**: `docs/MAE_IMPLEMENTATION.md` for detailed documentation.
+**See**: the objective source files in this package and the Hydra configs under `configs/ssl/`.
 
 ## Factory Pattern
 
@@ -58,6 +58,9 @@ pretraining/
 ├── base.py              # Abstract base classes
 ├── factory.py           # Factory functions and registry
 ├── mae.py               # MAE implementation
+├── jepa.py              # JEPA implementation
+├── contrastive.py       # Contrastive implementation
+├── smart.py             # SMART sanity-check objective
 └── README.md            # This file
 ```
 
@@ -68,14 +71,9 @@ All SSL objectives require:
 - Input shape: `(B, T, D)`
 - Observation mask shape: `(B, T, D)`
 
-## Future Objectives
+## Implemented Objectives
 
-Planned implementations:
-- **SimCLR**: Contrastive learning with augmentations
-- **MoCo**: Momentum contrast
-- **JEPA**: Joint-Embedding Predictive Architecture
-- **TimeMAE**: Time-specific MAE variant
-- **TS-TCC**: Time-series contrastive coding
+The active codebase already includes MAE, JEPA, contrastive, and SMART objectives.
 
 ## References
 

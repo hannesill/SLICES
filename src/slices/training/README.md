@@ -197,7 +197,7 @@ hidden_size: 256
 4. Use in pretraining:
 
 ```bash
-uv run python scripts/pretrain.py encoder=my_encoder
+uv run python scripts/training/pretrain.py encoder=my_encoder
 ```
 
 ### Adding a New SSL Objective
@@ -241,7 +241,7 @@ name: my_ssl
 4. Use in pretraining:
 
 ```bash
-uv run python scripts/pretrain.py ssl=my_ssl
+uv run python scripts/training/pretrain.py ssl=my_ssl
 ```
 
 ### `FineTuneModule`
