@@ -5,12 +5,12 @@ Queries W&B for finished finetune/supervised runs, loads their best checkpoints,
 runs inference on the test set, computes fairness metrics via FairnessEvaluator,
 and writes results back to the same W&B run's summary.
 
-Designed for batch evaluation of core experiment runs (~480 runs). Supports
+Designed for batch evaluation of the thesis fairness corpus. Supports
 resumability via --skip-existing (default) and scoping via --sprint/--paradigm/
 --dataset filters.
 
 Usage:
-    # Evaluate all core runs (default: sprints 1-5, 10)
+    # Evaluate the default thesis fairness corpus
     uv run python scripts/eval/evaluate_fairness.py
 
     # Scope to specific sprint/dataset
@@ -49,7 +49,7 @@ log = logging.getLogger("evaluate_fairness")
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_SPRINTS = ["1", "2", "3", "4", "5", "10"]
+CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "13"]
 DEFAULT_PHASES = ["finetune", "supervised"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 
@@ -408,7 +408,11 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("WANDB_ENTITY"),
         help="W&B entity (default: $WANDB_ENTITY)",
     )
-    parser.add_argument("--sprint", nargs="+", help="Filter to sprint(s). Default: core sprints")
+    parser.add_argument(
+        "--sprint",
+        nargs="+",
+        help="Filter to sprint(s). Default: thesis fairness sprints",
+    )
     parser.add_argument("--paradigm", nargs="+", help="Filter to paradigm(s)")
     parser.add_argument("--dataset", nargs="+", help="Filter to dataset(s)")
     parser.add_argument(
@@ -467,7 +471,7 @@ def main() -> None:
     device = _resolve_device(args.device)
     log.info("Device: %s", device)
 
-    # Default to core sprints if not specified
+    # Default to the thesis fairness sprint set if not specified
     sprints = args.sprint or CORE_SPRINTS
     log.info("Sprints: %s", sprints)
 

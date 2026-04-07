@@ -112,7 +112,7 @@ BASELINE_SPRINTS: dict[str, list[str]] = {
     "5": ["1", "2", "3", "4"],
     "6": ["1", "2", "3", "4", "5"],
     "7": ["1", "3", "5"],
-    "7p": ["6"],
+    "7p": ["6", "10"],
     "8": ["1", "1b", "1c", "5"],
 }
 
@@ -597,76 +597,79 @@ class MatrixBuilder:
                         self._add_xgboost(sprint, ds, seed, task, frac)
 
     def build_sprint7p(self):
-        """Model capacity pilot — test whether bigger models widen SSL-supervised gap.
+        """Focused model-capacity study for the thesis.
 
-        MIIV only, seed 42, mortality_24h, MAE + supervised.
-        Two model sizes (medium=128d/4L, large=256d/4L) at 3 label fractions.
-        Compares against Sprint 6 baseline (64d/2L) — no need to rerun baseline.
+        MIIV only, mortality_24h only, MAE + supervised.
+        Two larger model sizes (medium=128d/4L, large=256d/4L) at 3 label fractions
+        across all five thesis seeds. Baseline comparisons come from Sprint 6
+        (seeds 42/123/456) and Sprint 10 (seeds 789/1011), so the default-size
+        baseline is inherited rather than rerun here.
 
-        Total: 2 pretrain + 2×3 finetune + 2×3 probe + 2×3 supervised = 20 runs.
+        Total: 5 seeds × [2 pretrain + 2×3 finetune + 2×3 probe + 2×3 supervised] = 100 runs.
         """
         sprint = "7p"
-        ds, seed, task = "miiv", 42, "mortality_24h"
+        ds, task = "miiv", "mortality_24h"
 
-        for size_name, size_cfg in MODEL_SIZES.items():
-            # Common model override for all runs at this size
-            model_extra = {"model": size_cfg["model"]}
+        for seed in SEEDS_EXTENDED:
+            for size_name, size_cfg in MODEL_SIZES.items():
+                # Common model override for all runs at this size
+                model_extra = {"model": size_cfg["model"]}
 
-            # --- MAE pretrain (new encoder size, full data) ---
-            pretrain_extra = {
-                **model_extra,
-                **size_cfg["ssl_scale"]["mae"],
-            }
-            pt = self._add_pretrain(sprint, "mae", ds, seed, extra=pretrain_extra)
+                # --- MAE pretrain (new encoder size, full data) ---
+                pretrain_extra = {
+                    **model_extra,
+                    **size_cfg["ssl_scale"]["mae"],
+                }
+                pt = self._add_pretrain(sprint, "mae", ds, seed, extra=pretrain_extra)
 
-            # --- MAE finetune (Protocol B) + probe (Protocol A) ---
-            finetune_extra = {**model_extra}
-            for frac in LABEL_FRACTIONS_PILOT:
-                self._add_finetune(
-                    sprint,
-                    "mae",
-                    ds,
-                    seed,
-                    task,
-                    False,
-                    pt,
-                    label_fraction=frac,
-                    extra=finetune_extra,
-                    name_extra={"size": size_name},
-                )
-                self._add_finetune(
-                    sprint,
-                    "mae",
-                    ds,
-                    seed,
-                    task,
-                    True,
-                    pt,
-                    label_fraction=frac,
-                    extra=finetune_extra,
-                    name_extra={"size": size_name},
-                )
+                # --- MAE finetune (Protocol B) + probe (Protocol A) ---
+                finetune_extra = {**model_extra}
+                for frac in LABEL_FRACTIONS_PILOT:
+                    self._add_finetune(
+                        sprint,
+                        "mae",
+                        ds,
+                        seed,
+                        task,
+                        False,
+                        pt,
+                        label_fraction=frac,
+                        extra=finetune_extra,
+                        name_extra={"size": size_name},
+                    )
+                    self._add_finetune(
+                        sprint,
+                        "mae",
+                        ds,
+                        seed,
+                        task,
+                        True,
+                        pt,
+                        label_fraction=frac,
+                        extra=finetune_extra,
+                        name_extra={"size": size_name},
+                    )
 
-            # --- Supervised baseline (same larger encoder, from scratch) ---
-            sup_extra = {**model_extra}
-            for frac in LABEL_FRACTIONS_PILOT:
-                sup_name = f"supervised_{task}_{ds}_seed{seed}_{size_name}"
-                if frac < 1.0:
-                    frac_str = str(frac).replace(".", "")
-                    sup_name += f"_frac{frac_str}"
-                run = Run(
-                    id=f"s{sprint}_{sup_name}",
-                    sprint=sprint,
-                    run_type="supervised",
-                    paradigm="supervised",
-                    dataset=ds,
-                    seed=seed,
-                    output_dir=_output_dir(sprint, sup_name),
-                    task=task,
-                    label_fraction=frac,
-                    extra_overrides=sup_extra,
-                )
-                self.runs.append(run)
+                # --- Supervised baseline (same larger encoder, from scratch) ---
+                sup_extra = {**model_extra}
+                for frac in LABEL_FRACTIONS_PILOT:
+                    sup_name = f"supervised_{task}_{ds}_seed{seed}_{size_name}"
+                    if frac < 1.0:
+                        frac_str = str(frac).replace(".", "")
+                        sup_name += f"_frac{frac_str}"
+                    run = Run(
+                        id=f"s{sprint}_{sup_name}",
+                        sprint=sprint,
+                        run_type="supervised",
+                        paradigm="supervised",
+                        dataset=ds,
+                        seed=seed,
+                        output_dir=_output_dir(sprint, sup_name),
+                        task=task,
+                        label_fraction=frac,
+                        extra_overrides=sup_extra,
+                    )
+                    self.runs.append(run)
 
     def build_sprint7(self):
         """Cross-dataset transfer — Protocol B only (full finetune)."""
@@ -860,12 +863,13 @@ class MatrixBuilder:
                     )
 
     def build_sprint13(self):
-        """TS2Vec temporal contrastive variant, 5 seeds.
+        """TS2Vec temporal contrastive variant, 5 seeds, both protocols.
 
         Addresses the "contrastive was set up to fail" vulnerability by giving
         the contrastive paradigm its natural augmentations (noise + masking)
         and a temporal contrastive loss. Same encoder, same training budget.
-        Protocol B (full finetune) only — matches the primary evaluation protocol.
+        Evaluated under both Protocol A (probe) and Protocol B (full finetune)
+        so it fits the main thesis A/B framing.
         """
         sprint = "13"
         for seed in SEEDS_EXTENDED:
@@ -873,6 +877,7 @@ class MatrixBuilder:
                 pt = self._add_pretrain(sprint, "ts2vec", ds, seed)
                 for task in TASKS:
                     self._add_finetune(sprint, "ts2vec", ds, seed, task, False, pt)
+                    self._add_finetune(sprint, "ts2vec", ds, seed, task, True, pt)
 
     def build_all(self) -> list[Run]:
         """Build full experiment matrix. Order matters for dedup."""
