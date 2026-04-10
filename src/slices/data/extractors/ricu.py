@@ -84,6 +84,54 @@ class RicuExtractor(BaseExtractor):
             raise ValueError(f"ricu_metadata.yaml not found in {self.parquet_root}")
         with open(metadata_path) as f:
             self._metadata = yaml.safe_load(f)
+        self._validate_ricu_horizon()
+
+    def _validate_ricu_horizon(self) -> None:
+        """Validate that the Python extraction horizon does not exceed the R export."""
+        ricu_seq_length = self._metadata.get("seq_length_hours")
+        if ricu_seq_length is None:
+            raise ValueError(
+                "ricu_metadata.yaml is missing seq_length_hours; "
+                "cannot validate the export horizon safely."
+            )
+
+        ricu_seq_length = int(ricu_seq_length)
+        if self.config.seq_length_hours > ricu_seq_length:
+            raise ValueError(
+                "Python extraction requests seq_length_hours="
+                f"{self.config.seq_length_hours}, but the upstream RICU export only "
+                f"contains {ricu_seq_length} hours. Re-run the R export with a longer "
+                "horizon or lower the Python extraction seq_length_hours."
+            )
+
+    def _iter_upstream_files(self) -> List[Path]:
+        """Return the upstream files that define the extraction contents."""
+        files: List[Path] = []
+        for path in sorted(self.parquet_root.glob("ricu_*")):
+            if path.is_file():
+                files.append(path)
+            elif path.is_dir():
+                files.extend(sorted(p for p in path.rglob("*") if p.is_file()))
+        return files
+
+    def _get_upstream_source_signature(self) -> dict:
+        """Fingerprint upstream RICU inputs for safe resume behavior."""
+        files = []
+        for path in self._iter_upstream_files():
+            stat = path.stat()
+            files.append(
+                {
+                    "path": str(path.relative_to(self.parquet_root)),
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+            )
+
+        return {
+            "dataset": self._metadata.get("dataset"),
+            "ricu_seq_length_hours": int(self._metadata["seq_length_hours"]),
+            "files": files,
+        }
 
     def _get_dataset_name(self) -> str:
         return self._metadata["dataset"]
@@ -195,15 +243,14 @@ class RicuExtractor(BaseExtractor):
                 .alias("death_source"),
             )
         else:
-            # Datetime column — could be true timestamp or midnight-cast date.
-            # For MIIV legacy data this is midnight-cast dod; for eICU it's
-            # a true offset-derived timestamp. Mark as "timestamp" since that
-            # was the prior behavior; the new R extraction fixes MIIV properly.
+            # Legacy datetimes are ambiguous: older exports may have stored
+            # date-only values as midnight-cast timestamps. Treat them as date
+            # precision unless explicit precision metadata is present.
             df = df.with_columns(
-                pl.col("date_of_death").cast(pl.Datetime("us", "UTC")).alias("death_time"),
-                pl.lit(None).cast(pl.Date).alias("death_date"),
+                pl.lit(None).cast(pl.Datetime("us", "UTC")).alias("death_time"),
+                pl.col("date_of_death").cast(pl.Date).alias("death_date"),
                 pl.when(pl.col("date_of_death").is_not_null())
-                .then(pl.lit("timestamp"))
+                .then(pl.lit("date"))
                 .otherwise(pl.lit(None))
                 .alias("death_time_precision"),
                 pl.when(pl.col("date_of_death").is_not_null())
@@ -388,6 +435,7 @@ class RicuExtractor(BaseExtractor):
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
                 "label_manifest": label_manifest,
+                "upstream_source_signature": self._get_upstream_source_signature(),
                 "extraction_config": {
                     "parquet_root": str(self.parquet_root),
                     "output_dir": str(self.output_dir),

@@ -186,6 +186,14 @@ class BaseExtractor(ABC):
         """
         pass
 
+    def _get_upstream_source_signature(self) -> Optional[dict]:
+        """Return a fingerprint of upstream inputs used for extraction.
+
+        Subclasses can override this to make resume safety depend on upstream
+        source identity as well as Python-side extraction config.
+        """
+        return None
+
     @abstractmethod
     def extract_stays(self) -> pl.DataFrame:
         """Extract ICU stay metadata (stay_id, patient_id, times).
@@ -570,6 +578,15 @@ class BaseExtractor(ABC):
                 console.print(
                     "[yellow]Warning: Existing extraction has different config. "
                     "Will overwrite.[/yellow]"
+                )
+                return None
+
+            current_signature = self._get_upstream_source_signature()
+            existing_signature = existing_metadata.get("upstream_source_signature")
+            if current_signature != existing_signature:
+                console.print(
+                    "[yellow]Warning: Existing extraction was built from different "
+                    "upstream inputs. Will overwrite.[/yellow]"
                 )
                 return None
         except Exception:

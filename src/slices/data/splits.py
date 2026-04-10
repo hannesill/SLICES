@@ -420,6 +420,8 @@ def save_split_info(
     train_ratio: float,
     val_ratio: float,
     test_ratio: float,
+    train_subset_indices: Optional[List[int]] = None,
+    label_fraction: float = 1.0,
 ) -> None:
     """Save split information to file for reproducibility.
 
@@ -433,6 +435,10 @@ def save_split_info(
         train_ratio: Training ratio used.
         val_ratio: Validation ratio used.
         test_ratio: Test ratio used.
+        train_subset_indices: Optional optimization subset indices for
+            label-efficiency runs. When provided and different from
+            train_indices, persisted separately from the full split provenance.
+        label_fraction: Label fraction used for the optimization subset.
     """
     static_df = dataset.static_df
     stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
@@ -446,6 +452,7 @@ def save_split_info(
         "train_ratio": train_ratio,
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
+        "label_fraction": label_fraction,
         "train_patients": train_patients,
         "val_patients": val_patients,
         "test_patients": test_patients,
@@ -453,6 +460,19 @@ def save_split_info(
         "val_stays": len(val_indices),
         "test_stays": len(test_indices),
     }
+
+    if train_subset_indices is not None and train_subset_indices != train_indices:
+        train_subset_stay_ids = [dataset.stay_ids[i] for i in train_subset_indices]
+        train_subset_patients = sorted(
+            {stay_to_patient[dataset.stay_ids[i]] for i in train_subset_indices}
+        )
+        split_info.update(
+            {
+                "train_subset_patients": train_subset_patients,
+                "train_subset_stays": len(train_subset_indices),
+                "train_subset_stay_ids": train_subset_stay_ids,
+            }
+        )
 
     split_path = processed_dir / "splits.yaml"
     with open(split_path, "w") as f:

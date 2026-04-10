@@ -58,7 +58,7 @@ EXPERIMENT_TYPES = {
     "13": "temporal_contrastive",
 }
 
-CROSS_SPRINT_TYPES = {"core", "label_efficiency", "transfer", "hp_ablation"}
+CROSS_SPRINT_TYPES = {"core", "label_efficiency", "transfer"}
 FIXED_SEED_EXPERIMENT_TYPES = {
     "core",
     "label_efficiency",
@@ -85,19 +85,22 @@ CORE_FINGERPRINT = [
     "phase",
 ]
 
-# For non-core runs: sprint distinguishes pretrain configs that aren't captured
-# in the finetune W&B config (e.g., which LR/mask_ratio the pretrain used).
-# upstream_pretrain_lr/mask_ratio ensure HP ablation rows with different pretrain
-# configs are not collapsed (fixes Sprint 1b, 1c, 8, 10 dedup collisions).
-ABLATION_FINGERPRINT = CORE_FINGERPRINT + [
-    "sprint",
+# HP ablations merge across sprints, but must preserve the upstream pretrain
+# config and subtype so LR and mask-ratio families cannot collapse together.
+HP_ABLATION_FINGERPRINT = CORE_FINGERPRINT + [
+    "experiment_subtype",
     "upstream_pretrain_lr",
     "upstream_pretrain_mask_ratio",
 ]
 
-# Legacy fingerprint used for deduplication (includes sprint + all config dims).
-DEDUP_FINGERPRINT = [
+# For per-sprint experiment families, sprint remains part of the identity.
+ABLATION_FINGERPRINT = HP_ABLATION_FINGERPRINT + [
     "sprint",
+]
+
+FINGERPRINT_AUDIT_COLUMNS = [
+    "experiment_type",
+    "experiment_subtype",
     "paradigm",
     "dataset",
     "task",
@@ -108,6 +111,9 @@ DEDUP_FINGERPRINT = [
     "model_size",
     "source_dataset",
     "phase",
+    "sprint",
+    "upstream_pretrain_lr",
+    "upstream_pretrain_mask_ratio",
 ]
 
 # Metrics to extract from run summaries.
@@ -454,6 +460,10 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     # Recover upstream pretrain metadata (from config for new runs, run name for historical)
     up_lr, up_mr, experiment_subtype = _recover_pretrain_metadata(run_name, config)
 
+    if experiment_type in ("lr_ablation", "mask_ablation"):
+        experiment_subtype = experiment_subtype or experiment_type
+        experiment_type = "hp_ablation"
+
     # Reclassify HP ablation runs that would otherwise stay as "core"
     if experiment_type == "core" and experiment_subtype in ("lr_ablation", "mask_ablation"):
         experiment_type = "hp_ablation"
@@ -499,6 +509,73 @@ def extract_run(run, metric_keys: list[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _fingerprint_for_experiment_type(experiment_type: str) -> list[str]:
+    """Return the canonical fingerprint for a given experiment family."""
+    if experiment_type in CROSS_SPRINT_TYPES:
+        return CORE_FINGERPRINT
+    if experiment_type == "hp_ablation":
+        return HP_ABLATION_FINGERPRINT
+    return ABLATION_FINGERPRINT
+
+
+def _allowed_varying_columns(experiment_type: str) -> set[str]:
+    """Columns allowed to vary within one canonical experiment family."""
+    if experiment_type in CROSS_SPRINT_TYPES or experiment_type == "hp_ablation":
+        return {"sprint"}
+    return set()
+
+
+def _fillna_for_grouping(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Fill NaNs so pandas groupby/drop_duplicates treat missing values deterministically."""
+    work = df.copy()
+    for col in columns:
+        if col in work.columns:
+            work[col] = work[col].fillna("__none__")
+    return work
+
+
+def _assert_no_ambiguous_fingerprint_collisions(df: pd.DataFrame) -> None:
+    """Fail if the chosen fingerprint would collapse non-equivalent configurations."""
+    collisions = []
+
+    for experiment_type in sorted(df["experiment_type"].dropna().unique()):
+        subset = df[df["experiment_type"] == experiment_type]
+        if subset.empty:
+            continue
+
+        fingerprint = [*(_fingerprint_for_experiment_type(experiment_type)), "seed"]
+        fingerprint = [c for c in fingerprint if c in subset.columns]
+        if not fingerprint:
+            continue
+
+        allowed_vary = _allowed_varying_columns(experiment_type)
+        identity_cols = [
+            c for c in FINGERPRINT_AUDIT_COLUMNS if c in subset.columns and c not in allowed_vary
+        ]
+
+        work = _fillna_for_grouping(subset, list(dict.fromkeys(fingerprint + identity_cols)))
+        grouped = work.groupby(fingerprint, dropna=False)
+
+        for key, group in grouped:
+            if len(group) <= 1:
+                continue
+
+            unique_identities = group[identity_cols].drop_duplicates()
+            if len(unique_identities) > 1:
+                if not isinstance(key, tuple):
+                    key = (key,)
+                collisions.append((experiment_type, dict(zip(fingerprint, key)), len(group)))
+
+    if collisions:
+        preview = []
+        for experiment_type, fingerprint, count in collisions[:5]:
+            desc = ", ".join(f"{k}={v}" for k, v in fingerprint.items())
+            preview.append(f"{experiment_type}: {desc} ({count} rows)")
+        raise RuntimeError(
+            "Ambiguous export fingerprint would collapse distinct runs:\n  " + "\n  ".join(preview)
+        )
+
+
 def build_per_seed_df(runs: list) -> pd.DataFrame:
     """Build the per-seed DataFrame from raw W&B runs.
 
@@ -537,19 +614,18 @@ def build_per_seed_df(runs: list) -> pd.DataFrame:
 
     # Deduplicate: keep only the most recent run per (fingerprint + seed).
     # This handles reruns/revisions — the latest finished run is canonical.
-    # Uses conditional fingerprints: core runs dedup by CORE_FINGERPRINT (which
-    # excludes sprint/lr/mask_ratio), non-core by ABLATION_FINGERPRINT.
+    # Different experiment families use different fingerprints.
     df = df.sort_values("created_at", ascending=False)
     before = len(df)
+    _assert_no_ambiguous_fingerprint_collisions(df)
 
-    cross_sprint_types = CROSS_SPRINT_TYPES
-    cross_sprint_mask = df["experiment_type"].isin(cross_sprint_types)
-    cross_sprint_dedup_cols = [c for c in CORE_FINGERPRINT + ["seed"] if c in df.columns]
-    ablation_dedup_cols = [c for c in ABLATION_FINGERPRINT + ["seed"] if c in df.columns]
-
-    core_df = df[cross_sprint_mask].drop_duplicates(subset=cross_sprint_dedup_cols, keep="first")
-    non_core_df = df[~cross_sprint_mask].drop_duplicates(subset=ablation_dedup_cols, keep="first")
-    df = pd.concat([core_df, non_core_df], ignore_index=True)
+    parts = []
+    for experiment_type in sorted(df["experiment_type"].dropna().unique()):
+        subset = df[df["experiment_type"] == experiment_type]
+        dedup_cols = [*(_fingerprint_for_experiment_type(experiment_type)), "seed"]
+        dedup_cols = [c for c in dedup_cols if c in subset.columns]
+        parts.append(subset.drop_duplicates(subset=dedup_cols, keep="first"))
+    df = pd.concat(parts, ignore_index=True) if parts else df.iloc[0:0]
 
     after = len(df)
     if before != after:
@@ -631,23 +707,32 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     """Group by fingerprint, compute mean/std/min/max across seeds.
 
     Uses conditional grouping:
-    - Core runs (Sprints 1-5, 10): group WITHOUT sprint to merge seeds across sprints
-    - Non-core runs (ablations, label efficiency, etc.): group WITH sprint
+    - Core / label-efficiency / transfer runs: group WITHOUT sprint
+    - HP ablations: group WITHOUT sprint, but include subtype + upstream pretrain config
+    - Other experiment families: group WITH sprint
     """
-    # Cross-sprint types: seeds were added across sprints for the same config,
-    # so aggregate WITHOUT sprint to merge them.
-    cross_sprint_types = CROSS_SPRINT_TYPES
-    cross_sprint_mask = per_seed_df["experiment_type"].isin(cross_sprint_types)
-    cross_sprint = per_seed_df[cross_sprint_mask]
-    per_sprint = per_seed_df[~cross_sprint_mask]
-
     parts = []
+    cross_sprint = per_seed_df[per_seed_df["experiment_type"].isin(CROSS_SPRINT_TYPES)]
     if len(cross_sprint) > 0:
         print(
             f"  Aggregating {len(cross_sprint)} cross-sprint runs (merged experiment families)...",
             file=sys.stderr,
         )
         parts.append(_aggregate_group(cross_sprint, CORE_FINGERPRINT))
+
+    hp_ablation = per_seed_df[per_seed_df["experiment_type"] == "hp_ablation"]
+    if len(hp_ablation) > 0:
+        print(
+            "  Aggregating "
+            f"{len(hp_ablation)} HP-ablation runs "
+            "(merged by subtype + upstream config)...",
+            file=sys.stderr,
+        )
+        parts.append(_aggregate_group(hp_ablation, HP_ABLATION_FINGERPRINT))
+
+    per_sprint = per_seed_df[
+        ~per_seed_df["experiment_type"].isin(CROSS_SPRINT_TYPES | {"hp_ablation"})
+    ]
     if len(per_sprint) > 0:
         print(
             f"  Aggregating {len(per_sprint)} per-sprint runs (ablations, etc.)...", file=sys.stderr

@@ -6,7 +6,9 @@ and exporter dedup logic.
 """
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
+import pandas as pd
 import polars as pl
 import pytest
 import torch
@@ -25,6 +27,21 @@ from slices.data.tensor_cache import (
     save_normalization_stats,
 )
 from slices.data.tensor_preprocessing import extract_tensors_from_dataframe
+
+
+class DummyWandbRun:
+    """Minimal W&B run stub for export pipeline tests."""
+
+    def __init__(self, run_id, config, tags, name, created_at="2026-04-07T00:00:00"):
+        self.config = config
+        self.summary_metrics = {}
+        self.id = run_id
+        self.url = f"https://example.com/{run_id}"
+        self.name = name
+        self.tags = tags
+        self.group = "g"
+        self.created_at = created_at
+
 
 # ============================================================================
 # Issue 3: Label manifest freshness checking
@@ -587,7 +604,7 @@ class TestMortalityPrecision:
         assert labels["label"][0] == 0
 
     def test_legacy_schema_migration(self):
-        """Legacy data with only date_of_death should be migrated correctly."""
+        """Legacy datetime date_of_death should be migrated conservatively."""
         merged = pl.DataFrame(
             {
                 "stay_id": [1],
@@ -600,7 +617,9 @@ class TestMortalityPrecision:
         result = MortalityLabelBuilder._ensure_precision_columns(merged)
         assert "death_time_precision" in result.columns
         assert "death_time" in result.columns
-        assert result["death_time_precision"][0] == "timestamp"
+        assert result["death_time_precision"][0] == "date"
+        assert result["death_time"][0] is None
+        assert result["death_date"][0].isoformat() == "2020-01-03"
 
 
 # ============================================================================
@@ -689,18 +708,8 @@ class TestExporterHistoricalRecovery:
         """Sprint-10 transfer seeds and Sprint 13 should export with stable experiment types."""
         from scripts.export_results import extract_run
 
-        class DummyRun:
-            def __init__(self, config, tags, name):
-                self.config = config
-                self.summary_metrics = {}
-                self.id = "dummy"
-                self.url = "https://example.com"
-                self.name = name
-                self.tags = tags
-                self.group = "g"
-                self.created_at = "2026-04-07T00:00:00"
-
-        transfer = DummyRun(
+        transfer = DummyWandbRun(
+            run_id="transfer",
             config={
                 "sprint": "10",
                 "dataset": "eicu",
@@ -716,7 +725,8 @@ class TestExporterHistoricalRecovery:
         )
         assert extract_run(transfer, [])["experiment_type"] == "transfer"
 
-        ts2vec = DummyRun(
+        ts2vec = DummyWandbRun(
+            run_id="ts2vec",
             config={
                 "sprint": "13",
                 "dataset": "miiv",
@@ -730,6 +740,130 @@ class TestExporterHistoricalRecovery:
             name="finetune_ts2vec_mortality_24h_miiv_seed42",
         )
         assert extract_run(ts2vec, [])["experiment_type"] == "temporal_contrastive"
+
+    def test_build_per_seed_df_keeps_distinct_hp_ablation_configs(self):
+        """Distinct upstream HP-ablation configs must not deduplicate together."""
+        from scripts.export_results import build_per_seed_df
+
+        runs = [
+            DummyWandbRun(
+                run_id="hp_lr_2e4",
+                config={
+                    "sprint": "10",
+                    "dataset": "miiv",
+                    "paradigm": "mae",
+                    "seed": 42,
+                    "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed42_lr00002",
+                    "encoder": {"d_model": 64, "n_layers": 2},
+                    "training": {"freeze_encoder": False},
+                    "task": {"task_name": "mortality_24h"},
+                },
+                tags=["phase:finetune"],
+                name="finetune_mae_mortality_24h_miiv_seed42_lr00002",
+                created_at="2026-04-07T00:00:01",
+            ),
+            DummyWandbRun(
+                run_id="hp_lr_5e4",
+                config={
+                    "sprint": "10",
+                    "dataset": "miiv",
+                    "paradigm": "mae",
+                    "seed": 42,
+                    "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed42_lr00005",
+                    "encoder": {"d_model": 64, "n_layers": 2},
+                    "training": {"freeze_encoder": False},
+                    "task": {"task_name": "mortality_24h"},
+                },
+                tags=["phase:finetune"],
+                name="finetune_mae_mortality_24h_miiv_seed42_lr00005",
+                created_at="2026-04-07T00:00:02",
+            ),
+        ]
+
+        df = build_per_seed_df(runs)
+
+        assert len(df) == 2
+        assert set(df["experiment_type"]) == {"hp_ablation"}
+        assert sorted(df["upstream_pretrain_lr"].tolist()) == [2e-4, 5e-4]
+
+    def test_build_aggregated_df_merges_hp_ablation_across_sprints(self):
+        """Sprint 10 historical seeds should merge with Sprint 1b/1c HP-ablation families."""
+        from scripts.export_results import build_aggregated_df
+
+        per_seed_df = pd.DataFrame(
+            [
+                {
+                    "wandb_run_id": f"run_{i}",
+                    "experiment_type": "hp_ablation",
+                    "experiment_subtype": "lr_ablation",
+                    "sprint": sprint,
+                    "paradigm": "mae",
+                    "dataset": "miiv",
+                    "task": "mortality_24h",
+                    "seed": seed,
+                    "protocol": "B",
+                    "label_fraction": 1.0,
+                    "model_size": "default",
+                    "source_dataset": None,
+                    "phase": "finetune",
+                    "upstream_pretrain_lr": 2e-4,
+                    "upstream_pretrain_mask_ratio": None,
+                }
+                for i, (sprint, seed) in enumerate(
+                    [("1b", 42), ("1b", 123), ("10", 456), ("10", 789), ("10", 1011)]
+                )
+            ]
+        )
+
+        agg = build_aggregated_df(per_seed_df)
+
+        assert len(agg) == 1
+        assert agg.iloc[0]["experiment_type"] == "hp_ablation"
+        assert agg.iloc[0]["experiment_subtype"] == "lr_ablation"
+        assert agg.iloc[0]["n_seeds"] == 5
+        assert set(yaml.safe_load(agg.iloc[0]["sprint_list"])) == {"1b", "10"}
+
+    def test_build_per_seed_df_raises_on_ambiguous_core_collision(self):
+        """Distinct configs that a fingerprint would collapse should fail closed."""
+        from scripts.export_results import build_per_seed_df
+
+        runs = [
+            DummyWandbRun(
+                run_id="core_lr_1e4",
+                config={
+                    "sprint": "1",
+                    "dataset": "miiv",
+                    "paradigm": "mae",
+                    "seed": 42,
+                    "encoder": {"d_model": 64, "n_layers": 2},
+                    "training": {"freeze_encoder": False},
+                    "optimizer": {"lr": 1e-4},
+                    "task": {"task_name": "mortality_24h"},
+                },
+                tags=["phase:finetune"],
+                name="finetune_mae_mortality_24h_miiv_seed42_lr1e4",
+                created_at="2026-04-07T00:00:01",
+            ),
+            DummyWandbRun(
+                run_id="core_lr_3e4",
+                config={
+                    "sprint": "2",
+                    "dataset": "miiv",
+                    "paradigm": "mae",
+                    "seed": 42,
+                    "encoder": {"d_model": 64, "n_layers": 2},
+                    "training": {"freeze_encoder": False},
+                    "optimizer": {"lr": 3e-4},
+                    "task": {"task_name": "mortality_24h"},
+                },
+                tags=["phase:finetune"],
+                name="finetune_mae_mortality_24h_miiv_seed42_lr3e4",
+                created_at="2026-04-07T00:00:02",
+            ),
+        ]
+
+        with pytest.raises(RuntimeError, match="Ambiguous export fingerprint"):
+            build_per_seed_df(runs)
 
 
 class TestExperimentRunnerWandbOverrides:
@@ -752,6 +886,82 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["project_name"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
+
+
+class TestExperimentRunnerRetry:
+    """Tests for retry scoping and dependency preservation."""
+
+    def test_cmd_retry_respects_sprint_filter_but_keeps_dependencies(self, monkeypatch):
+        import scripts.run_experiments as runner
+
+        dependency = runner.Run(
+            id="dep_pretrain",
+            sprint="0",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="target_finetune",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+        other = runner.Run(
+            id="other_failed",
+            sprint="2",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint2/supervised_miiv_seed42",
+            task="mortality_24h",
+        )
+
+        state = {
+            "version": 1,
+            "runs": {
+                dependency.id: {"status": "completed"},
+                target.id: {"status": "failed"},
+                other.id: {"status": "failed"},
+            },
+        }
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target, other])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            sprint=["1"],
+            failed=True,
+            skipped=False,
+            revision=None,
+            reason=None,
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        runner.cmd_retry(args)
+
+        scheduled_ids = [run.id for run in scheduled["runs"]]
+        assert target.id in scheduled_ids
+        assert dependency.id in scheduled_ids
+        assert other.id not in scheduled_ids
 
 
 class TestExperimentRunnerMatrix:

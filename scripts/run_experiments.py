@@ -1363,10 +1363,10 @@ def cmd_status(args):
 
 def cmd_retry(args):
     all_runs = generate_all_runs()
+    sprint_filter = {str(s) for s in args.sprint} if args.sprint else None
 
     # Apply revision if specified (must happen before ID matching against state)
     if args.revision:
-        sprint_filter = [str(s) for s in args.sprint] if args.sprint else None
         if sprint_filter:
             revised = [r for r in all_runs if r.sprint in sprint_filter]
             rest = [r for r in all_runs if r.sprint not in sprint_filter]
@@ -1379,8 +1379,9 @@ def cmd_retry(args):
     state = load_state()
     recover_stale_running(state)
 
+    candidate_runs = [r for r in all_runs if sprint_filter is None or r.sprint in sprint_filter]
     runs_to_retry = []
-    for r in all_runs:
+    for r in candidate_runs:
         status = get_run_status(state, r.id)
         if args.failed and status == "failed":
             set_run_status(state, r.id, "pending")

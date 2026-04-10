@@ -1297,3 +1297,57 @@ class TestClassWeighting:
 
         assert module.criterion.weight is not None
         assert torch.allclose(module.criterion.weight, torch.tensor([0.3, 0.7]))
+
+
+class TestMetricThresholdConfig:
+    """Test finetune metric construction from eval config."""
+
+    def test_binary_metric_threshold_is_forwarded(self):
+        config = OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.0,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+                "eval": {
+                    "metrics": {
+                        "names": ["accuracy", "precision", "recall", "specificity"],
+                        "threshold": 0.8,
+                    }
+                },
+            }
+        )
+
+        module = FineTuneModule(config)
+
+        assert module.train_metrics["accuracy"].threshold == pytest.approx(0.8)
+        assert module.val_metrics["precision"].threshold == pytest.approx(0.8)
+        assert module.test_metrics["specificity"].threshold == pytest.approx(0.8)

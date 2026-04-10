@@ -237,11 +237,13 @@ class FineTuneModule(pl.LightningModule):
         eval_cfg = self.config.get("eval", {})
         metrics_cfg = eval_cfg.get("metrics", {})
         metric_names = metrics_cfg.get("names", None)
+        threshold = metrics_cfg.get("threshold", 0.5)
 
         metric_config = MetricConfig(
             task_type=self.task_type,
             n_classes=output_dim,
             metrics=metric_names,
+            threshold=threshold,
         )
 
         # Build metrics for each stage

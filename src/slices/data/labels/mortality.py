@@ -37,7 +37,7 @@ class MortalityLabelBuilder(LabelBuilder):
         - "unknown" or missing: falls back to hospital_expire_flag
     """
 
-    SEMANTIC_VERSION = "2.0.0"
+    SEMANTIC_VERSION = "2.1.0"
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build mortality labels from stay and mortality data.
@@ -173,7 +173,10 @@ class MortalityLabelBuilder(LabelBuilder):
                 pl.lit("legacy").alias("death_source"),
             )
         else:
-            # Datetime — treat as timestamp (legacy behavior)
+            # Legacy datetimes are ambiguous: older exports may have stored
+            # date-only values as midnight-cast timestamps. Treat them as
+            # date precision unless the upstream schema explicitly provides
+            # a death_time_precision column.
             if dod_dtype not in (
                 pl.Datetime,
                 pl.Datetime("us"),
@@ -185,10 +188,10 @@ class MortalityLabelBuilder(LabelBuilder):
                     pl.col("date_of_death").cast(pl.Datetime("us")).alias("date_of_death")
                 )
             return merged.with_columns(
-                pl.col("date_of_death").cast(pl.Datetime("us")).alias("death_time"),
-                pl.lit(None).cast(pl.Date).alias("death_date"),
+                pl.lit(None).cast(pl.Datetime("us")).alias("death_time"),
+                pl.col("date_of_death").cast(pl.Date).alias("death_date"),
                 pl.when(pl.col("date_of_death").is_not_null())
-                .then(pl.lit("timestamp"))
+                .then(pl.lit("date"))
                 .otherwise(pl.lit(None))
                 .alias("death_time_precision"),
                 pl.lit("legacy").alias("death_source"),

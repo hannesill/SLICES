@@ -169,6 +169,7 @@ class ICUDataModule(L.LightningDataModule):
 
         # Will be set in setup()
         self.dataset: Optional[ICUDataset] = None
+        self.full_train_indices: List[int] = []
         self.train_indices: List[int] = []
         self.val_indices: List[int] = []
         self.test_indices: List[int] = []
@@ -213,7 +214,8 @@ class ICUDataModule(L.LightningDataModule):
         # Save full train indices for normalization BEFORE subsampling.
         # Normalization must always use the full training split to avoid
         # noisy stats at low label fractions and pretrain/finetune mismatch.
-        normalization_train_indices = list(self.train_indices)
+        self.full_train_indices = list(self.train_indices)
+        normalization_train_indices = list(self.full_train_indices)
 
         # Subsample training indices for label-efficiency ablations
         if self.label_fraction < 1.0:
@@ -253,13 +255,15 @@ class ICUDataModule(L.LightningDataModule):
         save_split_info(
             self.processed_dir,
             self.dataset,
-            self.train_indices,
+            self.full_train_indices,
             self.val_indices,
             self.test_indices,
             self.seed,
             self.train_ratio,
             self.val_ratio,
             self.test_ratio,
+            train_subset_indices=self.train_indices,
+            label_fraction=self.label_fraction,
         )
 
         # Free temporary data used only during setup — Dataset holds its own copies
@@ -401,6 +405,7 @@ class ICUDataModule(L.LightningDataModule):
         return {
             # Stay counts
             "train_stays": len(self.train_indices),
+            "full_train_stays": len(self.full_train_indices),
             "val_stays": len(self.val_indices),
             "test_stays": len(self.test_indices),
             "total_stays": total_stays,
@@ -411,6 +416,9 @@ class ICUDataModule(L.LightningDataModule):
             "total_patients": total_patients,
             # Actual ratios (for verification)
             "actual_train_ratio": len(self.train_indices) / total_stays if total_stays > 0 else 0,
+            "actual_full_train_ratio": (
+                len(self.full_train_indices) / total_stays if total_stays > 0 else 0
+            ),
             "actual_val_ratio": len(self.val_indices) / total_stays if total_stays > 0 else 0,
             "actual_test_ratio": len(self.test_indices) / total_stays if total_stays > 0 else 0,
         }
@@ -420,3 +428,18 @@ class ICUDataModule(L.LightningDataModule):
         if self.dataset is None:
             raise RuntimeError("Call setup() before get_label_statistics()")
         return self.dataset.get_label_statistics()
+
+    def get_train_label_statistics(self, use_full_train: bool = False) -> Dict[str, Dict[str, Any]]:
+        """Return label statistics for the train split.
+
+        Args:
+            use_full_train: When True, compute statistics on the full patient-level
+                train split before any label-efficiency subsampling. When False,
+                compute statistics on the optimization subset actually used for
+                training in this run.
+        """
+        if self.dataset is None:
+            raise RuntimeError("Call setup() before get_train_label_statistics()")
+
+        train_indices = self.full_train_indices if use_full_train else self.train_indices
+        return self.dataset.get_label_statistics(indices=train_indices)
