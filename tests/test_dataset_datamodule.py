@@ -770,6 +770,28 @@ class TestICUDataModule:
         assert "positive" in stats["mortality_24h"]
         assert "prevalence" in stats["mortality_24h"]
 
+    def test_get_train_label_statistics_uses_optimization_subset(self, mock_extracted_data):
+        """Train label statistics should match the actual optimization subset."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm.setup()
+
+        subset_stats = dm.get_train_label_statistics()
+        full_train_stats = dm.get_train_label_statistics(use_full_train=True)
+
+        subset_stay_ids = [dm.dataset.stay_ids[i] for i in dm.train_indices]
+        subset_labels = dm.dataset.labels_df.filter(pl.col("stay_id").is_in(subset_stay_ids))
+        expected_positive = int((subset_labels["mortality_24h"] == 1).sum())
+
+        assert subset_stats["mortality_24h"]["total"] == len(dm.train_indices)
+        assert subset_stats["mortality_24h"]["positive"] == expected_positive
+        assert full_train_stats["mortality_24h"]["total"] == len(dm.full_train_indices)
+        assert full_train_stats["mortality_24h"]["total"] >= subset_stats["mortality_24h"]["total"]
+
     def test_custom_split_ratios(self, mock_extracted_data):
         """Test custom split ratios are applied."""
         dm = ICUDataModule(
@@ -874,6 +896,34 @@ class TestICUDataModule:
         assert dm1.train_indices == dm2.train_indices, "Train indices should match after reload"
         assert dm1.val_indices == dm2.val_indices, "Val indices should match after reload"
         assert dm1.test_indices == dm2.test_indices, "Test indices should match after reload"
+
+    def test_label_efficiency_splits_preserve_full_split_provenance(self, mock_extracted_data):
+        """splits.yaml should keep the full split and record the train subset separately."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm.setup()
+
+        with open(mock_extracted_data / "splits.yaml") as f:
+            saved_splits = yaml.safe_load(f)
+
+        full_train_patients = sorted(
+            {
+                dm.dataset.static_df.filter(pl.col("stay_id") == dm.dataset.stay_ids[i])[
+                    "patient_id"
+                ].item()
+                for i in dm.full_train_indices
+            }
+        )
+        subset_stay_ids = sorted(dm.dataset.stay_ids[i] for i in dm.train_indices)
+
+        assert saved_splits["train_stays"] == len(dm.full_train_indices)
+        assert saved_splits["train_patients"] == full_train_patients
+        assert saved_splits["train_subset_stays"] == len(dm.train_indices)
+        assert sorted(saved_splits["train_subset_stay_ids"]) == subset_stay_ids
 
 
 class TestCollateFn:

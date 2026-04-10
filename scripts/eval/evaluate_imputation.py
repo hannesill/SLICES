@@ -24,8 +24,9 @@ import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
-from slices.data.datamodule import ICUDataModule
+from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.eval.imputation import ImputationEvaluator
+from torch.utils.data import DataLoader, Subset
 
 
 @hydra.main(
@@ -124,6 +125,16 @@ def main(cfg: DictConfig) -> None:
     strategies = cfg.masking.strategies
     mask_ratio = cfg.masking.mask_ratio
     test_loader = datamodule.test_dataloader()
+    train_stats_loader = DataLoader(
+        Subset(datamodule.dataset, datamodule.train_indices),
+        batch_size=cfg.get("batch_size", 64),
+        shuffle=False,
+        num_workers=cfg.data.get("num_workers", 4),
+        pin_memory=datamodule.pin_memory,
+        collate_fn=icu_collate_fn,
+        drop_last=False,
+    )
+    train_feature_stds = evaluator.compute_feature_stds(train_stats_loader)
 
     # Setup W&B logger if configured
     logger = None
@@ -146,7 +157,12 @@ def main(cfg: DictConfig) -> None:
         print(f"\n  Strategy: {strategy} (mask_ratio={mask_ratio})")
         print("  " + "-" * 40)
 
-        results = evaluator.evaluate(test_loader, mask_strategy=strategy, mask_ratio=mask_ratio)
+        results = evaluator.evaluate(
+            test_loader,
+            mask_strategy=strategy,
+            mask_ratio=mask_ratio,
+            feature_stds=train_feature_stds,
+        )
         all_results[strategy] = results
 
         print(f"  NRMSE overall: {results['nrmse_overall']:.4f}")

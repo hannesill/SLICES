@@ -248,6 +248,43 @@ class TestEvaluate:
         for key in results["nrmse_per_feature"]:
             assert key.startswith("feat_"), f"Expected feature name, got {key}"
 
+    def test_evaluate_uses_provided_feature_stds(self, monkeypatch):
+        """Explicit feature stds should be used instead of recomputing from the eval loader."""
+        encoder = SimpleEncoder(d_input=5, d_model=8)
+        decoder = nn.Linear(8, 5)
+        nn.init.zeros_(decoder.weight)
+        nn.init.zeros_(decoder.bias)
+
+        evaluator = ImputationEvaluator(encoder=encoder, decoder=decoder, d_input=5)
+
+        timeseries = torch.ones(16, 12, 5) * 2.0
+        mask = torch.ones(16, 12, 5, dtype=torch.bool)
+
+        class ConstDataset:
+            def __len__(self):
+                return 16
+
+            def __getitem__(self, idx):
+                return {"timeseries": timeseries[idx], "mask": mask[idx]}
+
+        loader = DataLoader(ConstDataset(), batch_size=16)
+
+        def fail_if_called(_):
+            raise AssertionError(
+                "compute_feature_stds should not be called when feature_stds is set"
+            )
+
+        monkeypatch.setattr(evaluator, "compute_feature_stds", fail_if_called)
+
+        results = evaluator.evaluate(
+            loader,
+            mask_strategy="random",
+            mask_ratio=0.5,
+            feature_stds={i: 2.0 for i in range(5)},
+        )
+
+        assert results["nrmse_overall"] == pytest.approx(1.0, rel=1e-3)
+
 
 class TestNRMSEComputation:
     """Tests for NRMSE computation correctness."""

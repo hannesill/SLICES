@@ -113,6 +113,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     label_stats = datamodule.get_label_statistics()
+    train_label_stats = datamodule.get_train_label_statistics()
     if task_name in label_stats:
         stats = label_stats[task_name]
         print(f"\n Label distribution for '{task_name}':")
@@ -139,8 +140,8 @@ def main(cfg: DictConfig) -> None:
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
-        if task_name in label_stats:
-            stats = label_stats[task_name]
+        if task_name in train_label_stats:
+            stats = train_label_stats[task_name]
             n_pos = stats.get("positive", 0)
             n_neg = stats.get("negative", 0)
             n_total = n_pos + n_neg
@@ -151,9 +152,13 @@ def main(cfg: DictConfig) -> None:
                 )
             raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
             cfg.training.class_weight = [w**0.5 for w in raw]
+            print(f"\n Training-split labels used for class weighting: {n_total}")
             print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
-            print(f"\n  Warning: No label stats for '{task_name}', skipping class weighting")
+            print(
+                f"\n  Warning: No train-split label stats for '{task_name}', "
+                "skipping class weighting"
+            )
             cfg.training.class_weight = None
 
     OmegaConf.set_struct(cfg, True)

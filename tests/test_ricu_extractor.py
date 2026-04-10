@@ -135,6 +135,7 @@ class TestRicuExtractorInit:
         config = ExtractorConfig(
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
         )
         extractor = RicuExtractor(config)
 
@@ -163,6 +164,18 @@ class TestRicuExtractorInit:
     def test_no_duckdb_connection(self, ricu_extractor: RicuExtractor) -> None:
         """Verify that RicuExtractor does not have a DuckDB connection."""
         assert not hasattr(ricu_extractor, "conn")
+
+    def test_init_raises_when_python_horizon_exceeds_ricu_export(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=8,
+        )
+
+        with pytest.raises(ValueError, match="upstream RICU export only contains 6 hours"):
+            RicuExtractor(config)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +257,7 @@ class TestExtractTimeseries:
         config = ExtractorConfig(
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed_partitioned"),
+            seq_length_hours=6,
         )
         extractor = RicuExtractor(config)
         ts = extractor.extract_timeseries([100, 200, 300])
@@ -288,6 +302,16 @@ class TestExtractDataSource:
         mort = ricu_extractor.extract_data_source("mortality_info", [200])
         assert len(mort) == 1
         assert mort["stay_id"][0] == 200
+
+    def test_legacy_mortality_datetime_is_migrated_conservatively(
+        self, ricu_extractor: RicuExtractor
+    ) -> None:
+        mort = ricu_extractor.extract_data_source("mortality_info", [300])
+        row = mort.filter(pl.col("stay_id") == 300)
+
+        assert row["death_time_precision"][0] == "date"
+        assert row["death_time"][0] is None
+        assert row["death_date"][0].isoformat() == "2020-01-08"
 
 
 class TestExtractRawEvents:
@@ -423,6 +447,8 @@ class TestRicuExtractorRun:
         assert meta["n_stays"] == 3
         assert meta["feature_names"] == ["hr", "sbp", "crea"]
         assert "ricu_metadata" in meta
+        assert "upstream_source_signature" in meta
+        assert len(meta["upstream_source_signature"]["files"]) >= 4
 
     def test_run_filters_short_stays(self, ricu_output_dir: Path, tmp_path: Path) -> None:
         output_dir = tmp_path / "processed"
@@ -523,3 +549,33 @@ class TestRicuExtractorRun:
 
         # Should have same number of stays (no duplicates)
         assert len(static_second) == n_first
+
+    def test_run_rebuilds_when_upstream_timeseries_changes(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Changing upstream parquet inputs should invalidate resume and rebuild outputs."""
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        RicuExtractor(config).run()
+
+        ts_path = ricu_output_dir / "ricu_timeseries.parquet"
+        updated = pl.read_parquet(ts_path).with_columns(
+            pl.when((pl.col("stay_id") == 100) & (pl.col("hour") == 0))
+            .then(pl.lit(999.0))
+            .otherwise(pl.col("hr"))
+            .alias("hr")
+        )
+        updated.write_parquet(ts_path)
+
+        RicuExtractor(config).run()
+
+        timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
+        stay100 = timeseries.filter(pl.col("stay_id") == 100)
+        assert stay100["timeseries"].to_list()[0][0][0] == 999.0

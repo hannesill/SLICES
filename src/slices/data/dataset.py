@@ -534,20 +534,31 @@ class ICUDataset(Dataset):
         """Return list of available task names."""
         return self.task_names
 
-    def get_label_statistics(self) -> Dict[str, Dict[str, Any]]:
-        """Compute label statistics for each task.
+    def get_label_statistics(
+        self, indices: Optional[List[int]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Compute label statistics for each task or subset.
 
         For single-label tasks, returns {total, positive, negative, prevalence}.
         For multi-label tasks (detected by prefixed columns like {task_name}_{subtask}),
         returns per-subtask prevalence and an aggregate mean prevalence.
 
+        Args:
+            indices: Optional dataset indices to restrict the computation to.
+                When None, computes statistics over the full dataset.
+
         Returns:
             Dict mapping task_name -> {count, positive, negative, prevalence, ...}
         """
+        labels_df = self.labels_df
+        if indices is not None:
+            subset_stay_ids = [self.stay_ids[i] for i in indices]
+            labels_df = labels_df.filter(pl.col("stay_id").is_in(subset_stay_ids))
+
         stats: Dict[str, Dict[str, Any]] = {}
         for task_name in self.task_names:
-            if task_name in self.labels_df.columns:
-                labels = self.labels_df[task_name].drop_nulls()
+            if task_name in labels_df.columns:
+                labels = labels_df[task_name].drop_nulls()
                 positive = (labels == 1).sum()
                 total = len(labels)
                 stats[task_name] = {
@@ -558,14 +569,12 @@ class ICUDataset(Dataset):
                 }
             else:
                 # Check for multi-label columns (e.g., {task_name}_{subtask}, ...)
-                multilabel_cols = [
-                    c for c in self.labels_df.columns if c.startswith(f"{task_name}_")
-                ]
+                multilabel_cols = [c for c in labels_df.columns if c.startswith(f"{task_name}_")]
                 if multilabel_cols:
                     subtask_stats = {}
                     prevalences = []
                     for col in multilabel_cols:
-                        col_labels = self.labels_df[col].drop_nulls()
+                        col_labels = labels_df[col].drop_nulls()
                         pos = (col_labels == 1).sum()
                         tot = len(col_labels)
                         prev = pos / tot if tot > 0 else 0.0
@@ -577,7 +586,7 @@ class ICUDataset(Dataset):
                         }
                         prevalences.append(prev)
                     stats[task_name] = {
-                        "total": len(self.labels_df),
+                        "total": len(labels_df),
                         "n_labels": len(multilabel_cols),
                         "mean_prevalence": (
                             sum(prevalences) / len(prevalences) if prevalences else 0.0
