@@ -21,8 +21,9 @@
 
 How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
 
-The formal thesis corpus now also includes two targeted extensions:
+The formal thesis corpus now also includes a contextual baseline family plus two targeted extensions:
 
+- `Sprint 11`: canonical GRU-D and XGBoost baselines, reported as contextual ICU references alongside the controlled benchmark
 - `Sprint 7p`: a focused capacity study that scales MAE and supervised encoders on MIIV `mortality_24h`
 - `Sprint 13`: a TS2Vec temporal-contrastive extension that tests whether a stronger contrastive-family instantiation changes the conclusion
 
