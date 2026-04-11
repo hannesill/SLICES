@@ -967,6 +967,27 @@ class TestExperimentRunnerRetry:
 class TestExperimentRunnerMatrix:
     """Tests for thesis-final sprint matrix coverage."""
 
+    def test_classical_baselines_are_canonicalized_to_sprint11(self):
+        from collections import Counter
+
+        from scripts.run_experiments import generate_all_runs
+
+        runs = generate_all_runs()
+        by_sprint = Counter(run.sprint for run in runs)
+
+        assert len(runs) == 2305
+        assert by_sprint["1"] == 19
+        assert by_sprint["3"] == 31
+        assert by_sprint["4"] == 31
+        assert by_sprint["5"] == 186
+        assert by_sprint["6"] == 504
+        assert by_sprint["11"] == 360
+
+        non_s11_classical = [
+            run for run in runs if run.run_type in ("gru_d", "xgboost") and run.sprint != "11"
+        ]
+        assert non_s11_classical == []
+
     def test_sprint7p_expanded_to_five_seeds(self):
         from scripts.run_experiments import BASELINE_SPRINTS, SEEDS_EXTENDED, MatrixBuilder
 

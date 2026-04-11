@@ -469,7 +469,12 @@ class MatrixBuilder:
     # --- Sprint builders ---
 
     def build_sprint1(self):
-        """MIMIC, all tasks, Protocol B + supervised + baselines, seed=42."""
+        """MIMIC, all tasks, Protocol B + supervised, seed=42.
+
+        Classical baselines (GRU-D, XGBoost) are canonicalized in Sprint 11
+        so the final thesis matrix reports them once rather than duplicating
+        them across the early SSL/supervised sprints.
+        """
         ds, seed, sprint = "miiv", 42, "1"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -477,8 +482,6 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, False, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
-            self._add_gru_d(sprint, ds, seed, task)
-            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint1b(self):
         """LR sensitivity, MIMIC, mortality_24h, seed=42."""
@@ -529,7 +532,10 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
 
     def build_sprint3(self):
-        """eICU, both protocols + supervised + baselines, seed=42."""
+        """eICU, both protocols + supervised, seed=42.
+
+        Classical baselines are launched in Sprint 11 only.
+        """
         ds, seed, sprint = "eicu", 42, "3"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -538,11 +544,12 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
-            self._add_gru_d(sprint, ds, seed, task)
-            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint4(self):
-        """Combined, both protocols + supervised + baselines, seed=42."""
+        """Combined, both protocols + supervised, seed=42.
+
+        Classical baselines are launched in Sprint 11 only.
+        """
         ds, seed, sprint = "combined", 42, "4"
         for p in SSL_PARADIGMS:
             pt = self._add_pretrain(sprint, p, ds, seed)
@@ -551,11 +558,13 @@ class MatrixBuilder:
                 self._add_finetune(sprint, p, ds, seed, task, True, pt)
         for task in TASKS:
             self._add_supervised(sprint, ds, seed, task)
-            self._add_gru_d(sprint, ds, seed, task)
-            self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint5(self):
-        """Seeds 123, 456 for datasets miiv, eicu, combined."""
+        """Seeds 123, 456 for datasets miiv, eicu, combined.
+
+        Extends the SSL + supervised matrix to three seeds. Classical baselines
+        are canonicalized in Sprint 11.
+        """
         sprint = "5"
         for seed in [123, 456]:
             for ds in DATASETS:
@@ -566,11 +575,13 @@ class MatrixBuilder:
                         self._add_finetune(sprint, p, ds, seed, task, True, pt)
                 for task in TASKS:
                     self._add_supervised(sprint, ds, seed, task)
-                    self._add_gru_d(sprint, ds, seed, task)
-                    self._add_xgboost(sprint, ds, seed, task)
 
     def build_sprint6(self):
-        """Label efficiency ablation — reuses Phase 1 encoders."""
+        """Label efficiency ablation — reuses Phase 1 encoders.
+
+        Includes SSL Protocol A/B plus the supervised Transformer baseline.
+        Classical baselines are canonicalized separately in Sprint 11.
+        """
         sprint = "6"
         for seed in SEEDS:
             for ds in DATASETS:
@@ -588,13 +599,9 @@ class MatrixBuilder:
                 # Supervised label efficiency
                 for frac in LABEL_FRACTIONS_FULL:
                     self._add_supervised(sprint, ds, seed, "mortality_24h", frac)
-                    self._add_gru_d(sprint, ds, seed, "mortality_24h", frac)
-                    self._add_xgboost(sprint, ds, seed, "mortality_24h", frac)
                 for task in TASKS[1:]:
                     for frac in LABEL_FRACTIONS_TREND:
                         self._add_supervised(sprint, ds, seed, task, frac)
-                        self._add_gru_d(sprint, ds, seed, task, frac)
-                        self._add_xgboost(sprint, ds, seed, task, frac)
 
     def build_sprint7p(self):
         """Focused model-capacity study for the thesis.
@@ -807,7 +814,13 @@ class MatrixBuilder:
                     )
 
     def build_sprint11(self):
-        """Classical baselines (XGBoost + GRU-D), all datasets/tasks, 5 seeds."""
+        """Canonical classical baselines (XGBoost + GRU-D), 5 seeds.
+
+        These baselines are intentionally centralized here rather than being
+        duplicated across earlier sprints. That keeps the final thesis matrix
+        aligned with the docs and export logic: one canonical experiment family
+        for contextual non-SSL baselines.
+        """
         sprint = "11"
         for seed in SEEDS_EXTENDED:
             for ds in DATASETS:
