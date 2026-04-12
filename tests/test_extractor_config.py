@@ -24,10 +24,10 @@ class TestExtractorConfigBasic:
         config = ExtractorConfig(parquet_root="/path/to/parquet")
 
         assert config.output_dir == "data/processed"
-        assert config.seq_length_hours == 48
+        assert config.seq_length_hours == 24
         assert config.feature_set == "core"
         assert config.tasks_dir is None
-        assert config.min_stay_hours == 48
+        assert config.min_stay_hours == 24
         assert "mortality_24h" in config.tasks
 
     def test_custom_values(self):

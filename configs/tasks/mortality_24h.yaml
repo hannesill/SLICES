@@ -2,7 +2,7 @@
 # 24-hour mortality prediction (binary classification)
 # Predict if patient will die within 24h after the observation window
 #
-# Timeline: |---- observation (48h) ----|---- prediction (24h) ----|
+# Timeline: |---- observation (24h) ----|---- prediction (24h) ----|
 #           intime                    obs_end                   pred_end
 
 task_name: mortality_24h

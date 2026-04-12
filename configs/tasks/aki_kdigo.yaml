@@ -1,6 +1,6 @@
 # @package task
 # AKI prediction using KDIGO criteria (binary classification)
-# Predict if patient will develop acute kidney injury
+# Predict if patient will develop acute kidney injury after the 24h observation window
 
 task_name: aki_kdigo
 task_type: binary

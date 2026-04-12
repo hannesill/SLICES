@@ -2,19 +2,19 @@
 # Predict if patient will die within 24 hours AFTER the observation window ends
 #
 # Timeline (with default settings):
-#   |---- observation (48h) ----|-- gap (0h) --|---- prediction (24h) ----|
-#   intime                    +48h           +48h                       +72h
+#   |---- observation (24h) ----|-- gap (0h) --|---- prediction (24h) ----|
+#   intime                    +24h           +24h                       +48h
 #
-# - Model sees: hours 0-48 of ICU stay
-# - Model predicts: will patient die in hours 48-72?
-# - Patients who die during observation (hours 0-48) are excluded (label=null)
+# - Model sees: hours 0-24 of ICU stay
+# - Model predicts: will patient die in hours 24-48?
+# - Patients who die during observation (hours 0-24) are excluded (label=null)
 
 task_name: mortality_24h
 task_type: binary
 
 # Prediction parameters
 prediction_window_hours: 24  # Predict mortality in 24h window after observation ends
-observation_window_hours: 48  # Must match seq_length_hours in data config
+observation_window_hours: 24  # Must match seq_length_hours in data config
 gap_hours: 0  # No gap between observation end and prediction start
 # Note: If gap_hours > 0, deaths during the gap period are excluded (label=null)
 # similar to observation-period deaths, since they are ambiguous for prediction.

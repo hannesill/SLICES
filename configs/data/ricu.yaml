@@ -38,6 +38,10 @@ feature_set: core
 # Feature categories (not used by RICU extractor, kept for config compatibility)
 categories: null
 
+# Benchmark observation window / cohort criterion
+seq_length_hours: 24
+min_stay_hours: 24
+
 # Tasks to extract labels for
 tasks:
   - mortality_24h

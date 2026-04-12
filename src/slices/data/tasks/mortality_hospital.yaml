@@ -2,12 +2,12 @@
 # Predict if patient will die before hospital discharge
 #
 # Timeline (with default settings):
-#   |---- observation (48h) ----|---- prediction (until hospital discharge) ----|
-#   intime                    +48h                                        dischtime
+#   |---- observation (24h) ----|---- prediction (until hospital discharge) ----|
+#   intime                    +24h                                        dischtime
 #
-# - Model sees: hours 0-48 of ICU stay
+# - Model sees: hours 0-24 of ICU stay
 # - Model predicts: will patient die before hospital discharge?
-# - Patients who die during observation (hours 0-48) are excluded (label=null)
+# - Patients who die during observation (hours 0-24) are excluded (label=null)
 #
 # Unlike mortality.yaml (ICU mortality using outtime), this uses
 # hospital_expire_flag which covers the full hospitalization.
@@ -17,7 +17,7 @@ task_type: binary
 
 # Prediction parameters
 prediction_window_hours: null  # null means hospital mortality (uses hospital_expire_flag)
-observation_window_hours: 48  # Must match seq_length_hours in data config
+observation_window_hours: 24  # Must match seq_length_hours in data config
 gap_hours: 0
 
 # Data requirements
