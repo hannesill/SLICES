@@ -366,6 +366,90 @@ def run_fairness_evaluation(
 # =============================================================================
 
 
+def report_and_validate_train_label_support(
+    *,
+    datamodule: Any,
+    task_name: str,
+    task_type: str,
+    dataset: str,
+    seed: int,
+    label_fraction: float,
+    min_train_positives: int = 3,
+) -> Dict[str, Any]:
+    """Report effective train-set class support and fail on degenerate subsets.
+
+    This is primarily aimed at label-efficiency runs where aggressive
+    subsampling can leave the optimization subset with too few positive
+    examples to produce meaningful metrics.
+    """
+    if task_type != "binary":
+        return {}
+
+    subset_stats = datamodule.get_train_label_statistics()
+    full_stats = datamodule.get_train_label_statistics(use_full_train=True)
+
+    if task_name not in subset_stats:
+        return {}
+
+    subset = subset_stats[task_name]
+    full = full_stats.get(task_name, subset)
+
+    subset_total = int(subset.get("total", 0))
+    subset_pos = int(subset.get("positive", 0))
+    subset_neg = int(subset.get("negative", 0))
+    subset_prev = float(subset.get("prevalence", 0.0))
+
+    full_total = int(full.get("total", 0))
+    full_pos = int(full.get("positive", 0))
+    full_neg = int(full.get("negative", 0))
+    full_prev = float(full.get("prevalence", 0.0))
+
+    print("\n Train label support:")
+    print(
+        "  - Dataset / task / seed / fraction: "
+        f"{dataset} / {task_name} / {seed} / {label_fraction}"
+    )
+    print(
+        f"  - Full train split: {full_pos} positive, {full_neg} negative, "
+        f"{full_total} total ({full_prev * 100:.2f}% positive)"
+    )
+    print(
+        f"  - Optimization subset: {subset_pos} positive, {subset_neg} negative, "
+        f"{subset_total} total ({subset_prev * 100:.2f}% positive)"
+    )
+
+    if subset_pos == 0 or subset_neg == 0:
+        raise ValueError(
+            "Binary training subset lost a class: "
+            f"dataset={dataset}, task={task_name}, seed={seed}, "
+            f"label_fraction={label_fraction}, positives={subset_pos}, negatives={subset_neg}. "
+            "Adjust the fraction or seed before training."
+        )
+
+    if label_fraction < 1.0 and subset_pos < min_train_positives:
+        raise ValueError(
+            "Too few positive training examples in the label-efficiency subset: "
+            f"dataset={dataset}, task={task_name}, seed={seed}, "
+            f"label_fraction={label_fraction}, positives={subset_pos} < {min_train_positives}. "
+            "Increase the fraction or drop this run."
+        )
+
+    return {
+        "task_name": task_name,
+        "dataset": dataset,
+        "seed": seed,
+        "label_fraction": label_fraction,
+        "full_train_total": full_total,
+        "full_train_positive": full_pos,
+        "full_train_negative": full_neg,
+        "full_train_prevalence": full_prev,
+        "train_subset_total": subset_total,
+        "train_subset_positive": subset_pos,
+        "train_subset_negative": subset_neg,
+        "train_subset_prevalence": subset_prev,
+    }
+
+
 def validate_data_prerequisites(
     processed_dir: str,
     dataset: str,
