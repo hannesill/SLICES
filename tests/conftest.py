@@ -9,6 +9,7 @@ import gzip
 import polars as pl
 import pytest
 import torch
+from slices.constants import SEQ_LENGTH_HOURS
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def sample_batch() -> dict:
         Dictionary with sample batch data including timeseries and labels.
     """
     batch_size = 4
-    seq_length = 48
+    seq_length = SEQ_LENGTH_HOURS
     n_features = 35
 
     return {
@@ -40,7 +41,7 @@ def sample_config() -> dict:
     return {
         "parquet_root": "/tmp/test_data",
         "output_dir": "/tmp/test_output",
-        "seq_length_hours": 48,
+        "seq_length_hours": SEQ_LENGTH_HOURS,
         "feature_set": "core",
     }
 
