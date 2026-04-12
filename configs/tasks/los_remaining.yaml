@@ -1,6 +1,6 @@
 # @package task
 # Remaining length of stay prediction (regression)
-# Predict remaining days in ICU after the observation window
+# Predict remaining days in ICU after the 24h observation window
 
 task_name: los_remaining
 task_type: regression

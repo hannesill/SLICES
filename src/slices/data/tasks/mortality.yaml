@@ -2,19 +2,19 @@
 # Predict if patient will die during the remainder of their ICU stay AFTER observation ends
 #
 # Timeline (with default settings):
-#   |---- observation (48h) ----|-- gap (0h) --|---- prediction (until ICU discharge) ----|
-#   intime                    +48h           +48h                                     outtime
+#   |---- observation (24h) ----|-- gap (0h) --|---- prediction (until ICU discharge) ----|
+#   intime                    +24h           +24h                                     outtime
 #
-# - Model sees: hours 0-48 of ICU stay
+# - Model sees: hours 0-24 of ICU stay
 # - Model predicts: will patient die before ICU discharge?
-# - Patients who die during observation (hours 0-48) are excluded (label=null)
+# - Patients who die during observation (hours 0-24) are excluded (label=null)
 
 task_name: mortality
 task_type: binary
 
 # Prediction parameters
 prediction_window_hours: -1  # -1 means "until ICU discharge" (entire remaining ICU stay)
-observation_window_hours: 48  # Must match seq_length_hours in data config
+observation_window_hours: 24  # Must match seq_length_hours in data config
 gap_hours: 0  # No gap between observation end and prediction start
 
 # Data requirements
