@@ -5,6 +5,8 @@ from typing import Dict
 
 import polars as pl
 
+from slices.constants import SEQ_LENGTH_HOURS
+
 from .base import LabelBuilder
 
 logger = logging.getLogger(__name__)
@@ -17,13 +19,14 @@ class AKILabelBuilder(LabelBuilder):
     - Creatinine rise >= 0.3 mg/dL within any 48h window
     - Creatinine >= 1.5x baseline within 7 days of baseline measurement
 
-    Baseline: minimum creatinine in first baseline_window_hours (default 48h).
+    Baseline: minimum creatinine in first baseline_window_hours
+    (default benchmark observation window, 24h).
     Detection window: hours [observation_window_hours, observation_window_hours +
     prediction_window_hours) — forward-looking to avoid data leakage.
     Label = null if no creatinine in the prediction window.
     """
 
-    SEMANTIC_VERSION = "1.0.0"
+    SEMANTIC_VERSION = "1.1.0"
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build AKI labels from stays and timeseries data.
@@ -47,7 +50,7 @@ class AKILabelBuilder(LabelBuilder):
             )
 
         crea_col = self.config.label_params.get("creatinine_col", "crea")
-        baseline_hours = self.config.label_params.get("baseline_window_hours", 48)
+        baseline_hours = self.config.label_params.get("baseline_window_hours", SEQ_LENGTH_HOURS)
         abs_threshold = self.config.label_params.get("absolute_rise_threshold", 0.3)
         rel_threshold = self.config.label_params.get("relative_rise_threshold", 1.5)
         rel_window_hours = self.config.label_params.get("relative_window_hours", 168)

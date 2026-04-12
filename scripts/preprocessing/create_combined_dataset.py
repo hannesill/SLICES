@@ -22,6 +22,7 @@ from pathlib import Path
 
 import polars as pl
 import yaml
+from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 
 # Offset applied to stay_id and patient_id for the second dataset
 # to avoid collisions. Large enough to exceed any real ID range.
@@ -346,8 +347,8 @@ def main():
         "feature_set": meta_a.get("feature_set", "core"),
         "feature_names": meta_a.get("feature_names", []),
         "n_features": meta_a.get("n_features", 0),
-        "seq_length_hours": meta_a.get("seq_length_hours", 48),
-        "min_stay_hours": meta_a.get("min_stay_hours", 48),
+        "seq_length_hours": meta_a.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        "min_stay_hours": meta_a.get("min_stay_hours", MIN_STAY_HOURS),
         "task_names": common_tasks,
         "label_manifest": combined_manifest,
         "n_stays": len(static_combined),

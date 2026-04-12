@@ -45,8 +45,8 @@ data:
   # Sliding window configuration for longer sequences
   # Enable after re-extracting with longer seq_length_hours (e.g., 168h)
   enable_sliding_windows: false  # Set true after re-extraction
-  window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
-  window_stride: 24              # Stride for overlapping windows (50% overlap)
+  window_size: 24                # Match the benchmark observation window when enabled
+  window_stride: 12              # 50% overlap for 24h windows
 
 # Encoder overrides for SSL pretraining
 # Architecture (d_model, n_layers, etc.) inherited from configs/model/transformer.yaml

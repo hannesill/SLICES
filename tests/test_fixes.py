@@ -5,6 +5,7 @@ sequence-length override, checkpoint provenance, mortality precision,
 and exporter dedup logic.
 """
 
+import importlib
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ import polars as pl
 import pytest
 import torch
 import yaml
+from omegaconf import OmegaConf
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.labels.aki import AKILabelBuilder
 from slices.data.labels.los import LOSLabelBuilder
@@ -167,16 +169,11 @@ class TestLabelManifest:
 
     def test_validate_data_prerequisites_matching_passes(self, tmp_path):
         """Matching manifest should pass cleanly."""
+        from slices.data.utils import get_package_data_dir
         from slices.training.utils import validate_data_prerequisites
 
-        config = LabelConfig(
-            task_name="mortality_24h",
-            task_type="binary",
-            prediction_window_hours=24,
-            observation_window_hours=48,
-            gap_hours=0,
-            label_sources=["stays", "mortality_info"],
-        )
+        with open(get_package_data_dir() / "tasks" / "mortality_24h.yaml") as f:
+            config = LabelConfig(**yaml.safe_load(f))
         builder = LabelBuilderFactory.create(config)
         metadata = {
             "label_manifest": {
@@ -962,6 +959,123 @@ class TestExperimentRunnerRetry:
         assert target.id in scheduled_ids
         assert dependency.id in scheduled_ids
         assert other.id not in scheduled_ids
+
+
+class TestTrainingScriptClassWeighting:
+    """Regression tests for entrypoint-level class weight resolution."""
+
+    @pytest.mark.parametrize(
+        "module_name",
+        ["scripts.training.finetune", "scripts.training.supervised"],
+    )
+    def test_balanced_class_weight_uses_train_split_stats(self, monkeypatch, module_name):
+        """'balanced' must resolve from train-split stats before module construction."""
+        module = importlib.import_module(module_name)
+        captured = {}
+
+        class DummyDataModule:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def setup(self):
+                return None
+
+            def get_feature_dim(self):
+                return 3
+
+            def get_seq_length(self):
+                return 24
+
+            def get_split_info(self):
+                return {
+                    "train_patients": 5,
+                    "train_stays": 10,
+                    "val_patients": 2,
+                    "val_stays": 4,
+                    "test_patients": 2,
+                    "test_stays": 4,
+                }
+
+            def get_label_statistics(self):
+                return {
+                    "mortality_24h": {
+                        "total": 100,
+                        "positive": 20,
+                        "negative": 80,
+                        "prevalence": 0.2,
+                    }
+                }
+
+            def get_train_label_statistics(self):
+                return {
+                    "mortality_24h": {
+                        "total": 10,
+                        "positive": 1,
+                        "negative": 9,
+                        "prevalence": 0.1,
+                    }
+                }
+
+        class StopAfterCaptureError(Exception):
+            pass
+
+        def fake_finetune_module(config, checkpoint_path=None, pretrain_checkpoint_path=None):
+            captured["class_weight"] = list(config.training.class_weight)
+            captured["d_input"] = config.encoder.d_input
+            captured["max_seq_length"] = config.encoder.max_seq_length
+            raise StopAfterCaptureError
+
+        monkeypatch.setattr(module, "validate_data_prerequisites", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
+        monkeypatch.setattr(module, "FineTuneModule", fake_finetune_module)
+
+        cfg = OmegaConf.create(
+            {
+                "dataset": "miiv",
+                "seed": 42,
+                "paradigm": "mae",
+                "checkpoint": None,
+                "pretrain_checkpoint": "dummy.ckpt",
+                "data": {
+                    "processed_dir": "/tmp/processed",
+                    "num_workers": 0,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 0,
+                    "max_seq_length": 0,
+                },
+                "training": {
+                    "batch_size": 8,
+                    "class_weight": "balanced",
+                    "freeze_encoder": False,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+                "logging": {
+                    "use_wandb": False,
+                },
+            }
+        )
+
+        with pytest.raises(StopAfterCaptureError):
+            module.main.__wrapped__(cfg)
+
+        expected = [(10 / (2 * 9)) ** 0.5, (10 / (2 * 1)) ** 0.5]
+        assert captured["class_weight"] == pytest.approx(expected)
+        assert captured["d_input"] == 3
+        assert captured["max_seq_length"] == 24
 
 
 class TestExperimentRunnerMatrix:
