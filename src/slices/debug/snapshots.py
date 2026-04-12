@@ -14,6 +14,8 @@ import numpy as np
 import polars as pl
 import yaml
 
+from slices.constants import SEQ_LENGTH_HOURS
+
 # Import the canonical PipelineStage from staged_snapshots
 # This module previously had its own PipelineStage with different stage names.
 # For backwards compatibility, we keep the old stage names as aliases.
@@ -59,7 +61,7 @@ class SnapshotConfig:
     output_dir: Union[str, Path] = "debug_snapshots"
     stages: List[PipelineStage] = field(default_factory=lambda: list(PipelineStage))
     stay_ids: Optional[List[int]] = None
-    max_hours: int = 48
+    max_hours: int = SEQ_LENGTH_HOURS
     include_masks: bool = True
     flatten_arrays: bool = True
 
@@ -305,7 +307,7 @@ def flatten_dense_timeseries(
 def unflatten_timeseries(
     flat_df: pl.DataFrame,
     feature_names: List[str],
-    seq_length: int = 48,
+    seq_length: int = SEQ_LENGTH_HOURS,
 ) -> pl.DataFrame:
     """Convert flattened timeseries back to nested format.
 

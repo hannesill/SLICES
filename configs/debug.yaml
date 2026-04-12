@@ -41,7 +41,7 @@ max_samples: 5000  # Max samples for embedding extraction
 
 # Output options
 plots: false  # Generate visualization plots
-max_hours: 48  # Max hours for timeseries export
+max_hours: 24  # Max hours for timeseries export
 flatten_timeseries: true  # Convert nested arrays to long format
 
 # General

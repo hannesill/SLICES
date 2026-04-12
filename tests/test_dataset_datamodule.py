@@ -24,7 +24,7 @@ def mock_extracted_data(tmp_path):
         "feature_set": "core",
         "feature_names": ["heart_rate", "sbp", "resp_rate"],
         "n_features": 3,
-        "seq_length_hours": 48,
+        "seq_length_hours": 24,
         "min_stay_hours": 6,
         "task_names": ["mortality_24h", "mortality_hospital"],
         "n_stays": 10,
@@ -57,8 +57,8 @@ def mock_extracted_data(tmp_path):
     static_df.write_parquet(data_dir / "static.parquet")
 
     # Create timeseries (dense format with nested lists)
-    # Each stay has 48 hours x 3 features
-    seq_length = 48
+    # Each stay has 24 hours x 3 features
+    seq_length = 24
     n_features = 3
 
     timeseries_data = []
@@ -107,7 +107,7 @@ class TestICUDataset:
 
         assert len(dataset) == 10
         assert dataset.n_features == 3
-        assert dataset.seq_length == 48
+        assert dataset.seq_length == 24
         assert dataset.feature_names == ["heart_rate", "sbp", "resp_rate"]
         assert dataset.task_names == ["mortality_24h", "mortality_hospital"]
 
@@ -150,8 +150,8 @@ class TestICUDataset:
         assert "static" in sample
 
         # Check shapes
-        assert sample["timeseries"].shape == (48, 3)
-        assert sample["mask"].shape == (48, 3)
+        assert sample["timeseries"].shape == (24, 3)
+        assert sample["mask"].shape == (24, 3)
 
         # Check types
         assert sample["timeseries"].dtype == torch.float32
@@ -624,7 +624,7 @@ class TestICUDataModule:
 
         # Check batch size (may be smaller due to drop_last=True and small dataset)
         assert batch["timeseries"].shape[0] <= 2
-        assert batch["timeseries"].shape[1] == 48
+        assert batch["timeseries"].shape[1] == 24
         assert batch["timeseries"].shape[2] == 3
 
     def test_reproducible_splits(self, mock_extracted_data):
@@ -752,7 +752,7 @@ class TestICUDataModule:
         )
         dm.setup()
 
-        assert dm.get_seq_length() == 48
+        assert dm.get_seq_length() == 24
 
     def test_get_label_statistics(self, mock_extracted_data):
         """Test get_label_statistics returns correct information."""

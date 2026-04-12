@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import yaml
+from slices.constants import SEQ_LENGTH_HOURS
 
 
 def load_data(data_dir: Path) -> tuple[pl.DataFrame, pl.DataFrame, dict]:
@@ -349,7 +350,7 @@ def main():
     timeseries_df, static_df, metadata = load_data(args.processed_dir)
 
     feature_names = metadata["feature_names"]
-    seq_length = metadata.get("seq_length_hours", 48)
+    seq_length = metadata.get("seq_length_hours", SEQ_LENGTH_HOURS)
     n_stays = len(timeseries_df)
     n_features = len(feature_names)
 

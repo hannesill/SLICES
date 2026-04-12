@@ -177,6 +177,48 @@ class TestRicuExtractorInit:
         with pytest.raises(ValueError, match="upstream RICU export only contains 6 hours"):
             RicuExtractor(config)
 
+    def test_existing_extraction_is_invalidated_when_upstream_inputs_change(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        RicuExtractor(config).run()
+
+        resumed = RicuExtractor(config)
+        assert resumed._check_existing_extraction() is not None
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path)
+        updated = pl.concat(
+            [
+                timeseries,
+                pl.DataFrame(
+                    {
+                        "stay_id": [999],
+                        "hour": [0],
+                        "hr": [88.0],
+                        "sbp": [120.0],
+                        "crea": [1.2],
+                        "hr_mask": [True],
+                        "sbp_mask": [True],
+                        "crea_mask": [True],
+                    }
+                ),
+            ],
+            how="vertical_relaxed",
+        )
+        updated.write_parquet(timeseries_path)
+
+        after_change = RicuExtractor(config)
+        assert after_change._check_existing_extraction() is None
+
 
 # ---------------------------------------------------------------------------
 # Core extraction methods
