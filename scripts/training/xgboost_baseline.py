@@ -125,7 +125,10 @@ def main(cfg: DictConfig) -> None:
     print("1. Setting up DataModule")
     print("=" * 80)
 
-    from slices.training.utils import validate_data_prerequisites
+    from slices.training.utils import (
+        report_and_validate_train_label_support,
+        validate_data_prerequisites,
+    )
 
     task_name = cfg.task.get("task_name", "mortality_24h")
     task_type = cfg.task.get("task_type", "binary")
@@ -147,6 +150,16 @@ def main(cfg: DictConfig) -> None:
     print(f"  Train: {len(datamodule.train_indices)} stays")
     print(f"  Val:   {len(datamodule.val_indices)} stays")
     print(f"  Test:  {len(datamodule.test_indices)} stays")
+
+    report_and_validate_train_label_support(
+        datamodule=datamodule,
+        task_name=task_name,
+        task_type=task_type,
+        dataset=cfg.dataset,
+        seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
+        min_train_positives=cfg.get("min_train_positives", 3),
+    )
 
     # =========================================================================
     # 2. Extract Tabular Features

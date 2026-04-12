@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import polars as pl
 import yaml
+from slices.data.utils import get_package_data_dir
 
 
 def load_labels(processed_dir: Path) -> pl.DataFrame:
@@ -66,6 +67,18 @@ def load_metadata(processed_dir: Path) -> Dict[str, Any]:
 
     with open(metadata_path) as f:
         return yaml.safe_load(f) or {}
+
+
+def load_task_quality_checks(task_name: str) -> Dict[str, Any]:
+    """Load optional warning thresholds for a task from the package YAML."""
+    config_path = get_package_data_dir() / "tasks" / f"{task_name}.yaml"
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+
+    return config.get("quality_checks", {}) or {}
 
 
 def get_task_columns(labels_df: pl.DataFrame) -> List[str]:
@@ -182,6 +195,7 @@ def compute_auroc_ci_width(
 def analyze_task(
     labels_df: pl.DataFrame,
     task_name: str,
+    quality_checks: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Analyze a single task's label distribution.
 
@@ -211,6 +225,8 @@ def analyze_task(
         "valid_labels": valid_count,
         "missing_labels": missing_count,
         "missing_percentage": (missing_count / total_stays * 100) if total_stays > 0 else 0,
+        "quality_checks": quality_checks or {},
+        "quality_warnings": [],
     }
 
     if valid_count == 0:
@@ -253,6 +269,17 @@ def analyze_task(
             0: round(valid_count / (2 * negative_count), 4) if negative_count > 0 else 1.0,
             1: round(valid_count / (2 * positive_count), 4) if positive_count > 0 else 1.0,
         }
+
+    if quality_checks:
+        max_missing_percentage = quality_checks.get("max_missing_percentage")
+        if max_missing_percentage is not None and stats["missing_percentage"] > float(
+            max_missing_percentage
+        ):
+            stats["quality_warnings"].append(
+                "Missing label rate "
+                f"{stats['missing_percentage']:.1f}% exceeds the configured "
+                f"maximum of {float(max_missing_percentage):.1f}%."
+            )
 
     return stats
 
@@ -386,6 +413,11 @@ def print_task_stats(stats: Dict[str, Any]) -> None:
     print(f"  Valid labels:    {stats['valid_labels']:,}")
     print(f"  Missing labels:  {stats['missing_labels']:,} ({stats['missing_percentage']:.1f}%)")
     print(f"  Number of classes: {stats['n_classes']}")
+
+    if stats.get("quality_warnings"):
+        print("\n  Quality Warnings:")
+        for warning in stats["quality_warnings"]:
+            print(f"    - {warning}")
 
     if stats["class_distribution"]:
         print("\n  Class Distribution:")
@@ -598,7 +630,11 @@ def main():
     print("=" * 60)
 
     for task_name in task_columns:
-        stats = analyze_task(labels_df, task_name)
+        stats = analyze_task(
+            labels_df,
+            task_name,
+            quality_checks=load_task_quality_checks(task_name),
+        )
         all_stats[task_name] = stats
         print_task_stats(stats)
 

@@ -35,6 +35,7 @@ from omegaconf import DictConfig, OmegaConf
 from slices.data.datamodule import ICUDataModule
 from slices.training import FineTuneModule
 from slices.training.utils import (
+    report_and_validate_train_label_support,
     run_fairness_evaluation,
     setup_finetune_callbacks,
     setup_wandb_logger,
@@ -126,6 +127,16 @@ def main(cfg: DictConfig) -> None:
             f"  - Negative: {stats.get('negative', 'N/A')} "
             f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
         )
+
+    report_and_validate_train_label_support(
+        datamodule=datamodule,
+        task_name=task_name,
+        task_type=cfg.task.get("task_type", "binary"),
+        dataset=cfg.dataset,
+        seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
+        min_train_positives=cfg.get("min_train_positives", 3),
+    )
 
     # =========================================================================
     # 2. Create Finetune Module

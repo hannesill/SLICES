@@ -28,6 +28,7 @@ class LabelConfig:
     # Label definition
     label_sources: List[str] = field(default_factory=list)  # Required data sources
     label_params: Dict = field(default_factory=dict)  # Task-specific parameters
+    quality_checks: Dict = field(default_factory=dict)  # Optional alert thresholds only
 
     # Evaluation metrics
     primary_metric: str = "auroc"
@@ -58,6 +59,8 @@ class LabelBuilder(ABC):
         Returns:
             16-char hex digest of the config's label-relevant fields.
         """
+        # NOTE: quality_checks intentionally excluded because they only control
+        # warnings/analysis thresholds, not the label semantics themselves.
         hashable = {
             "task_name": config.task_name,
             "task_type": config.task_type,

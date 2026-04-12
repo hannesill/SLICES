@@ -15,6 +15,7 @@ from slices.training import FineTuneModule
 from slices.training.utils import (
     build_optimizer,
     build_scheduler,
+    report_and_validate_train_label_support,
     save_encoder_checkpoint,
 )
 
@@ -175,6 +176,99 @@ class TestSaveEncoderCheckpoint:
 
         assert torch.allclose(new_encoder.weight, encoder.weight)
         assert torch.allclose(new_encoder.bias, encoder.bias)
+
+
+class TestTrainLabelSupportGuard:
+    """Tests for label-efficiency train support reporting."""
+
+    class _DummyDataModule:
+        def __init__(self, subset_stats, full_stats=None):
+            self._subset_stats = subset_stats
+            self._full_stats = full_stats or subset_stats
+
+        def get_train_label_statistics(self, use_full_train: bool = False):
+            return self._full_stats if use_full_train else self._subset_stats
+
+    def test_reports_binary_train_support(self, capsys):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 5,
+                    "negative": 315,
+                    "prevalence": 5 / 320,
+                }
+            },
+            full_stats={
+                "mortality_24h": {
+                    "total": 32000,
+                    "positive": 544,
+                    "negative": 31456,
+                    "prevalence": 544 / 32000,
+                }
+            },
+        )
+
+        stats = report_and_validate_train_label_support(
+            datamodule=dm,
+            task_name="mortality_24h",
+            task_type="binary",
+            dataset="miiv",
+            seed=42,
+            label_fraction=0.01,
+            min_train_positives=3,
+        )
+
+        captured = capsys.readouterr()
+        assert "miiv / mortality_24h / 42 / 0.01" in captured.out
+        assert stats["train_subset_positive"] == 5
+        assert stats["full_train_positive"] == 544
+
+    def test_raises_when_label_efficiency_subset_has_too_few_positives(self):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 2,
+                    "negative": 318,
+                    "prevalence": 2 / 320,
+                }
+            }
+        )
+
+        with pytest.raises(ValueError, match="Too few positive training examples"):
+            report_and_validate_train_label_support(
+                datamodule=dm,
+                task_name="mortality_24h",
+                task_type="binary",
+                dataset="eicu",
+                seed=7,
+                label_fraction=0.01,
+                min_train_positives=3,
+            )
+
+    def test_raises_when_binary_train_subset_loses_a_class(self):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 0,
+                    "negative": 320,
+                    "prevalence": 0.0,
+                }
+            }
+        )
+
+        with pytest.raises(ValueError, match="lost a class"):
+            report_and_validate_train_label_support(
+                datamodule=dm,
+                task_name="mortality_24h",
+                task_type="binary",
+                dataset="miiv",
+                seed=1,
+                label_fraction=0.01,
+                min_train_positives=3,
+            )
 
 
 class TestSupervisedCheckpointFormat:
