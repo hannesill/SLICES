@@ -28,6 +28,18 @@ class AKILabelBuilder(LabelBuilder):
 
     SEMANTIC_VERSION = "1.1.0"
 
+    def required_raw_timeseries_horizon_hours(self) -> int:
+        """AKI needs baseline data plus post-observation creatinine measurements."""
+        prediction_hours = self.config.prediction_window_hours
+        if prediction_hours is None:
+            raise ValueError(
+                "AKI task requires prediction_window_hours to define the forward-looking "
+                "detection window."
+            )
+
+        obs_hours = self.config.observation_window_hours or SEQ_LENGTH_HOURS
+        return int(obs_hours + prediction_hours)
+
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build AKI labels from stays and timeseries data.
 
@@ -149,6 +161,15 @@ class AKILabelBuilder(LabelBuilder):
             .join(abs_aki, on="stay_id", how="left")
         )
 
+        missing_crea_or_baseline = result.filter(
+            pl.col("has_crea").is_null() | pl.col("has_baseline").is_null()
+        ).height
+        missing_post_obs = result.filter(
+            pl.col("has_crea").is_not_null()
+            & pl.col("has_baseline").is_not_null()
+            & pl.col("has_post_obs").is_null()
+        ).height
+
         # Build label:
         # - null if no creatinine data, no baseline, or no data in prediction window
         # - 1 if either AKI criterion met
@@ -175,7 +196,8 @@ class AKILabelBuilder(LabelBuilder):
         n_null = result_df["label"].null_count()
         logger.info(
             f"AKI labels: {n_aki} AKI, {n_no_aki} no AKI, "
-            f"{n_null} excluded (no creatinine/baseline or no data in prediction window)"
+            f"{n_null} excluded ({missing_crea_or_baseline} no creatinine/baseline, "
+            f"{missing_post_obs} no creatinine in prediction window)"
         )
 
         return result_df

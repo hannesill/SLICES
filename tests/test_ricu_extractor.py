@@ -27,6 +27,7 @@ def ricu_output_dir(tmp_path: Path) -> Path:
         "feature_names": ["hr", "sbp", "crea"],
         "n_features": 3,
         "seq_length_hours": 6,
+        "raw_export_horizon_hours": 6,
         "n_stays": 3,
         "ricu_version": "0.7.0",
     }
@@ -136,6 +137,7 @@ class TestRicuExtractorInit:
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed"),
             seq_length_hours=6,
+            tasks=[],
         )
         extractor = RicuExtractor(config)
 
@@ -176,6 +178,76 @@ class TestRicuExtractorInit:
 
         with pytest.raises(ValueError, match="upstream RICU export only contains 6 hours"):
             RicuExtractor(config)
+
+    def test_init_raises_when_task_requires_longer_raw_export_horizon(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 4,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {"creatinine_col": "crea"},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Active task labels require a longer upstream raw timeseries horizon",
+        ):
+            RicuExtractor(config)
+
+    def test_init_accepts_explicit_raw_export_horizon_longer_than_input_window(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        with open(ricu_output_dir / "ricu_metadata.yaml") as f:
+            metadata = yaml.safe_load(f)
+        metadata["raw_export_horizon_hours"] = 10
+        with open(ricu_output_dir / "ricu_metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 4,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {"creatinine_col": "crea"},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        extractor = RicuExtractor(config)
+        assert extractor._get_raw_export_horizon_hours() == 10
 
     def test_existing_extraction_is_invalidated_when_upstream_inputs_change(
         self, ricu_output_dir: Path, tmp_path: Path
@@ -300,6 +372,7 @@ class TestExtractTimeseries:
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed_partitioned"),
             seq_length_hours=6,
+            tasks=[],
         )
         extractor = RicuExtractor(config)
         ts = extractor.extract_timeseries([100, 200, 300])
@@ -486,6 +559,9 @@ class TestRicuExtractorRun:
         assert meta["dataset"] == "miiv"
         assert meta["n_features"] == 3
         assert meta["seq_length_hours"] == 6
+        assert meta["input_seq_length_hours"] == 6
+        assert meta["raw_export_horizon_hours"] == 6
+        assert meta["required_raw_export_horizon_hours"] == 6
         assert meta["n_stays"] == 3
         assert meta["feature_names"] == ["hr", "sbp", "crea"]
         assert "ricu_metadata" in meta

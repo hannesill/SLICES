@@ -999,12 +999,13 @@ write_metadata <- function(output_dir, dataset, concept_cols,
                            seq_length_hours, n_stays) {
   message("[6/6] Writing metadata...")
   metadata <- list(
-    dataset           = dataset,
-    feature_names     = as.list(concept_cols),
-    n_features        = length(concept_cols),
-    seq_length_hours  = seq_length_hours,
-    n_stays           = n_stays,
-    ricu_version      = as.character(packageVersion("ricu"))
+    dataset                  = dataset,
+    feature_names            = as.list(concept_cols),
+    n_features               = length(concept_cols),
+    seq_length_hours         = seq_length_hours,
+    raw_export_horizon_hours = seq_length_hours,
+    n_stays                  = n_stays,
+    ricu_version             = as.character(packageVersion("ricu"))
   )
   write_yaml(metadata, file.path(output_dir, "ricu_metadata.yaml"))
 }

@@ -80,6 +80,22 @@ class LabelBuilder(ABC):
         """
         self.config = config
 
+    def required_raw_timeseries_horizon_hours(self) -> int:
+        """Return the raw timeseries horizon needed to build this task's labels.
+
+        This is independent of the model input sequence length. The extractor uses
+        it to validate that the upstream export retains enough post-observation
+        data for forward-looking labels.
+
+        Returns:
+            Maximum hour offset needed from the raw ``timeseries`` source.
+            Returns 0 for tasks that do not depend on raw timeseries labels.
+        """
+        if "timeseries" not in self.config.label_sources:
+            return 0
+
+        return int(self.config.observation_window_hours or 0)
+
     @abstractmethod
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build task labels from raw extracted data.

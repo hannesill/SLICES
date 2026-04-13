@@ -28,7 +28,7 @@ from rich.progress import (
 
 from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
-from slices.data.labels import LabelBuilder, LabelBuilderFactory
+from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 from .base import BaseExtractor, ExtractorConfig
 
@@ -74,6 +74,7 @@ class RicuExtractor(BaseExtractor):
 
         self._stays_cache: Optional[pl.DataFrame] = None
         self._metadata: Optional[dict] = None
+        self._task_configs_cache: Optional[List[LabelConfig]] = None
 
         if not self.parquet_root.exists():
             raise ValueError(f"RICU output directory not found: {self.parquet_root}")
@@ -86,22 +87,78 @@ class RicuExtractor(BaseExtractor):
             self._metadata = yaml.safe_load(f)
         self._validate_ricu_horizon()
 
-    def _validate_ricu_horizon(self) -> None:
-        """Validate that the Python extraction horizon does not exceed the R export."""
-        ricu_seq_length = self._metadata.get("seq_length_hours")
-        if ricu_seq_length is None:
+    def _get_raw_export_horizon_hours(self) -> int:
+        """Return the upstream RICU export horizon in hours.
+
+        New exports should store ``raw_export_horizon_hours`` explicitly. Older
+        exports only have ``seq_length_hours``; keep supporting that field for
+        backward compatibility.
+        """
+        raw_horizon = self._metadata.get("raw_export_horizon_hours")
+        if raw_horizon is None:
+            raw_horizon = self._metadata.get("seq_length_hours")
+
+        if raw_horizon is None:
             raise ValueError(
-                "ricu_metadata.yaml is missing seq_length_hours; "
-                "cannot validate the export horizon safely."
+                "ricu_metadata.yaml is missing both raw_export_horizon_hours and "
+                "seq_length_hours; cannot validate the export horizon safely."
             )
 
-        ricu_seq_length = int(ricu_seq_length)
-        if self.config.seq_length_hours > ricu_seq_length:
+        return int(raw_horizon)
+
+    def _get_task_configs_cached(self) -> List[LabelConfig]:
+        """Load and cache task configs for horizon validation and metadata."""
+        if self._task_configs_cache is None:
+            self._task_configs_cache = self._load_task_configs(self.config.tasks)
+        return self._task_configs_cache
+
+    def _get_required_raw_export_horizon_hours(
+        self, task_configs: Optional[List[LabelConfig]] = None
+    ) -> int:
+        """Return the minimum upstream raw export horizon required by this extraction."""
+        required_horizon = int(self.config.seq_length_hours)
+        for task_config in task_configs or self._get_task_configs_cached():
+            builder = LabelBuilderFactory.create(task_config)
+            required_horizon = max(
+                required_horizon,
+                int(builder.required_raw_timeseries_horizon_hours()),
+            )
+
+        return required_horizon
+
+    def _validate_ricu_horizon(self) -> None:
+        """Validate that the Python extraction horizon does not exceed the R export."""
+        raw_export_horizon = self._get_raw_export_horizon_hours()
+        if self.config.seq_length_hours > raw_export_horizon:
             raise ValueError(
                 "Python extraction requests seq_length_hours="
                 f"{self.config.seq_length_hours}, but the upstream RICU export only "
-                f"contains {ricu_seq_length} hours. Re-run the R export with a longer "
+                f"contains {raw_export_horizon} hours. Re-run the R export with a longer "
                 "horizon or lower the Python extraction seq_length_hours."
+            )
+
+        task_requirements = []
+        for task_config in self._get_task_configs_cached():
+            builder = LabelBuilderFactory.create(task_config)
+            required_horizon = int(builder.required_raw_timeseries_horizon_hours())
+            if required_horizon > self.config.seq_length_hours:
+                task_requirements.append((task_config.task_name, required_horizon))
+
+        required_raw_export_horizon = self._get_required_raw_export_horizon_hours(
+            self._get_task_configs_cached()
+        )
+        if raw_export_horizon < required_raw_export_horizon:
+            requirement_str = ", ".join(
+                f"{task_name}={required_horizon}h"
+                for task_name, required_horizon in task_requirements
+            )
+            raise ValueError(
+                "Active task labels require a longer upstream raw timeseries horizon than "
+                f"the current RICU export provides. Upstream export: {raw_export_horizon}h; "
+                f"required: {required_raw_export_horizon}h. "
+                f"Task-specific requirements: {requirement_str}. "
+                "Keep the model input at 24h if desired, but re-run the R export with a "
+                "longer raw horizon so forward-looking labels can be built safely."
             )
 
     def _iter_upstream_files(self) -> List[Path]:
@@ -130,6 +187,7 @@ class RicuExtractor(BaseExtractor):
         return {
             "dataset": self._metadata.get("dataset"),
             "ricu_seq_length_hours": int(self._metadata["seq_length_hours"]),
+            "ricu_raw_export_horizon_hours": self._get_raw_export_horizon_hours(),
             "files": files,
         }
 
@@ -359,7 +417,7 @@ class RicuExtractor(BaseExtractor):
         # -----------------------------------------------------------------
         # Step 3: Extract labels
         # -----------------------------------------------------------------
-        task_configs = self._load_task_configs(self.config.tasks)
+        task_configs = self._get_task_configs_cached()
         task_names = [tc.task_name for tc in task_configs]
 
         if task_configs:
@@ -430,7 +488,12 @@ class RicuExtractor(BaseExtractor):
                 "feature_names": feature_names,
                 "n_features": len(feature_names),
                 "seq_length_hours": self.config.seq_length_hours,
+                "input_seq_length_hours": self.config.seq_length_hours,
                 "label_horizon_hours": LABEL_HORIZON_HOURS,
+                "raw_export_horizon_hours": self._get_raw_export_horizon_hours(),
+                "required_raw_export_horizon_hours": self._get_required_raw_export_horizon_hours(
+                    task_configs
+                ),
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
