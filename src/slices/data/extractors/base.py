@@ -330,6 +330,35 @@ class BaseExtractor(ABC):
         if extra:
             console.print(f"[yellow]Warning: {len(extra)} labels for stays not in dataset[/yellow]")
 
+    def _emit_label_quality_warnings(
+        self, task_config: LabelConfig, task_labels: pl.DataFrame
+    ) -> None:
+        """Emit non-fatal quality warnings for extracted labels."""
+        if not task_config.quality_checks or "label" not in task_labels.columns:
+            return
+
+        total = len(task_labels)
+        if total == 0:
+            return
+
+        max_missing_percentage = task_config.quality_checks.get("max_missing_percentage")
+        if max_missing_percentage is None:
+            return
+
+        missing = task_labels["label"].null_count()
+        missing_percentage = (missing / total) * 100.0
+
+        if missing_percentage > float(max_missing_percentage):
+            console.print(
+                "[yellow]Warning: "
+                f"Task '{task_config.task_name}' has {missing_percentage:.1f}% missing labels "
+                f"({missing}/{total}), exceeding the configured maximum of "
+                f"{float(max_missing_percentage):.1f}%. "
+                "This usually means the upstream label-source coverage is insufficient "
+                "(for example, AKI without enough post-observation creatinine data)."
+                "[/yellow]"
+            )
+
     def extract_labels(self, stay_ids: List[int], task_configs: List[LabelConfig]) -> pl.DataFrame:
         """Extract labels for multiple downstream tasks.
 
@@ -389,6 +418,7 @@ class BaseExtractor(ABC):
 
             # Compute labels
             task_labels = builder.build_labels(raw_data)
+            self._emit_label_quality_warnings(task_config, task_labels)
 
             # For single-label tasks, the builder returns a 'label' column
             # that we rename to the task name.

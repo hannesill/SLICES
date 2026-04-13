@@ -997,3 +997,33 @@ class TestLabelBuilderFactory:
 
         assert "mortality" in available
         assert isinstance(available["mortality"], type)
+
+
+class TestRequiredRawTimeseriesHorizon:
+    """Tests for task-specific raw timeseries horizon requirements."""
+
+    def test_aki_requires_post_observation_raw_horizon(self):
+        config = LabelConfig(
+            task_name="aki_kdigo",
+            task_type="binary_classification",
+            observation_window_hours=24,
+            prediction_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "timeseries"],
+        )
+
+        builder = LabelBuilderFactory.create(config)
+        assert builder.required_raw_timeseries_horizon_hours() == 48
+
+    def test_mortality_does_not_request_raw_timeseries_horizon(self):
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            observation_window_hours=24,
+            prediction_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = LabelBuilderFactory.create(config)
+        assert builder.required_raw_timeseries_horizon_hours() == 0
