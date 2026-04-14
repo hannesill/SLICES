@@ -361,6 +361,10 @@ def main():
             names[0]: meta_a.get("required_raw_export_horizon_hours"),
             names[1]: meta_b.get("required_raw_export_horizon_hours"),
         },
+        "label_quality_stats_by_dataset": {
+            names[0]: meta_a.get("label_quality_stats", {}),
+            names[1]: meta_b.get("label_quality_stats", {}),
+        },
         "min_stay_hours": meta_a.get("min_stay_hours", MIN_STAY_HOURS),
         "task_names": common_tasks,
         "label_manifest": combined_manifest,

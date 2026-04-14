@@ -6,7 +6,8 @@ across multiple ICU datasets (MIMIC-III/IV, eICU, HiRID, AUMCdb, SICdb).
 Usage:
     # Step 1: Run R extraction
     Rscript scripts/preprocessing/extract_with_ricu.R \
-        --dataset miiv --output_dir data/ricu_output/miiv
+        --dataset miiv --output_dir data/ricu_output/miiv \
+        --raw_export_horizon_hours 48
 
     # Step 2: Run Python processing
     uv run python scripts/preprocessing/extract_ricu.py \
@@ -498,6 +499,7 @@ class RicuExtractor(BaseExtractor):
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
                 "label_manifest": label_manifest,
+                "label_quality_stats": self._label_quality_stats,
                 "upstream_source_signature": self._get_upstream_source_signature(),
                 "extraction_config": {
                     "parquet_root": str(self.parquet_root),

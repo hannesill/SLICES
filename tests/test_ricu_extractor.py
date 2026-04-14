@@ -111,6 +111,88 @@ def ricu_output_dir(tmp_path: Path) -> Path:
     return ricu_dir
 
 
+def _create_aki_benchmark_ricu_output(tmp_path: Path) -> Path:
+    """Create mock RICU output for the 24h-input / 48h-raw AKI benchmark."""
+    ricu_dir = tmp_path / "ricu_output_aki"
+    ricu_dir.mkdir()
+
+    metadata = {
+        "dataset": "miiv",
+        "feature_names": ["crea"],
+        "n_features": 1,
+        "seq_length_hours": 48,
+        "raw_export_horizon_hours": 48,
+        "n_stays": 3,
+        "ricu_version": "0.7.0",
+    }
+    with open(ricu_dir / "ricu_metadata.yaml", "w") as f:
+        yaml.dump(metadata, f)
+
+    stays = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "patient_id": [10, 20, 30],
+            "hadm_id": [1000, 2000, 3000],
+            "intime": [
+                datetime(2020, 1, 1, 8, 0),
+                datetime(2020, 1, 2, 8, 0),
+                datetime(2020, 1, 3, 8, 0),
+            ],
+            "outtime": [
+                datetime(2020, 1, 4, 12, 0),
+                datetime(2020, 1, 5, 12, 0),
+                datetime(2020, 1, 6, 12, 0),
+            ],
+            "los_days": [3.2, 3.2, 3.2],
+            "age": [65.0, 70.0, 58.0],
+            "gender": ["M", "F", "M"],
+            "race": ["WHITE", "BLACK", "ASIAN"],
+            "admission_type": ["EMERGENCY", "EMERGENCY", "EMERGENCY"],
+            "insurance": ["Medicare", "Private", "Medicaid"],
+            "first_careunit": ["MICU", "MICU", "MICU"],
+            "height": [175.0, 165.0, 180.0],
+            "weight": [80.0, 68.0, 92.0],
+        }
+    )
+    stays.write_parquet(ricu_dir / "ricu_stays.parquet")
+
+    timeseries = pl.DataFrame(
+        {
+            "stay_id": [100, 100, 100, 100, 200, 200, 200, 200, 300, 300, 300],
+            "hour": [0, 12, 23, 30, 0, 12, 23, 30, 0, 12, 23],
+            "crea": [1.0, 0.9, 1.0, 1.6, 1.0, 1.1, 1.0, 1.1, 0.8, 0.9, 0.85],
+            "crea_mask": [True] * 11,
+        }
+    )
+    timeseries.write_parquet(ricu_dir / "ricu_timeseries.parquet")
+
+    mortality = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "date_of_death": [None, None, None],
+            "hospital_expire_flag": [0, 0, 0],
+            "dischtime": [
+                datetime(2020, 1, 7, 8, 0),
+                datetime(2020, 1, 8, 8, 0),
+                datetime(2020, 1, 9, 8, 0),
+            ],
+            "discharge_location": ["HOME", "HOME", "HOME"],
+        }
+    )
+    mortality.write_parquet(ricu_dir / "ricu_mortality.parquet")
+
+    diagnoses = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "icd_code": ["N179", "I10", "E119"],
+            "icd_version": [10, 10, 10],
+        }
+    )
+    diagnoses.write_parquet(ricu_dir / "ricu_diagnoses.parquet")
+
+    return ricu_dir
+
+
 @pytest.fixture
 def ricu_extractor(ricu_output_dir: Path, tmp_path: Path) -> RicuExtractor:
     """Create a RicuExtractor instance with mock data."""
@@ -564,6 +646,7 @@ class TestRicuExtractorRun:
         assert meta["required_raw_export_horizon_hours"] == 6
         assert meta["n_stays"] == 3
         assert meta["feature_names"] == ["hr", "sbp", "crea"]
+        assert meta["label_quality_stats"] == {}
         assert "ricu_metadata" in meta
         assert "upstream_source_signature" in meta
         assert len(meta["upstream_source_signature"]["files"]) >= 4
@@ -644,6 +727,70 @@ class TestRicuExtractorRun:
         assert "stay_id" in labels.columns
         assert "mortality_hospital" in labels.columns
         assert len(labels) == 3
+
+    def test_run_aki_24h_input_with_48h_raw_export(self, tmp_path: Path) -> None:
+        """AKI extraction should use 48h raw creatinine while saving 24h model inputs."""
+        ricu_output_dir = _create_aki_benchmark_ricu_output(tmp_path)
+        output_dir = tmp_path / "processed_aki"
+        tasks_dir = tmp_path / "tasks_aki"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 24,
+            "prediction_window_hours": 24,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {
+                "creatinine_col": "crea",
+                "baseline_window_hours": 24,
+                "absolute_rise_threshold": 0.3,
+                "relative_rise_threshold": 1.5,
+                "relative_window_hours": 168,
+            },
+            "quality_checks": {"max_missing_percentage": 28.0},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=24,
+            min_stay_hours=24,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+        RicuExtractor(config).run()
+
+        labels = pl.read_parquet(output_dir / "labels.parquet")
+        labels_dict = dict(zip(labels["stay_id"], labels["aki_kdigo"]))
+        assert labels_dict[100] == 1
+        assert labels_dict[200] == 0
+        assert labels_dict[300] is None
+
+        dense_timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
+        stay100_ts = dense_timeseries.filter(pl.col("stay_id") == 100)["timeseries"].to_list()[0]
+        assert len(stay100_ts) == 24  # model input remains 24h
+
+        with open(output_dir / "metadata.yaml") as f:
+            meta = yaml.safe_load(f)
+
+        assert meta["input_seq_length_hours"] == 24
+        assert meta["raw_export_horizon_hours"] == 48
+        assert meta["required_raw_export_horizon_hours"] == 48
+
+        quality_stats = meta["label_quality_stats"]["aki_kdigo"]
+        assert quality_stats["total_stays"] == 3
+        assert quality_stats["positive_labels"] == 1
+        assert quality_stats["negative_labels"] == 1
+        assert quality_stats["null_labels"] == 1
+        assert quality_stats["null_reason_counts"] == {
+            "no_creatinine_or_baseline": 0,
+            "no_post_obs_creatinine": 1,
+        }
 
     def test_run_resume_skips_existing(self, ricu_output_dir: Path, tmp_path: Path) -> None:
         """Test that a second run() resumes without duplicating stays."""

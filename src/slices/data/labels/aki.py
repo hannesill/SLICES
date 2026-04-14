@@ -1,7 +1,7 @@
 """AKI (Acute Kidney Injury) label builder using KDIGO criteria."""
 
 import logging
-from typing import Dict
+from typing import Any, Dict
 
 import polars as pl
 
@@ -40,6 +40,21 @@ class AKILabelBuilder(LabelBuilder):
         obs_hours = self.config.observation_window_hours or SEQ_LENGTH_HOURS
         return int(obs_hours + prediction_hours)
 
+    def build_quality_stats(self, labels: pl.DataFrame) -> Dict[str, Any]:
+        """Add AKI-specific null-reason counts to the default quality stats."""
+        null_reason_counts = {
+            "no_creatinine_or_baseline": int(
+                self._last_quality_stats.get("no_creatinine_or_baseline", 0)
+            ),
+            "no_post_obs_creatinine": int(
+                self._last_quality_stats.get("no_post_obs_creatinine", 0)
+            ),
+        }
+        stats = super().build_quality_stats(labels)
+        stats["null_reason_counts"] = null_reason_counts
+        self._last_quality_stats = stats
+        return stats
+
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build AKI labels from stays and timeseries data.
 
@@ -54,6 +69,10 @@ class AKILabelBuilder(LabelBuilder):
         timeseries = raw_data["timeseries"]
 
         if len(stays) == 0:
+            self._last_quality_stats = {
+                "no_creatinine_or_baseline": 0,
+                "no_post_obs_creatinine": 0,
+            }
             return pl.DataFrame(
                 {
                     "stay_id": pl.Series([], dtype=pl.Int64),
@@ -83,6 +102,10 @@ class AKILabelBuilder(LabelBuilder):
         # Validate creatinine column exists
         if crea_col not in timeseries.columns:
             logger.warning(f"Creatinine column '{crea_col}' not in timeseries; all labels null")
+            self._last_quality_stats = {
+                "no_creatinine_or_baseline": len(stay_ids),
+                "no_post_obs_creatinine": 0,
+            }
             return pl.DataFrame(
                 {
                     "stay_id": pl.Series(stay_ids, dtype=pl.Int64),
@@ -169,6 +192,10 @@ class AKILabelBuilder(LabelBuilder):
             & pl.col("has_baseline").is_not_null()
             & pl.col("has_post_obs").is_null()
         ).height
+        self._last_quality_stats = {
+            "no_creatinine_or_baseline": int(missing_crea_or_baseline),
+            "no_post_obs_creatinine": int(missing_post_obs),
+        }
 
         # Build label:
         # - null if no creatinine data, no baseline, or no data in prediction window

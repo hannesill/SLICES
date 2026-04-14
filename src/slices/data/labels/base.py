@@ -4,7 +4,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import polars as pl
 
@@ -79,6 +79,7 @@ class LabelBuilder(ABC):
             config: Label configuration specifying label definition.
         """
         self.config = config
+        self._last_quality_stats: Dict[str, Any] = {}
 
     def required_raw_timeseries_horizon_hours(self) -> int:
         """Return the raw timeseries horizon needed to build this task's labels.
@@ -95,6 +96,47 @@ class LabelBuilder(ABC):
             return 0
 
         return int(self.config.observation_window_hours or 0)
+
+    def build_quality_stats(self, labels: pl.DataFrame) -> Dict[str, Any]:
+        """Build serializable task-level quality stats from extracted labels.
+
+        Args:
+            labels: Builder output with ``stay_id`` and ``label`` columns.
+
+        Returns:
+            Dictionary of quality stats suitable for persistence in metadata.yaml.
+        """
+        total = len(labels)
+        if "label" not in labels.columns:
+            stats: Dict[str, Any] = {"total_stays": total}
+            self._last_quality_stats = stats
+            return stats
+
+        null_count = labels["label"].null_count()
+        non_null = total - null_count
+
+        stats = {
+            "total_stays": total,
+            "non_null_labels": non_null,
+            "null_labels": null_count,
+            "null_percentage": ((null_count / total) * 100.0) if total > 0 else 0.0,
+        }
+
+        if self.config.task_type in {"binary", "binary_classification"}:
+            positives = labels.filter(pl.col("label") == 1).height
+            negatives = labels.filter(pl.col("label") == 0).height
+            stats.update(
+                {
+                    "positive_labels": positives,
+                    "negative_labels": negatives,
+                    "positive_prevalence_non_null": (
+                        (positives / non_null) if non_null > 0 else None
+                    ),
+                }
+            )
+
+        self._last_quality_stats = stats
+        return stats
 
     @abstractmethod
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
