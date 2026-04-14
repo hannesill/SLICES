@@ -4,6 +4,7 @@
 
 task_name: aki_kdigo
 task_type: binary
+primary_metric: auprc
 n_classes: null
 head_type: mlp
 hidden_dims: [64]

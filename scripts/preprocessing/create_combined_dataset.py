@@ -348,6 +348,19 @@ def main():
         "feature_names": meta_a.get("feature_names", []),
         "n_features": meta_a.get("n_features", 0),
         "seq_length_hours": meta_a.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        "input_seq_length_hours": meta_a.get(
+            "input_seq_length_hours",
+            meta_a.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        ),
+        "label_horizon_hours": meta_a.get("label_horizon_hours"),
+        "raw_export_horizon_hours_by_dataset": {
+            names[0]: meta_a.get("raw_export_horizon_hours"),
+            names[1]: meta_b.get("raw_export_horizon_hours"),
+        },
+        "required_raw_export_horizon_hours_by_dataset": {
+            names[0]: meta_a.get("required_raw_export_horizon_hours"),
+            names[1]: meta_b.get("required_raw_export_horizon_hours"),
+        },
         "min_stay_hours": meta_a.get("min_stay_hours", MIN_STAY_HOURS),
         "task_names": common_tasks,
         "label_manifest": combined_manifest,

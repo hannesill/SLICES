@@ -79,13 +79,13 @@ class TestLabelManifest:
             task_name="mortality_24h",
             task_type="binary",
             prediction_window_hours=24,
-            observation_window_hours=48,
+            observation_window_hours=24,
         )
         config_48 = LabelConfig(
-            task_name="mortality_48h",
+            task_name="mortality_24h",
             task_type="binary",
             prediction_window_hours=48,
-            observation_window_hours=48,
+            observation_window_hours=24,
         )
         assert LabelBuilder.config_hash(config_24) != LabelBuilder.config_hash(config_48)
 
@@ -1006,7 +1006,7 @@ class TestTrainingScriptClassWeighting:
                     }
                 }
 
-            def get_train_label_statistics(self):
+            def get_train_label_statistics(self, use_full_train: bool = False):
                 return {
                     "mortality_24h": {
                         "total": 10,

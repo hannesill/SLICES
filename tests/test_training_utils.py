@@ -7,9 +7,12 @@ Tests cover:
 - Supervised script save_encoder_weights: v3 format, loadable by FineTuneModule
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 import torch.nn as nn
+import yaml
 from omegaconf import OmegaConf
 from slices.training import FineTuneModule
 from slices.training.utils import (
@@ -17,6 +20,7 @@ from slices.training.utils import (
     build_scheduler,
     report_and_validate_train_label_support,
     save_encoder_checkpoint,
+    setup_finetune_callbacks,
 )
 
 
@@ -269,6 +273,69 @@ class TestTrainLabelSupportGuard:
                 label_fraction=0.01,
                 min_train_positives=3,
             )
+
+
+class TestSetupFinetuneCallbacks:
+    """Tests task-aware checkpoint monitor selection."""
+
+    @staticmethod
+    def _make_cfg(task_cfg: dict, training_cfg: dict | None = None):
+        return OmegaConf.create(
+            {
+                "task": task_cfg,
+                "training": {"early_stopping_patience": 10, **(training_cfg or {})},
+                "checkpoint_dir": "checkpoints",
+            }
+        )
+
+    def test_classification_defaults_to_auprc_when_no_primary_metric(self):
+        cfg = self._make_cfg({"task_name": "mortality_24h", "task_type": "binary"})
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/auprc"
+        assert callbacks[0].mode == "max"
+        assert callbacks[1].monitor == "val/auprc"
+        assert callbacks[1].mode == "max"
+
+    def test_regression_uses_task_primary_metric(self):
+        cfg = self._make_cfg(
+            {"task_name": "los_remaining", "task_type": "regression", "primary_metric": "mae"}
+        )
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/mae"
+        assert callbacks[0].mode == "min"
+        assert callbacks[1].monitor == "val/mae"
+        assert callbacks[1].mode == "min"
+
+    def test_explicit_monitor_override_still_wins(self):
+        cfg = self._make_cfg(
+            {"task_name": "los_remaining", "task_type": "regression", "primary_metric": "mae"},
+            {"early_stopping_monitor": "val/r2"},
+        )
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/r2"
+        assert callbacks[0].mode == "max"
+        assert callbacks[1].monitor == "val/r2"
+        assert callbacks[1].mode == "max"
+
+    def test_training_task_configs_cover_package_tasks(self):
+        package_tasks_dir = Path("src/slices/data/tasks")
+        hydra_tasks_dir = Path("configs/tasks")
+
+        package_tasks = {
+            yaml.safe_load(path.read_text())["task_name"]
+            for path in package_tasks_dir.glob("*.yaml")
+        }
+        hydra_tasks = {
+            yaml.safe_load(path.read_text())["task_name"] for path in hydra_tasks_dir.glob("*.yaml")
+        }
+
+        assert hydra_tasks == package_tasks
 
 
 class TestSupervisedCheckpointFormat:

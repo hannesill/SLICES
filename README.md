@@ -57,9 +57,9 @@ The controlled thesis objectives share the same timestep-level obs-aware Transfo
 
 ```
 RICU (R) ──→ Parquet ──→ ICUDataset ──→ SSL Pretraining ──→ Downstream Finetuning
-  hourly-binned         dense tensors     MAE / JEPA /       mortality, LOS,
-  feature extraction    + obs masks       Contrastive          AKI
-  across datasets
+  hourly-binned         dense tensors     MAE / JEPA /       mortality, mortality_24h,
+  feature extraction    + obs masks       Contrastive          mortality_hospital,
+  across datasets                                            los_remaining, aki_kdigo
 ```
 
 1. **Extraction**: RICU (R package) harmonizes raw ICU data (MIMIC-IV, eICU) into hourly-binned parquet files
@@ -216,7 +216,7 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfi
 | `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` | SSL objective hyperparameters |
 | `model/` | `transformer`, `observation_transformer`, `smart` | Encoder architecture |
 | `data/` | `ricu` | Dataset and paths |
-| `tasks/` | `mortality`, `los`, `aki`, ... | Downstream task definitions |
+| `tasks/` | `mortality`, `mortality_24h`, `mortality_hospital`, `los_remaining`, `aki_kdigo` | Downstream task definitions |
 
 ## Data Format
 
@@ -224,7 +224,7 @@ Extracted ICU stays are stored as Parquet files:
 
 - `static.parquet` — Stay-level demographics and admission info
 - `timeseries.parquet` — Dense hourly-binned time-series with observation masks (T x D)
-- `labels.parquet` — Task labels (mortality, LOS, AKI, etc.)
+- `labels.parquet` — Configured task labels (for example `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining`, and optional `mortality`)
 - `metadata.yaml` — Feature names, sequence length, task definitions
 
 `ICUDataset` returns batches with:

@@ -31,9 +31,9 @@ def basic_usage():
     encoder = TransformerEncoder(config)
     print(f"Created transformer with {sum(p.numel() for p in encoder.parameters()):,} parameters")
 
-    # Simulate ICU data: batch_size=16, seq_length=48 hours, features=35
+    # Simulate benchmark-style ICU data: batch_size=16, seq_length=24 hours, features=35
     batch_size = 16
-    seq_length = 48
+    seq_length = 24
     x = torch.randn(batch_size, seq_length, config.d_input)
 
     # Forward pass
@@ -57,7 +57,7 @@ def with_observation_mask():
     encoder = TransformerEncoder(config)
 
     batch_size = 8
-    seq_length = 48
+    seq_length = 24
     x = torch.randn(batch_size, seq_length, config.d_input)
 
     # Create observation mask (True = observed, False = missing)

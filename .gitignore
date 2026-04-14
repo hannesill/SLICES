@@ -215,6 +215,8 @@ docs/
 # SLICES-specific
 /data/
 outputs/
+/results/*
+!/results/.gitkeep
 wandb/
 .tensor_cache/
 

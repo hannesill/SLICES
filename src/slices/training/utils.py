@@ -188,17 +188,44 @@ def setup_pretrain_callbacks(cfg: DictConfig) -> list:
 def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune") -> list:
     """Set up training callbacks for finetuning / supervised training.
 
-    Task-type-aware: monitors val/auprc (max) for classification,
-    val/mse (min) for regression.
+    Defaults to the task's declared primary metric when available; otherwise
+    falls back to val/auprc for classification and val/mse for regression.
     """
     callbacks = []
 
+    lower_is_better = {"loss", "mse", "mae", "rmse", "brier_score", "ece"}
+    higher_is_better = {
+        "auroc",
+        "auprc",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "specificity",
+        "r2",
+    }
+
     task_type = cfg.task.get("task_type", "binary")
-    if task_type == "regression":
-        default_monitor, default_mode = "val/mse", "min"
+    default_metric = cfg.task.get("primary_metric", None)
+    if default_metric:
+        default_monitor = default_metric if "/" in default_metric else f"val/{default_metric}"
+    elif task_type == "regression":
+        default_monitor = "val/mse"
     else:
-        default_monitor, default_mode = "val/auprc", "max"
+        default_monitor = "val/auprc"
+
     monitor = cfg.training.get("early_stopping_monitor", default_monitor)
+    metric_name = monitor.split("/", 1)[-1]
+    if metric_name in lower_is_better:
+        default_mode = "min"
+    elif metric_name in higher_is_better:
+        default_mode = "max"
+    else:
+        raise ValueError(
+            f"Cannot infer checkpoint mode for finetune monitor '{monitor}'. "
+            "Set training.early_stopping_mode explicitly."
+        )
+
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
     # Replace '/' with '_' in monitor name for safe filenames.

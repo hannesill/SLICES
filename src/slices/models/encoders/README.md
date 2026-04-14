@@ -262,7 +262,7 @@ pretrained_encoder = ssl_model.get_encoder()
 
 ### Model Size vs. Performance
 
-For ICU data (typical: 35 features, 48-hour windows):
+For ICU data (typical benchmark setup: 35 features, 24-hour observation windows):
 - **Small models (d_model=64-128)**: Usually sufficient, faster training
 - **Large models (d_model≥256)**: May overfit on small datasets
 - **Deep models (n_layers≥6)**: Use Pre-LN and careful tuning

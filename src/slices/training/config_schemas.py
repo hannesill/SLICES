@@ -30,6 +30,7 @@ class TaskConfig(BaseModel):
 
     task_name: str
     task_type: str = "binary"
+    primary_metric: Optional[str] = None
     head_type: str = "mlp"
     hidden_dims: List[int] = [64]
     dropout: float = 0.1

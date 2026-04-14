@@ -637,7 +637,7 @@ class TestTransformerIntegration:
 
     def test_encoder_with_realistic_icu_data_shape(self):
         """Test encoder with realistic ICU data dimensions."""
-        # Typical ICU dataset: 35 features, 48-hour window, batch of 32
+        # Benchmark-shaped ICU tensor: 35 features, 24-hour window, batch of 32
         config = TransformerConfig(
             d_input=35,
             d_model=128,
@@ -651,7 +651,7 @@ class TestTransformerIntegration:
         encoder = TransformerEncoder(config)
 
         batch_size = 32
-        seq_length = 48
+        seq_length = 24
         n_features = 35
 
         x = torch.randn(batch_size, seq_length, n_features)
@@ -661,7 +661,7 @@ class TestTransformerIntegration:
         # Some sequences have variable lengths
         for i in range(batch_size):
             if i % 4 == 0:  # 25% of sequences
-                length = torch.randint(24, seq_length, (1,)).item()
+                length = torch.randint(max(1, seq_length // 2), seq_length, (1,)).item()
                 padding_mask[i, length:] = False
 
         out = encoder(x, mask=obs_mask, padding_mask=padding_mask)

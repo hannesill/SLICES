@@ -1,8 +1,8 @@
 # @package task
-# Hospital mortality prediction (binary classification)
-# Predict if patient will die before hospital discharge after the 24h observation window
+# ICU mortality prediction (binary classification)
+# Predict if patient will die during the remainder of the ICU stay after the 24h observation window
 
-task_name: mortality_hospital
+task_name: mortality
 task_type: binary
 primary_metric: auprc
 n_classes: null
