@@ -86,6 +86,7 @@ def create_timestep_mask(
     n_timesteps: int,
     mask_ratio: float,
     device: torch.device,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Create random mask at timestep level.
 
@@ -94,6 +95,9 @@ def create_timestep_mask(
         n_timesteps: Number of timesteps T.
         mask_ratio: Fraction of timesteps to mask.
         device: Device.
+        valid_timestep_mask: Optional (B, T) bool mask marking timesteps with
+            at least one observed variable. When provided, fully unobserved
+            timesteps are always treated as visible/excluded from SSL masking.
 
     Returns:
         ssl_mask: (B, T) bool mask, True = visible, False = masked.
@@ -101,13 +105,24 @@ def create_timestep_mask(
     rand_vals = torch.rand(batch_size, n_timesteps, device=device)
     ssl_mask = rand_vals >= mask_ratio  # True = visible
 
-    # Ensure at least 1 visible timestep per sample
-    n_visible = ssl_mask.sum(dim=1)  # (B,)
-    needs_fix = n_visible == 0
+    if valid_timestep_mask is None:
+        valid_timestep_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    else:
+        valid_timestep_mask = valid_timestep_mask.to(device=device, dtype=torch.bool)
+
+    # Empty timesteps are not eligible SSL tokens; mark them visible so they
+    # are excluded from masked-token accounting and downstream losses.
+    ssl_mask = ssl_mask | (~valid_timestep_mask)
+
+    # Ensure at least 1 visible eligible timestep per sample
+    n_visible = (ssl_mask & valid_timestep_mask).sum(dim=1)  # (B,)
+    has_valid = valid_timestep_mask.any(dim=1)
+    needs_fix = (n_visible == 0) & has_valid
     if needs_fix.any():
         for b in range(batch_size):
             if needs_fix[b]:
-                ssl_mask[b, 0] = True
+                first_valid = valid_timestep_mask[b].nonzero(as_tuple=True)[0][0]
+                ssl_mask[b, first_valid] = True
 
     return ssl_mask
 
@@ -118,6 +133,7 @@ def create_block_timestep_mask(
     mask_ratio: float,
     device: torch.device,
     n_blocks: int = 3,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Create contiguous block mask at timestep level.
 
@@ -136,6 +152,8 @@ def create_block_timestep_mask(
         mask_ratio: Fraction of timesteps to mask.
         device: Device.
         n_blocks: Number of contiguous blocks to mask (default 3).
+        valid_timestep_mask: Optional (B, T) bool mask marking timesteps with
+            at least one observed variable.
 
     Returns:
         ssl_mask: (B, T) bool mask, True = visible, False = masked.
@@ -188,18 +206,37 @@ def create_block_timestep_mask(
     masked = in_block.any(dim=1)  # (B, T)
     ssl_mask = (~masked).to(device=device)
 
+    if valid_timestep_mask is None:
+        valid_timestep_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    else:
+        valid_timestep_mask = valid_timestep_mask.to(device=device, dtype=torch.bool)
+
+    ssl_mask = ssl_mask | (~valid_timestep_mask)
+
+    n_visible = (ssl_mask & valid_timestep_mask).sum(dim=1)
+    has_valid = valid_timestep_mask.any(dim=1)
+    needs_fix = (n_visible == 0) & has_valid
+    if needs_fix.any():
+        for b in range(batch_size):
+            if needs_fix[b]:
+                first_valid = valid_timestep_mask[b].nonzero(as_tuple=True)[0][0]
+                ssl_mask[b, first_valid] = True
+
     return ssl_mask
 
 
 def extract_visible_timesteps(
     tokens: torch.Tensor,
     ssl_mask: torch.Tensor,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Extract visible timestep tokens from full sequence.
 
     Args:
         tokens: (B, T, d_model)
         ssl_mask: (B, T) True = visible, False = masked.
+        valid_timestep_mask: Optional (B, T) bool mask for timesteps that
+            should participate in SSL tokenization.
 
     Returns:
         visible_tokens: (B, max_vis, d_model)
@@ -207,11 +244,16 @@ def extract_visible_timesteps(
     """
     B, T, d_model = tokens.shape
 
-    n_visible = ssl_mask.sum(dim=1)  # (B,)
+    if valid_timestep_mask is None:
+        visible_mask = ssl_mask
+    else:
+        visible_mask = ssl_mask & valid_timestep_mask.to(device=tokens.device, dtype=torch.bool)
+
+    n_visible = visible_mask.sum(dim=1)  # (B,)
     max_vis = max(int(n_visible.max().item()), 1)
 
     # Argsort: visible (True=1) first
-    sort_idx = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
+    sort_idx = visible_mask.float().argsort(dim=1, descending=True, stable=True)
     sort_idx_expanded = sort_idx.unsqueeze(-1).expand(-1, -1, d_model)
 
     sorted_tokens = tokens.gather(1, sort_idx_expanded)

@@ -15,7 +15,13 @@ from slices.eval.metrics import (
     build_metrics,
     get_default_metrics,
 )
-from slices.eval.statistical import bootstrap_ci, paired_bootstrap_test
+from slices.eval.statistical import (
+    bonferroni_correction,
+    bootstrap_ci,
+    cohens_d,
+    paired_bootstrap_test,
+    paired_wilcoxon_signed_rank,
+)
 
 __all__ = [
     "MetricConfig",
@@ -23,7 +29,10 @@ __all__ = [
     "get_default_metrics",
     "FairnessEvaluator",
     "ImputationEvaluator",
+    "bonferroni_correction",
     "bootstrap_ci",
+    "cohens_d",
     "paired_bootstrap_test",
+    "paired_wilcoxon_signed_rank",
     "run_inference",
 ]

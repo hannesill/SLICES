@@ -891,10 +891,11 @@ class TestTransformerEncoderObsAware:
 
         assert tokens.shape == (B, T, 32)
         assert padding_mask.shape == (B, T)
-        assert padding_mask.all()  # All True for fixed T
+        assert torch.equal(padding_mask, obs_mask.any(dim=-1))
         assert "timestep_idx" in token_info
         assert "values" in token_info
         assert "obs_mask" in token_info
+        assert "valid_timestep_mask" in token_info
         assert token_info["timestep_idx"].shape == (B, T)
 
     def test_encode_shapes(self, encoder):

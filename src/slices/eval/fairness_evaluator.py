@@ -3,17 +3,15 @@
 Computes per-group AUROC, worst-group AUROC, demographic parity, and
 equalized odds across protected attributes (gender, age group, race).
 
-This module builds on the lower-level fairness utilities in fairness.py
-to provide a high-level evaluator that works with static patient data
-and produces structured reports suitable for W&B logging.
-
-Protected attributes:
-- gender (M/F) — available in all datasets
-- age_group (18-44, 45-64, 65-79, 80+) — available in all datasets
-- race — available in MIMIC + eICU only
+Race handling follows the thesis plan:
+- race/ethnicity is evaluated only on MIMIC-IV rows
+- raw race strings are mapped into the canonical five-bin schema
+  (White, Black, Hispanic, Asian, Other)
+- subgroup inclusion thresholds are enforced on unique patients, not stays
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
@@ -47,6 +45,7 @@ class FairnessEvaluator:
 
     AGE_BINS = [(18, 44), (45, 64), (65, 79), (80, float("inf"))]
     AGE_LABELS = ["18-44", "45-64", "65-79", "80+"]
+    RACE_LABELS = ["White", "Black", "Hispanic", "Asian", "Other"]
 
     def __init__(
         self,
@@ -54,6 +53,7 @@ class FairnessEvaluator:
         protected_attributes: Optional[List[str]] = None,
         min_subgroup_size: int = 50,
         task_type: str = "binary",
+        dataset_name: Optional[str] = None,
     ) -> None:
         """Initialize FairnessEvaluator.
 
@@ -62,14 +62,20 @@ class FairnessEvaluator:
                 Must contain 'stay_id' column. May contain 'gender', 'age', 'race'.
             protected_attributes: List of attributes to evaluate.
                 Defaults to ["gender", "age_group"].
-            min_subgroup_size: Minimum samples for a subgroup to be included.
+            min_subgroup_size: Minimum patients for a subgroup to be included.
             task_type: Task type ("binary", "multiclass", "regression").
                 Determines which per-group metrics are computed.
+            dataset_name: Dataset identifier ("miiv", "eicu", "combined", ...).
+                Used for dataset-specific subgroup rules such as MIMIC-only race
+                analysis. When omitted, the evaluator falls back to columns
+                available in ``static_df`` for backwards compatibility.
         """
         self.static_df = static_df
         self.protected_attributes = protected_attributes or ["gender", "age_group"]
         self.min_subgroup_size = min_subgroup_size
         self.task_type = task_type
+        self.dataset_name = dataset_name.lower() if dataset_name is not None else None
+        self._static_dict = {row["stay_id"]: row for row in self.static_df.to_dicts()}
         self._available_attributes = self._detect_available_attributes()
 
     def _detect_available_attributes(self) -> List[str]:
@@ -83,9 +89,23 @@ class FairnessEvaluator:
             available.append("gender")
         if "age" in self.static_df.columns:
             available.append("age_group")  # Derived from age
-        if "race" in self.static_df.columns:
+        if "race" in self.static_df.columns and self._race_analysis_available():
             available.append("race")
         return [a for a in self.protected_attributes if a in available]
+
+    def _race_analysis_available(self) -> bool:
+        """Return whether race fairness should be evaluated for this dataset."""
+        if self.dataset_name == "eicu":
+            return False
+        if self.dataset_name == "combined":
+            if "source_dataset" not in self.static_df.columns:
+                return False
+            source_values = {
+                str(value).strip().lower()
+                for value in self.static_df["source_dataset"].drop_nulls().to_list()
+            }
+            return any("miiv" in value or "mimic" in value for value in source_values)
+        return True
 
     def _bin_age(self, ages: torch.Tensor) -> torch.Tensor:
         """Bin continuous age into groups.
@@ -105,7 +125,7 @@ class FairnessEvaluator:
         self,
         stay_ids: List[int],
         attribute: str,
-    ) -> Tuple[torch.Tensor, Dict[int, str]]:
+    ) -> Tuple[torch.Tensor, Dict[int, str], List[Any]]:
         """Encode attribute as integer group IDs.
 
         Args:
@@ -113,15 +133,21 @@ class FairnessEvaluator:
             attribute: Attribute name ("gender", "age_group", "race").
 
         Returns:
-            Tuple of (group_ids tensor, mapping from int -> group name).
+            Tuple of:
+            - group_ids tensor aligned to ``stay_ids``
+            - mapping from int -> group name
+            - patient_ids aligned to ``stay_ids`` for patient-threshold logic
         """
-        # Build stay_id -> row lookup
-        static_dict = {row["stay_id"]: row for row in self.static_df.to_dicts()}
+        patient_ids = []
+        rows = []
+        for sid in stay_ids:
+            row = self._static_dict.get(sid, {})
+            rows.append(row)
+            patient_ids.append(row.get("patient_id", sid))
 
         if attribute == "age_group":
             ages = []
-            for sid in stay_ids:
-                row = static_dict.get(sid, {})
+            for row in rows:
                 age = row.get("age")
                 ages.append(float(age) if age is not None else -1.0)
 
@@ -131,14 +157,13 @@ class FairnessEvaluator:
             group_ids[ages_tensor < 0] = -1
             group_names = {i: label for i, label in enumerate(self.AGE_LABELS)}
             group_names[-1] = "unknown"
-            return group_ids, group_names
+            return group_ids, group_names, patient_ids
 
         elif attribute == "gender":
             # Map gender values to integers
             unique_vals = set()
             raw_vals = []
-            for sid in stay_ids:
-                row = static_dict.get(sid, {})
+            for row in rows:
                 val = row.get("gender")
                 raw_vals.append(val)
                 if val is not None:
@@ -150,28 +175,68 @@ class FairnessEvaluator:
             )
             group_names = {i: str(v) for v, i in val_to_id.items()}
             group_names[-1] = "unknown"
-            return group_ids, group_names
+            return group_ids, group_names, patient_ids
 
         elif attribute == "race":
-            unique_vals = set()
-            raw_vals = []
-            for sid in stay_ids:
-                row = static_dict.get(sid, {})
-                val = row.get("race")
-                raw_vals.append(val)
-                if val is not None:
-                    unique_vals.add(val)
+            canonical_to_id = {label: i for i, label in enumerate(self.RACE_LABELS)}
+            canonical_vals = []
+            for row in rows:
+                canonical_vals.append(self._canonicalize_race(row))
 
-            val_to_id = {v: i for i, v in enumerate(sorted(unique_vals))}
             group_ids = torch.tensor(
-                [val_to_id.get(v, -1) if v is not None else -1 for v in raw_vals], dtype=torch.long
+                [
+                    canonical_to_id.get(value, -1) if value is not None else -1
+                    for value in canonical_vals
+                ],
+                dtype=torch.long,
             )
-            group_names = {i: str(v) for v, i in val_to_id.items()}
+            group_names = {i: label for label, i in canonical_to_id.items()}
             group_names[-1] = "unknown"
-            return group_ids, group_names
+            return group_ids, group_names, patient_ids
 
         else:
             raise ValueError(f"Unknown attribute: {attribute}")
+
+    def _canonicalize_race(self, row: Dict[str, Any]) -> Optional[str]:
+        """Map raw race strings into the planned five-bin schema."""
+        if not self._row_is_miiv_for_race(row):
+            return None
+
+        raw_value = row.get("race")
+        if raw_value is None:
+            return None
+
+        text = str(raw_value).strip()
+        if not text:
+            return None
+
+        normalized = re.sub(r"[/_\\-]+", " ", text.upper())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+
+        missing_markers = ("UNKNOWN", "DECLIN", "UNABLE", "PATIENT REFUSED", "NOT SPECIFIED")
+        if any(marker in normalized for marker in missing_markers):
+            return None
+        if "HISPANIC" in normalized or "LATINO" in normalized:
+            return "Hispanic"
+        if "BLACK" in normalized or "AFRICAN" in normalized:
+            return "Black"
+        if "ASIAN" in normalized:
+            return "Asian"
+        if "WHITE" in normalized:
+            return "White"
+        return "Other"
+
+    def _row_is_miiv_for_race(self, row: Dict[str, Any]) -> bool:
+        """Return whether a row should participate in race fairness analysis."""
+        if self.dataset_name == "eicu":
+            return False
+        source_dataset = row.get("source_dataset")
+        if source_dataset is not None:
+            source_value = str(source_dataset).strip().lower()
+            return "miiv" in source_value or "mimic" in source_value
+        if self.dataset_name == "combined":
+            return False
+        return True
 
     def evaluate(
         self,
@@ -196,35 +261,62 @@ class FairnessEvaluator:
         report: Dict[str, Any] = {}
 
         for attr in self._available_attributes:
-            group_ids, group_names = self._encode_attribute(stay_ids, attr)
+            group_ids, group_names, patient_ids = self._encode_attribute(stay_ids, attr)
 
             # Get unique valid groups (exclude -1 = unknown)
             unique_groups = [g for g in group_ids.unique().tolist() if g >= 0]
 
-            # Filter groups below min_subgroup_size
+            # Filter groups below the patient-count threshold from the thesis plan
             valid_groups = []
+            group_sizes = {}
+            group_sample_sizes = {}
             for g in unique_groups:
                 group_mask = group_ids == g
-                if group_mask.sum().item() >= self.min_subgroup_size:
+                patient_count = len(
+                    {
+                        patient_ids[i]
+                        for i, is_member in enumerate(group_mask.tolist())
+                        if is_member and patient_ids[i] is not None
+                    }
+                )
+                sample_count = int(group_mask.sum().item())
+                group_sizes[group_names[g]] = patient_count
+                group_sample_sizes[group_names[g]] = sample_count
+                if patient_count >= self.min_subgroup_size:
                     valid_groups.append(g)
 
             if len(valid_groups) < 2:
                 logger.warning(
-                    "Attribute '%s': fewer than 2 groups with >= %d samples, skipping",
+                    "Attribute '%s': fewer than 2 groups with >= %d patients, skipping",
                     attr,
                     self.min_subgroup_size,
                 )
                 continue
 
-            group_sizes = {group_names[g]: int((group_ids == g).sum().item()) for g in valid_groups}
+            valid_group_sizes = {group_names[g]: group_sizes[group_names[g]] for g in valid_groups}
+            valid_group_sample_sizes = {
+                group_names[g]: group_sample_sizes[group_names[g]] for g in valid_groups
+            }
 
             if self.task_type == "regression":
                 report[attr] = self._evaluate_regression(
-                    predictions, labels, group_ids, group_names, valid_groups, group_sizes
+                    predictions,
+                    labels,
+                    group_ids,
+                    group_names,
+                    valid_groups,
+                    valid_group_sizes,
+                    valid_group_sample_sizes,
                 )
             else:
                 report[attr] = self._evaluate_binary(
-                    predictions, labels, group_ids, group_names, valid_groups, group_sizes
+                    predictions,
+                    labels,
+                    group_ids,
+                    group_names,
+                    valid_groups,
+                    valid_group_sizes,
+                    valid_group_sample_sizes,
                 )
 
         return report
@@ -237,6 +329,7 @@ class FairnessEvaluator:
         group_names: Dict[int, str],
         valid_groups: List[int],
         group_sizes: Dict[str, int],
+        group_sample_sizes: Dict[str, int],
     ) -> Dict[str, Any]:
         """Compute binary classification fairness metrics."""
         per_group_auroc: Dict[str, float] = {}
@@ -295,6 +388,7 @@ class FairnessEvaluator:
             "disparate_impact_ratio": di_ratio,
             "n_valid_groups": len(valid_groups),
             "group_sizes": group_sizes,
+            "group_sample_sizes": group_sample_sizes,
         }
 
     def _evaluate_regression(
@@ -305,6 +399,7 @@ class FairnessEvaluator:
         group_names: Dict[int, str],
         valid_groups: List[int],
         group_sizes: Dict[str, int],
+        group_sample_sizes: Dict[str, int],
     ) -> Dict[str, Any]:
         """Compute regression fairness metrics (per-group MSE, MAE, R2)."""
         per_group_mse: Dict[str, float] = {}
@@ -341,6 +436,7 @@ class FairnessEvaluator:
             "worst_group_mse": worst_group_mse,
             "n_valid_groups": len(valid_groups),
             "group_sizes": group_sizes,
+            "group_sample_sizes": group_sample_sizes,
         }
 
     def print_report(self, report: Dict[str, Any]) -> None:
@@ -361,19 +457,33 @@ class FairnessEvaluator:
                 # Binary classification report
                 print("  Per-group AUROC:")
                 for group, auroc in metrics["per_group_auroc"].items():
-                    size = metrics["group_sizes"].get(group, "?")
+                    patient_size = metrics["group_sizes"].get(group, "?")
+                    sample_size = metrics.get("group_sample_sizes", {}).get(group, "?")
                     if isinstance(auroc, float) and auroc != auroc:  # NaN check
-                        print(f"    {group} (n={size}): N/A (single class)")
+                        print(
+                            f"    {group} (patients={patient_size}, stays={sample_size}): "
+                            "N/A (single class)"
+                        )
                     else:
-                        print(f"    {group} (n={size}): {auroc:.4f}")
+                        print(
+                            f"    {group} (patients={patient_size}, stays={sample_size}): "
+                            f"{auroc:.4f}"
+                        )
 
                 print("  Per-group AUPRC:")
                 for group, auprc in metrics.get("per_group_auprc", {}).items():
-                    size = metrics["group_sizes"].get(group, "?")
+                    patient_size = metrics["group_sizes"].get(group, "?")
+                    sample_size = metrics.get("group_sample_sizes", {}).get(group, "?")
                     if isinstance(auprc, float) and auprc != auprc:
-                        print(f"    {group} (n={size}): N/A (single class)")
+                        print(
+                            f"    {group} (patients={patient_size}, stays={sample_size}): "
+                            "N/A (single class)"
+                        )
                     else:
-                        print(f"    {group} (n={size}): {auprc:.4f}")
+                        print(
+                            f"    {group} (patients={patient_size}, stays={sample_size}): "
+                            f"{auprc:.4f}"
+                        )
 
                 wg = metrics["worst_group_auroc"]
                 if isinstance(wg, float) and wg == wg:  # Not NaN
@@ -409,11 +519,15 @@ class FairnessEvaluator:
                 # Regression report
                 print("  Per-group MSE / MAE / R2:")
                 for group in metrics["per_group_mse"]:
-                    size = metrics["group_sizes"].get(group, "?")
+                    patient_size = metrics["group_sizes"].get(group, "?")
+                    sample_size = metrics.get("group_sample_sizes", {}).get(group, "?")
                     mse = metrics["per_group_mse"][group]
                     mae = metrics["per_group_mae"][group]
                     r2 = metrics["per_group_r2"][group]
-                    print(f"    {group} (n={size}): MSE={mse:.4f}  MAE={mae:.4f}  R2={r2:.4f}")
+                    print(
+                        f"    {group} (patients={patient_size}, stays={sample_size}): "
+                        f"MSE={mse:.4f}  MAE={mae:.4f}  R2={r2:.4f}"
+                    )
 
                 wg = metrics["worst_group_mse"]
                 if isinstance(wg, float) and wg == wg:

@@ -246,6 +246,23 @@ class TestJEPAForward:
         ratio = n_visible / (n_visible + n_masked)
         assert 0.10 <= ratio <= 0.50  # ~25% visible
 
+    def test_empty_timesteps_are_excluded_from_ssl_counts(self, encoder, jepa_config):
+        """JEPA masking counts should only cover timesteps with observations."""
+        jepa = JEPAObjective(encoder, jepa_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 1, :3] = True
+        obs_mask[:, 5, :3] = True
+        obs_mask[:, 6, :3] = True
+
+        _, metrics = jepa(x, obs_mask)
+
+        assert metrics["jepa_n_visible_per_sample"] + metrics[
+            "jepa_n_masked_per_sample"
+        ] == pytest.approx(3.0)
+
 
 # =============================================================================
 # Momentum tests

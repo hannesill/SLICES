@@ -10,24 +10,25 @@ resumability via --skip-existing (default) and scoping via --sprint/--paradigm/
 --dataset filters.
 
 Usage:
-    # Evaluate the default thesis fairness corpus
-    uv run python scripts/eval/evaluate_fairness.py
+    # Evaluate the thesis fairness corpus for one explicit revision
+    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1
 
     # Scope to specific sprint/dataset
-    uv run python scripts/eval/evaluate_fairness.py --sprint 1 --dataset miiv
+    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --sprint 1 --dataset miiv
 
     # Preview which runs would be evaluated
-    uv run python scripts/eval/evaluate_fairness.py --dry-run
+    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --dry-run
 
     # Override paths (e.g., different machine than training)
     uv run python scripts/eval/evaluate_fairness.py \
+        --revision thesis-v1 \
         --outputs-root /mnt/data/outputs --data-root /mnt/data
 
     # Recompute fairness for runs that already have metrics
-    uv run python scripts/eval/evaluate_fairness.py --force
+    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --force
 
     # Debug with a single run
-    uv run python scripts/eval/evaluate_fairness.py --max-runs 1
+    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --max-runs 1
 """
 from __future__ import annotations
 
@@ -192,6 +193,25 @@ def _resolve_ckpt_dir(output_dir: str, outputs_root: Optional[str] = None) -> Pa
     return Path(output_dir) / "checkpoints"
 
 
+def _resolve_logged_checkpoint_path(
+    checkpoint_path: str,
+    outputs_root: Optional[str] = None,
+) -> Path:
+    """Resolve a checkpoint path recorded in W&B summary metadata."""
+    path = Path(checkpoint_path)
+    if outputs_root is None:
+        return path
+
+    checkpoint_str = str(checkpoint_path)
+    if checkpoint_str.startswith("outputs/"):
+        return Path(outputs_root) / checkpoint_str[len("outputs/") :]
+    if checkpoint_str.startswith("/") and "/outputs/" in checkpoint_str:
+        return Path(outputs_root) / checkpoint_str.split("/outputs/", 1)[1]
+    if path.is_absolute():
+        return path
+    return Path(outputs_root) / checkpoint_str
+
+
 def find_best_checkpoint(
     output_dir: str,
     outputs_root: Optional[str] = None,
@@ -255,6 +275,61 @@ def find_best_checkpoint(
 
     log.warning("  No checkpoints found in %s", ckpt_dir)
     return None
+
+
+def resolve_evaluation_checkpoint(
+    run,
+    outputs_root: Optional[str] = None,
+    task_type: str = "binary",
+) -> tuple[Optional[Path], str]:
+    """Resolve the checkpoint that was actually used for logged test metrics.
+
+    Uses the run's recorded evaluation provenance when present:
+    - `_eval_checkpoint_source=best`  -> recorded `_best_ckpt_path`
+    - `_eval_checkpoint_source=final` -> `last.ckpt`
+
+    Fails closed for runs that lack recorded provenance entirely.
+    """
+    summary = dict(run.summary_metrics or {})
+    output_dir = run.config.get("output_dir", "")
+    eval_source = summary.get("_eval_checkpoint_source")
+
+    if eval_source == "best":
+        best_path = summary.get("_best_ckpt_path", "")
+        if not best_path:
+            raise FileNotFoundError(
+                "Run recorded _eval_checkpoint_source=best but did not persist _best_ckpt_path."
+            )
+        ckpt_path = _resolve_logged_checkpoint_path(best_path, outputs_root)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(
+                f"Recorded best checkpoint not found: {ckpt_path} "
+                f"(from summary path {best_path!r})"
+            )
+        return ckpt_path, "recorded_best"
+
+    if eval_source == "final":
+        ckpt_path = _resolve_ckpt_dir(output_dir, outputs_root) / "last.ckpt"
+        if not ckpt_path.exists():
+            raise FileNotFoundError(
+                f"Run recorded final-model evaluation but last.ckpt was not found at {ckpt_path}"
+            )
+        return ckpt_path, "recorded_final"
+
+    if eval_source == "failed":
+        best_path = summary.get("_best_ckpt_path", "")
+        error = summary.get("_best_ckpt_error", "unknown error")
+        raise RuntimeError(
+            "Training recorded a checkpoint-selection failure "
+            f"(best_ckpt={best_path!r}, error={error!r})."
+        )
+
+    raise RuntimeError(
+        "Run "
+        f"{run.id} lacks recorded checkpoint provenance (_eval_checkpoint_source). "
+        "Fairness evaluation now requires explicit provenance so it cannot silently "
+        "re-evaluate a different checkpoint than the logged test metrics."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +436,7 @@ def evaluate_run_fairness(
         protected_attributes=protected_attributes,
         min_subgroup_size=min_subgroup_size,
         task_type=task_type,
+        dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
     )
     report = evaluator.evaluate(predictions, labels, stay_ids)
     return report
@@ -421,7 +497,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--paradigm", nargs="+", help="Filter to paradigm(s)")
     parser.add_argument("--dataset", nargs="+", help="Filter to dataset(s)")
-    parser.add_argument("--revision", nargs="+", help="Filter to revision tag(s)")
+    parser.add_argument(
+        "--revision",
+        nargs="+",
+        help=(
+            "Filter to revision tag(s). Required unless REVISION or "
+            "WANDB_REVISION is set in the environment."
+        ),
+    )
     parser.add_argument(
         "--phase",
         nargs="+",
@@ -463,7 +546,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-runs", type=int, default=None, help="Limit runs (for debugging)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if not args.revision:
+        env_revision = os.environ.get("REVISION") or os.environ.get("WANDB_REVISION")
+        if env_revision:
+            args.revision = [env_revision]
+        else:
+            parser.error(
+                "--revision is required to avoid mixing reruns. "
+                "Pass --revision <name> or set REVISION/WANDB_REVISION."
+            )
+
+    return args
 
 
 def main() -> None:
@@ -526,10 +621,12 @@ def main() -> None:
         print("\n[DRY RUN] Listing runs:\n")
         for i, r in enumerate(runs):
             cfg = r.config
-            output_dir = cfg.get("output_dir", "?")
             task_type = _get_nested(cfg, "task.task_type", "binary")
-            ckpt = find_best_checkpoint(output_dir, args.outputs_root, task_type)
-            ckpt_str = str(ckpt) if ckpt else "NOT FOUND"
+            try:
+                ckpt, ckpt_source = resolve_evaluation_checkpoint(r, args.outputs_root, task_type)
+                ckpt_str = f"{ckpt} [{ckpt_source}]" if ckpt else "NOT FOUND"
+            except Exception as e:
+                ckpt_str = f"ERROR: {e}"
             print(
                 f"  {i + 1:3d}. {r.name or r.id}  "
                 f"[{cfg.get('dataset', '?')}/{_get_nested(cfg, 'task.task_name', '?')}/"
@@ -554,13 +651,15 @@ def main() -> None:
 
         try:
             # 1. Find checkpoint
-            output_dir = cfg.get("output_dir", "")
             task_type = _get_nested(cfg, "task.task_type", "binary")
-            ckpt_path = find_best_checkpoint(output_dir, args.outputs_root, task_type)
+            ckpt_path, ckpt_source = resolve_evaluation_checkpoint(
+                run, args.outputs_root, task_type
+            )
             if ckpt_path is None:
                 results["skipped"] += 1
                 results["errors"].append((run.id, run_desc, "no checkpoint found"))
                 continue
+            log.info("  Checkpoint: %s (%s)", ckpt_path, ckpt_source)
 
             # 2. Reconstruct model + data (reuse datamodule if same dataset/task/seed)
             dm_key = (ds, task, seed, cfg.get("label_fraction", 1.0))

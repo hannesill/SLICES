@@ -161,44 +161,74 @@ class TS2VecObjective(BaseSSLObjective):
             T = crop_len
 
         # 3. Tokenize each view independently (noise means different MLP inputs)
-        tokens_1, _, _ = self.encoder.tokenize(x1, obs_mask)
+        tokens_1, _, token_info_1 = self.encoder.tokenize(x1, obs_mask)
         tokens_2, _, _ = self.encoder.tokenize(x2, obs_mask)
+        valid_timestep_mask = token_info_1["valid_timestep_mask"]
 
         # 4. Independent timestep masks
-        ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
-        ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask_1 = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=valid_timestep_mask,
+        )
+        ssl_mask_2 = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=valid_timestep_mask,
+        )
+        effective_mask_1 = ssl_mask_1 & valid_timestep_mask
+        effective_mask_2 = ssl_mask_2 & valid_timestep_mask
 
         # 5. Encode visible tokens for each view
-        vis_1, vp_1 = extract_visible_timesteps(tokens_1, ssl_mask_1)
+        vis_1, vp_1 = extract_visible_timesteps(
+            tokens_1,
+            ssl_mask_1,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         enc_1 = self.encoder.encode(vis_1, vp_1)
 
-        vis_2, vp_2 = extract_visible_timesteps(tokens_2, ssl_mask_2)
+        vis_2, vp_2 = extract_visible_timesteps(
+            tokens_2,
+            ssl_mask_2,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         enc_2 = self.encoder.encode(vis_2, vp_2)
 
         # 6. Scatter back to full (B, T, d) grids
-        full_1 = self._scatter_to_full(enc_1, ssl_mask_1, T)
-        full_2 = self._scatter_to_full(enc_2, ssl_mask_2, T)
+        full_1 = self._scatter_to_full(enc_1, effective_mask_1, T)
+        full_2 = self._scatter_to_full(enc_2, effective_mask_2, T)
 
         # 7. Project per-timestep
         z1 = self.projection_head(full_1)  # (B, T, proj_dim)
         z2 = self.projection_head(full_2)  # (B, T, proj_dim)
 
         # 8. Find overlap and valid masks
-        overlap = ssl_mask_1 & ssl_mask_2  # (B, T)
+        overlap = effective_mask_1 & effective_mask_2  # (B, T)
 
         # 9. Hierarchical temporal contrastive loss
         #    Pass per-view masks so max-pool can ignore masked positions
-        loss, metrics = self._hierarchical_temporal_loss(z1, z2, overlap, ssl_mask_1, ssl_mask_2)
+        loss, metrics = self._hierarchical_temporal_loss(
+            z1,
+            z2,
+            overlap,
+            effective_mask_1,
+            effective_mask_2,
+        )
 
         # Add masking statistics
         with torch.no_grad():
             metrics.update(
                 {
                     "ts2vec_n_timesteps": torch.tensor(T),
-                    "ts2vec_n_visible_view1": torch.tensor(ssl_mask_1.sum().item() / B),
-                    "ts2vec_n_visible_view2": torch.tensor(ssl_mask_2.sum().item() / B),
+                    "ts2vec_n_visible_view1": torch.tensor(effective_mask_1.sum().item() / B),
+                    "ts2vec_n_visible_view2": torch.tensor(effective_mask_2.sum().item() / B),
                     "ts2vec_n_overlap_per_sample": torch.tensor(overlap.sum().item() / B),
-                    "ts2vec_overlap_ratio": overlap.float().mean(),
+                    "ts2vec_overlap_ratio": overlap.sum().float()
+                    / valid_timestep_mask.sum().clamp(min=1).float(),
                 }
             )
 

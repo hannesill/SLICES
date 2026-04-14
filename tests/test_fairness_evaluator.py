@@ -232,6 +232,49 @@ class TestMinSubgroupSize:
         assert "gender" in report
         assert len(report["gender"]["per_group_auroc"]) == 2
 
+    def test_threshold_counts_unique_patients_not_stays(self):
+        """Min subgroup size should be enforced on patients, not repeated stays."""
+        rows = []
+        stay_id = 0
+        for patient_id in range(40):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"m-{patient_id}",
+                        "gender": "M",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+        for patient_id in range(55):
+            rows.append(
+                {
+                    "stay_id": stay_id,
+                    "patient_id": f"f-{patient_id}",
+                    "gender": "F",
+                    "age": 50.0,
+                    "los_days": 5.0,
+                }
+            )
+            stay_id += 1
+
+        static_df = pl.DataFrame(rows)
+        predictions = torch.tensor([0.8 if i % 2 == 0 else 0.2 for i in range(len(rows))])
+        labels = torch.tensor([1.0 if i % 2 == 0 else 0.0 for i in range(len(rows))])
+        stay_ids = static_df["stay_id"].to_list()
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=50,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        # Male has 80 stays but only 40 patients, so the attribute should be skipped.
+        assert "gender" not in report
+
 
 class TestEvaluateStructure:
     """Tests for evaluate() return structure."""
@@ -292,6 +335,83 @@ class TestEvaluateStructure:
 
         assert "gender" in report
         assert "age_group" in report
+
+    def test_group_sizes_report_patients_and_samples_separately(self):
+        """The report should expose patient counts separately from stay counts."""
+        rows = []
+        stay_id = 0
+        for patient_id in range(55):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"m-{patient_id}",
+                        "gender": "M",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+        for patient_id in range(55):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"f-{patient_id}",
+                        "gender": "F",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+
+        static_df = pl.DataFrame(rows)
+        predictions = torch.tensor([0.8 if i % 2 == 0 else 0.2 for i in range(len(rows))])
+        labels = torch.tensor([1.0 if i % 2 == 0 else 0.0 for i in range(len(rows))])
+        stay_ids = static_df["stay_id"].to_list()
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=50,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        assert report["gender"]["group_sizes"]["M"] == 55
+        assert report["gender"]["group_sample_sizes"]["M"] == 110
+
+    def test_race_uses_canonical_miiv_only_schema_for_combined(self):
+        """Combined race fairness should only include canonical MIMIC race bins."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "patient_id": ["a", "b", "c", "d"],
+                "gender": ["M", "F", "M", "F"],
+                "age": [50.0, 60.0, 55.0, 65.0],
+                "race": [
+                    "WHITE",
+                    "BLACK/AFRICAN AMERICAN",
+                    "HISPANIC/LATINO",
+                    "ASIAN",
+                ],
+                "source_dataset": ["miiv", "miiv", "eicu", "eicu"],
+                "los_days": [5.0, 5.0, 5.0, 5.0],
+            }
+        )
+        predictions = torch.tensor([0.9, 0.1, 0.8, 0.2])
+        labels = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        stay_ids = [1, 2, 3, 4]
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["race"],
+            min_subgroup_size=1,
+            dataset_name="combined",
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        assert "race" in report
+        assert set(report["race"]["per_group_auroc"]) == {"White", "Black"}
 
 
 class TestPrintReport:
