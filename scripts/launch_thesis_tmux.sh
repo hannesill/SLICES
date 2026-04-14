@@ -75,6 +75,9 @@ fi
 
 run_args+=(--revision "$REVISION" --reason "$REASON")
 export_args+=(--revision "$REVISION" --output-dir "$RESULTS_DIR")
+if [[ -n "$REVISION" ]]; then
+  fairness_args+=(--revision "$REVISION")
+fi
 fairness_args+=(--sprint "${fairness_sprints[@]}" --batch-size "$BATCH_SIZE_FAIRNESS" --device "$DEVICE_FAIRNESS")
 
 warmup_cmd=(uv run python scripts/run_experiments.py warmup --sprint "${warmup_sprints[@]}")

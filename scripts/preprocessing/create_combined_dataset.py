@@ -2,7 +2,8 @@
 
 Merges MIMIC-IV and eICU (or any two datasets) into a single processed
 directory for combined pretraining. Handles stay_id collision by adding
-a dataset-specific offset to ensure globally unique IDs.
+a dataset-specific offset to ensure globally unique IDs, then prepares
+the merged dataset for training by default.
 
 Usage:
     uv run python scripts/preprocessing/create_combined_dataset.py \
@@ -23,6 +24,7 @@ from pathlib import Path
 import polars as pl
 import yaml
 from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
+from slices.data.preparation import prepare_processed_dataset
 
 # Offset applied to stay_id and patient_id for the second dataset
 # to avoid collisions. Large enough to exceed any real ID range.
@@ -191,6 +193,17 @@ def main():
         nargs=2,
         default=None,
         help="Dataset names (for metadata). Defaults to directory names.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Split seed to use when preparing the combined dataset (default: 42).",
+    )
+    parser.add_argument(
+        "--skip-prepare",
+        action="store_true",
+        help="Only write merged parquet/metadata files and skip splits/normalization prep.",
     )
     args = parser.parse_args()
 
@@ -392,6 +405,16 @@ def main():
     with open(output_dir / "metadata.yaml", "w") as f:
         yaml.dump(combined_metadata, f, default_flow_style=False)
     print("  metadata.yaml")
+
+    if args.skip_prepare:
+        print("\nSkipping combined dataset preparation (--skip-prepare).")
+    else:
+        print("\nPreparing combined dataset artifacts...")
+        prepare_processed_dataset(
+            processed_dir=output_dir,
+            seed=args.seed,
+            dataset_name="combined",
+        )
 
     print(f"\nCombined dataset created at {output_dir}")
     print(f"  Total stays: {len(static_combined):,}")

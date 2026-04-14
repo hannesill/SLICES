@@ -173,6 +173,8 @@ class SMARTObjective(BaseSSLObjective):
         # Freeze target encoder - only updated via momentum
         for param in self.target_encoder.parameters():
             param.requires_grad = False
+        # Keep the EMA teacher deterministic even while the online model trains.
+        self.target_encoder.eval()
 
         # Create predictor (simple MLP like original)
         self.predictor = SMARTPredictor(
@@ -183,6 +185,12 @@ class SMARTObjective(BaseSSLObjective):
 
         # Track momentum for logging
         self._current_momentum = config.momentum_base
+
+    def train(self, mode: bool = True) -> "SMARTObjective":
+        """Keep the EMA teacher in eval mode even when the objective trains."""
+        super().train(mode)
+        self.target_encoder.eval()
+        return self
 
     def forward(
         self,

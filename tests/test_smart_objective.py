@@ -131,6 +131,12 @@ class TestSMARTObjectiveInitialization:
         for param in smart.target_encoder.parameters():
             assert not param.requires_grad
 
+    def test_target_encoder_defaults_to_eval_mode(self, smart_encoder, smart_config):
+        """The EMA teacher should start in eval mode to disable dropout noise."""
+        smart = SMARTObjective(smart_encoder, smart_config)
+
+        assert not smart.target_encoder.training
+
     def test_target_encoder_is_copy(self, smart_encoder, smart_config):
         """Test that target encoder is a deep copy of online encoder."""
         smart = SMARTObjective(smart_encoder, smart_config)
@@ -147,6 +153,16 @@ class TestSMARTObjectiveInitialization:
 
         for param in smart.encoder.parameters():
             assert param.requires_grad
+
+    def test_target_encoder_stays_in_eval_mode_when_training(self, smart_encoder, smart_config):
+        """Calling train() on the objective must not re-enable teacher dropout."""
+        smart = SMARTObjective(smart_encoder, smart_config)
+
+        smart.train()
+
+        assert smart.training
+        assert smart.encoder.training
+        assert not smart.target_encoder.training
 
 
 class TestSMARTObjectiveForward:

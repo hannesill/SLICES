@@ -84,6 +84,7 @@ def fetch_eval_runs(
     paradigms: Optional[list[str]],
     datasets: Optional[list[str]],
     phases: list[str],
+    revisions: Optional[list[str]],
 ) -> list:
     """Fetch finished evaluation runs from W&B matching filters."""
     import wandb
@@ -102,6 +103,8 @@ def fetch_eval_runs(
         tag_filters.append(f"dataset:{datasets[0]}")
     if phases and len(phases) == 1:
         tag_filters.append(f"phase:{phases[0]}")
+    if revisions and len(revisions) == 1:
+        tag_filters.append(f"revision:{revisions[0]}")
 
     if tag_filters:
         filters["tags"] = {"$all": tag_filters}
@@ -114,6 +117,7 @@ def fetch_eval_runs(
     paradigm_set = set(paradigms) if paradigms and len(paradigms) > 1 else None
     dataset_set = set(datasets) if datasets and len(datasets) > 1 else None
     phase_set = set(phases) if phases and len(phases) > 1 else None
+    revision_set = set(revisions) if revisions and len(revisions) > 1 else None
 
     runs = []
     for run in runs_iter:
@@ -126,6 +130,8 @@ def fetch_eval_runs(
         if dataset_set and not any(f"dataset:{d}" in tags for d in dataset_set):
             continue
         if phase_set and not any(f"phase:{p}" in tags for p in phase_set):
+            continue
+        if revision_set and not any(f"revision:{r}" in tags for r in revision_set):
             continue
 
         runs.append(run)
@@ -415,6 +421,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--paradigm", nargs="+", help="Filter to paradigm(s)")
     parser.add_argument("--dataset", nargs="+", help="Filter to dataset(s)")
+    parser.add_argument("--revision", nargs="+", help="Filter to revision tag(s)")
     parser.add_argument(
         "--phase",
         nargs="+",
@@ -484,6 +491,7 @@ def main() -> None:
             paradigms=args.paradigm,
             datasets=args.dataset,
             phases=args.phase,
+            revisions=args.revision,
         )
     )
 
