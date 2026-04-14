@@ -146,7 +146,7 @@ open htmlcov/index.html  # macOS
 - Observation mask handling
 
 ### Task Building
-- Mortality prediction windows (24h, 48h, hospital, ICU)
+- Mortality task variants (24h, hospital, ICU) plus window-boundary cases
 - Boundary conditions (exact boundaries)
 - Empty data handling
 - Multiple tasks extraction

@@ -31,15 +31,15 @@ class SlidingWindowDataset(Dataset):
         >>> base_dataset = ICUDataset("data/processed/mimic-iv-168h")  # 168h sequences
         >>> windowed = SlidingWindowDataset(
         ...     base_dataset,
-        ...     window_size=48,  # 48h windows
-        ...     stride=24,       # 24h stride (50% overlap)
+        ...     window_size=24,  # 24h benchmark windows
+        ...     stride=12,       # 12h stride (50% overlap)
         ...     stay_indices=[0, 1, 2, 10, 20],  # Only these stays (e.g., train split)
         ... )
-        >>> len(windowed)  # More samples than base dataset
-        15
+        >>> len(windowed) > len(base_dataset)
+        True
         >>> sample = windowed[0]
         >>> sample["timeseries"].shape
-        torch.Size([48, 9])
+        torch.Size([24, 9])
 
     Attributes:
         base_dataset: The underlying ICUDataset.

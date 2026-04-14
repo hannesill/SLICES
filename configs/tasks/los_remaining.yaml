@@ -4,6 +4,7 @@
 
 task_name: los_remaining
 task_type: regression
+primary_metric: mae
 n_classes: null
 head_type: mlp
 hidden_dims: [64]

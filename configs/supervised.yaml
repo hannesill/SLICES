@@ -88,7 +88,8 @@ training:
   accumulate_grad_batches: 1
 
   # Early stopping
-  # Monitor/mode are set automatically by task type in setup_callbacks():
+  # Monitor/mode default to task.primary_metric when provided.
+  # Otherwise setup_callbacks() falls back to:
   #   classification -> val/auprc (max), regression -> val/mse (min)
   # Override here only if you need a non-default metric.
   early_stopping_patience: 10

@@ -33,9 +33,9 @@ Secondary questions addressed through ablations:
 
 | Variable | Value | Rationale |
 |----------|-------|-----------|
-| Observation window | 48 hours | Standard in ICU benchmarks |
-| AKI prediction window | Hours 48–72 (forward-looking) | Prevents leakage from creatinine values used in label construction |
-| Min stay | 48 hours (72 hours for AKI) | Ensures full observation + prediction window |
+| Observation window | 24 hours | Current benchmark input window |
+| AKI prediction window | Hours 24–48 (forward-looking) | Prevents leakage from creatinine values used in label construction |
+| Min stay | 24 hours | Ensures a full observation window before downstream labeling |
 | Splits | 70/15/15 train/val/test | Patient-level, no leakage |
 | Imputation | Normalize-then-zero-fill | Eliminates imputation as confound |
 | Finetuning head | MLP, hidden_dims=[64] | Same head architecture across all paradigms |
@@ -204,10 +204,12 @@ Min subgroup size: 50 patients. Groups below threshold are excluded from fairnes
 
 ### 4.2 Phase 2: Downstream Evaluation (84 runs × 3 seeds = 252 runs)
 
-Each of the 9 pretrained encoders is evaluated on 4 downstream tasks under **both** protocols:
+Each of the 9 pretrained encoders is evaluated on the **4-task primary thesis matrix** under **both** protocols:
 - Protocol A (linear probe): 9 encoders × 4 tasks = 36 runs
 - Protocol B (full finetune): 9 encoders × 4 tasks = 36 runs
 - Supervised baseline: 3 datasets × 4 tasks = 12 runs
+
+The repo now also exposes an optional `mortality` ICU-mortality task, but it is not included in these run totals unless explicitly added as an extension.
 
 **Result table template** (one per dataset, two sub-tables per dataset):
 
@@ -282,7 +284,7 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 
 **Question**: Does giving the contrastive family its natural temporal objective and augmentations overturn the conclusion from the instance-level contrastive baseline?
 
-**Design**: TS2Vec on all 3 datasets, all 4 downstream tasks, both Protocol A and Protocol B, 5 seeds. Same base encoder family and matched training budget as the controlled comparison.
+**Design**: TS2Vec on all 3 datasets, the same 4-task primary thesis matrix, both Protocol A and Protocol B, 5 seeds. Same base encoder family and matched training budget as the controlled comparison.
 
 **Total**: 1 paradigm × 3 datasets × 5 seeds = 15 pretrains + 120 downstream probe/finetune runs = **135 runs**
 

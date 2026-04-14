@@ -151,7 +151,7 @@ def get_default_sentinel_slots() -> List[SentinelSlot]:
     2. Short stay + died - label alignment edge case
     3. Medium stay + low missingness - "clean" baseline (1-3 days)
     4. Medium stay + high missingness - test imputation (1-3 days)
-    5. Long stay (>5 days) - test truncation to 48h window
+    5. Long stay (>5 days) - test truncation to the 24h benchmark window
     6. Young patient (<40) - demographic edge
     7. Old patient (>80) - demographic edge
     8. Random sample - catch unexpected issues
