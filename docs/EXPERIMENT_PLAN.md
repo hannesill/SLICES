@@ -222,7 +222,8 @@ The repo now also exposes an optional `mortality` ICU-mortality task, but it is 
 
 ### 4.3 Phase 3: Fairness Evaluation (on all downstream runs)
 
-No additional training. Compute fairness metrics on test predictions from Phase 2.
+No additional training. Compute fairness metrics by rerunning inference from the
+same evaluation checkpoint provenance recorded for each downstream run.
 
 ---
 
@@ -333,7 +334,8 @@ No additional training. Compute fairness metrics on test predictions from Phase 
 | 12 | SMART external SSL reference, 5 seeds | 135 | TODO |
 | 9 | Fairness (eval only, runs last after all training) | 0 | TODO |
 
-For detailed sprint outcomes, see `EXPERIMENT_RESULTS.md`.
+For concrete rerun outputs, use the exported result artifacts under `results/`
+and the thesis W&B project summaries.
 
 ### Upcoming: Sprint 10 — Extra Seeds 789, 1011 (630 runs)
 
@@ -410,7 +412,7 @@ For detailed sprint outcomes, see `EXPERIMENT_RESULTS.md`.
 **Runs last**, after all training sprints are complete. Zero additional training — pure evaluation on existing test predictions.
 
 1. Compute fairness metrics on all finetune/supervised test predictions from Sprints 1–5, 7p, 10, 12, and 13
-2. Enable `eval.fairness.enabled=true` and rerun evaluation
+2. Run `scripts/eval/evaluate_fairness.py` with an explicit `--revision` tag for the thesis rerun corpus
 3. Generate fairness tables and disparity plots
 4. Protected attributes: sex (all datasets), age group (all), race/ethnicity (MIMIC-IV only)
 5. Sprint `11` classical baselines are not part of the default standalone fairness sweep because `evaluate_fairness.py` currently targets `finetune` and `supervised` phases only
@@ -425,37 +427,40 @@ Legacy exploratory runs remain in W&B project `slices`. Final thesis reruns shou
 
 ### Run Naming Convention
 
-```
-{phase}_{dataset}_{paradigm}_{task}_seed{seed}
-```
+Run names are phase-specific and generated from the Hydra configs rather than a
+single universal template. The current defaults use the `s${sprint}_...`
+pattern from `configs/*.yaml`.
 
 Examples:
-- `pretrain_mimic_mae_seed42`
-- `finetune_eicu_jepa_mortality24h_seed123`
-- `supervised_combined_aki_kdigo_seed456`
-- `ablation-label_mimic_mae_mortality24h_frac10_seed42`
-- `ablation-transfer_mimic2eicu_contrastive_aki_seed42`
+- `s10_pretrain_miiv_mae_seed42`
+- `s10_finetune_eicu_jepa_mortality_24h_seed123`
+- `s10_supervised_combined_aki_kdigo_seed456`
+- `s11_xgboost_miiv_mortality_hospital_seed42`
+
+Downstream tooling should rely on tags and structured config fields rather than
+parsing run names.
 
 ### Tags
 
 | Tag | Purpose |
 |-----|---------|
-| `phase:pretrain` / `phase:finetune` / `phase:supervised` | Training phase |
-| `dataset:mimic` / `dataset:eicu` / `dataset:combined` | Dataset |
+| `phase:pretrain` / `phase:finetune` / `phase:supervised` / `phase:baseline` | Training phase |
+| `dataset:miiv` / `dataset:eicu` / `dataset:combined` | Dataset |
 | `paradigm:mae` / `paradigm:jepa` / `paradigm:contrastive` / `paradigm:supervised` / `paradigm:xgboost` / `paradigm:gru_d` | Paradigm |
 | `task:mortality_24h` / etc. | Downstream task |
 | `ablation:label-efficiency` / `ablation:transfer` | Ablation type |
 | `sprint:N` | Execution sprint |
+| `revision:<id>` | Thesis rerun revision for fairness/export filtering |
 | `seed:42` / `seed:123` / `seed:456` / `seed:789` / `seed:1011` | Random seed |
 
 ### Key Metrics to Log
 
 | Phase | Metrics |
 |-------|---------|
-| Pretraining | train_loss, val_loss, gradient_steps, wall_clock_time |
-| Finetuning | val_auroc, val_auprc, test_auroc, test_auprc, test_brier, test_ece |
-| Regression | val_mae, test_mae, test_mse, test_r2 |
-| Fairness | fairness/auroc_gap_sex, fairness/dem_parity_diff, fairness/eq_odds_diff |
+| Pretraining | `train/loss`, `val/loss`, `train/gradient_steps`, `train/wall_clock_seconds` |
+| Classification downstream | `val/auroc`, `val/auprc`, `test/auroc`, `test/auprc`, `test/brier_score`, `test/ece` |
+| Regression downstream | `val/loss`, `test/mae`, `test/mse`, `test/r2` |
+| Fairness | `fairness/gender/*`, `fairness/age_group/*`, `fairness/race/*` |
 
 ### Baseline Inheritance Across Sprints
 
