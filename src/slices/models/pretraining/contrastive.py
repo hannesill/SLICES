@@ -38,7 +38,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_timestep_mask, extract_visible_timesteps
+from .masking import (
+    create_complementary_timestep_masks,
+    create_timestep_mask,
+    extract_visible_timesteps,
+)
 
 
 @dataclass
@@ -60,7 +64,9 @@ class ContrastiveConfig(SSLConfig):
     # Temperature for NT-Xent
     temperature: float = 0.07
 
-    # Use complementary (non-overlapping) masks for views
+    # Use complementary masks for views. Extremely sparse samples may fall back
+    # to a shared timestep so neither view becomes empty after eligibility
+    # filtering.
     complementary_masks: bool = True
 
     def __post_init__(self) -> None:
@@ -178,7 +184,10 @@ class ContrastiveObjective(BaseSSLObjective):
             valid_timestep_mask=valid_timestep_mask,
         )
         if self.config.complementary_masks:
-            ssl_mask_2 = ~ssl_mask_1
+            ssl_mask_1, ssl_mask_2 = create_complementary_timestep_masks(
+                ssl_mask_1,
+                valid_timestep_mask,
+            )
         else:
             ssl_mask_2 = create_timestep_mask(
                 B,

@@ -514,7 +514,7 @@ def parse_args() -> argparse.Namespace:
         help=f"Attributes to evaluate (default: {DEFAULT_PROTECTED_ATTRIBUTES})",
     )
     parser.add_argument(
-        "--min-subgroup-size", type=int, default=50, help="Min samples per subgroup"
+        "--min-subgroup-size", type=int, default=50, help="Min patients per subgroup"
     )
     parser.add_argument("--dry-run", action="store_true", help="List runs without processing")
     parser.add_argument(

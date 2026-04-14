@@ -202,6 +202,30 @@ class TestContrastiveForward:
         assert metrics["contrastive_n_visible_view1"] <= 2
         assert metrics["contrastive_n_visible_view2"] <= 2
 
+    def test_single_eligible_timestep_falls_back_to_shared_view(self, encoder):
+        """Complementary masks should not create an all-padding view on sparse samples."""
+        config = ContrastiveConfig(
+            mode="instance",
+            mask_ratio=0.5,
+            complementary_masks=True,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            temperature=0.1,
+        )
+        obj = ContrastiveObjective(encoder, config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 3, :4] = True
+
+        loss, metrics = obj(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(metrics["contrastive_loss"])
+        assert metrics["contrastive_n_visible_view1"] > 0
+        assert metrics["contrastive_n_visible_view2"] > 0
+
 
 # =============================================================================
 # NT-Xent loss tests
