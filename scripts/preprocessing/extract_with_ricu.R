@@ -16,7 +16,7 @@
 #'   Rscript scripts/preprocessing/extract_with_ricu.R \
 #'     --dataset miiv \
 #'     --output_dir data/ricu_output/miiv \
-#'     --seq_length_hours 48
+#'     --raw_export_horizon_hours 48
 
 # Auto-install missing packages
 required_packages <- c("ricu", "arrow", "yaml", "data.table", "optparse", "units")
@@ -45,8 +45,10 @@ option_list <- list(
               help = "RICU source name (miiv, eicu, hirid, aumc, mimic, sic)"),
   make_option("--output_dir", type = "character", default = NULL,
               help = "Output directory for parquet files"),
-  make_option("--seq_length_hours", type = "integer", default = 72L,
-              help = "Max hours per stay [default: %default]"),
+  make_option("--raw_export_horizon_hours", type = "integer", default = NULL,
+              help = "Max hours of raw timeseries to export per stay [default: 72]"),
+  make_option("--seq_length_hours", type = "integer", default = NULL,
+              help = "DEPRECATED alias for --raw_export_horizon_hours"),
   make_option("--raw_data_dir", type = "character", default = NULL,
               help = "Path to raw CSV files for ricu import (auto-detected if not set)")
 )
@@ -996,14 +998,14 @@ extract_diagnoses_eicu <- function(dataset) {
 # ---------------------------------------------------------------------------
 
 write_metadata <- function(output_dir, dataset, concept_cols,
-                           seq_length_hours, n_stays) {
+                           raw_export_horizon_hours, n_stays) {
   message("[6/6] Writing metadata...")
   metadata <- list(
     dataset                  = dataset,
     feature_names            = as.list(concept_cols),
     n_features               = length(concept_cols),
-    seq_length_hours         = seq_length_hours,
-    raw_export_horizon_hours = seq_length_hours,
+    seq_length_hours         = raw_export_horizon_hours,
+    raw_export_horizon_hours = raw_export_horizon_hours,
     n_stays                  = n_stays,
     ricu_version             = as.character(packageVersion("ricu"))
   )
@@ -1015,13 +1017,35 @@ write_metadata <- function(output_dir, dataset, concept_cols,
 # ---------------------------------------------------------------------------
 
 main <- function(opts) {
-  dataset           <- opts$dataset
-  output_dir        <- opts$output_dir
-  seq_length_hours  <- opts$seq_length_hours
+  dataset <- opts$dataset
+  output_dir <- opts$output_dir
+
+  raw_export_horizon_hours <- opts$raw_export_horizon_hours
+  deprecated_seq_length_hours <- opts$seq_length_hours
+  if (is.null(raw_export_horizon_hours)) {
+    if (!is.null(deprecated_seq_length_hours)) {
+      raw_export_horizon_hours <- deprecated_seq_length_hours
+      warning(
+        "--seq_length_hours is deprecated; use --raw_export_horizon_hours instead.",
+        call. = FALSE
+      )
+    } else {
+      raw_export_horizon_hours <- 72L
+    }
+  } else if (!is.null(deprecated_seq_length_hours) &&
+             raw_export_horizon_hours != deprecated_seq_length_hours) {
+    stop(
+      "Conflicting values provided for --raw_export_horizon_hours and "
+      "--seq_length_hours. Use only --raw_export_horizon_hours."
+    )
+  }
 
   # Validate arguments
   if (is.null(dataset) || is.null(output_dir)) {
     stop("Both --dataset and --output_dir are required.")
+  }
+  if (raw_export_horizon_hours <= 0) {
+    stop("--raw_export_horizon_hours must be a positive integer.")
   }
   if (!dataset %in% VALID_DATASETS) {
     stop(sprintf("Invalid dataset '%s'. Valid: %s",
@@ -1134,8 +1158,8 @@ main <- function(opts) {
   }
 
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  message(sprintf("=== RICU extraction: dataset=%s, output=%s, hours=%d ===",
-                  dataset, output_dir, seq_length_hours))
+  message(sprintf("=== RICU extraction: dataset=%s, output=%s, raw_hours=%d ===",
+                  dataset, output_dir, raw_export_horizon_hours))
 
   # Parse the concept dictionary once, bypassing RICU's availability gate
   # which can fail even after successful import_src().
@@ -1149,7 +1173,7 @@ main <- function(opts) {
 
   # 2. Extract timeseries (writes parquet directly to avoid full-table merge)
   ts_path <- file.path(output_dir, "ricu_timeseries.parquet")
-  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours, dict,
+  ts_result <- extract_timeseries(dataset, concepts, raw_export_horizon_hours, dict,
                                    output_path = ts_path)
   concept_cols <- ts_result$concept_cols
   n_stays <- ts_result$n_stays
@@ -1171,7 +1195,7 @@ main <- function(opts) {
 
   # 6. Write metadata
   write_metadata(output_dir, dataset, concept_cols,
-                 seq_length_hours, n_stays)
+                 raw_export_horizon_hours, n_stays)
 
   message("=== Extraction complete. ===")
   message(sprintf("  Output: %s", output_dir))

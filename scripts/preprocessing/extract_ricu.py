@@ -2,7 +2,8 @@
 
 Two-step pipeline:
     # Step 1: R extraction (once per dataset)
-    Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
+    Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv \
+        --raw_export_horizon_hours 48
 
     # Step 2: Python processing -> produces final SLICES format
     uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
@@ -45,7 +46,7 @@ def main(cfg: DictConfig) -> None:
         print("\nRun the R extraction first:")
         print(
             "  Rscript scripts/preprocessing/extract_with_ricu.R "
-            f"--dataset miiv --output_dir {ricu_dir}"
+            f"--dataset miiv --output_dir {ricu_dir} --raw_export_horizon_hours 48"
         )
         sys.exit(1)
 

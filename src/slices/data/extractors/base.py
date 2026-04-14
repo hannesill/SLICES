@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 import polars as pl
 import portalocker
@@ -92,6 +92,7 @@ class BaseExtractor(ABC):
         self.config = config
         self.parquet_root = Path(config.parquet_root)
         self.output_dir = Path(config.output_dir)
+        self._label_quality_stats: Dict[str, Dict[str, Any]] = {}
 
         # Validate parquet directory exists
         if not self.parquet_root.exists():
@@ -378,6 +379,7 @@ class BaseExtractor(ABC):
             DataFrame with stay_id and one column per task (named by task_name).
         """
         # Step 1: Identify all required data sources
+        self._label_quality_stats = {}
         required_sources = set()
         for task_config in task_configs:
             required_sources.update(task_config.label_sources)
@@ -419,6 +421,10 @@ class BaseExtractor(ABC):
             # Compute labels
             task_labels = builder.build_labels(raw_data)
             self._emit_label_quality_warnings(task_config, task_labels)
+            if "label" in task_labels.columns:
+                self._label_quality_stats[task_config.task_name] = builder.build_quality_stats(
+                    task_labels
+                )
 
             # For single-label tasks, the builder returns a 'label' column
             # that we rename to the task name.
