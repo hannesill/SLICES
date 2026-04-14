@@ -13,7 +13,7 @@ Tests cover:
 import polars as pl
 import pytest
 import torch
-from slices.eval.fairness_evaluator import FairnessEvaluator
+from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
 
 
 def make_static_df(
@@ -435,3 +435,24 @@ class TestPrintReport:
         captured = capsys.readouterr()
         assert "Fairness Evaluation Report" in captured.out
         assert "gender" in captured.out
+
+
+class TestFlattenFairnessReport:
+    """Tests for fairness report flattening."""
+
+    def test_flattens_nested_metrics_for_logging(self):
+        report = {
+            "gender": {
+                "worst_group_auroc": 0.71,
+                "per_group_auroc": {"M": 0.83, "F": 0.71},
+                "group_sizes": {"M": 55, "F": 60},
+            }
+        }
+
+        flat = flatten_fairness_report(report)
+
+        assert flat["fairness/gender/worst_group_auroc"] == pytest.approx(0.71)
+        assert flat["fairness/gender/per_group_auroc/M"] == pytest.approx(0.83)
+        assert flat["fairness/gender/per_group_auroc/F"] == pytest.approx(0.71)
+        assert flat["fairness/gender/group_sizes/M"] == 55
+        assert flat["fairness/gender/group_sizes/F"] == 60

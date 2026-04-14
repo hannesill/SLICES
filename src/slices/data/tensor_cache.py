@@ -126,7 +126,7 @@ def load_normalization_stats(
     current_train_indices: Optional[List[int]],
     normalize: bool,
 ) -> Optional[Dict[str, Any]]:
-    """Load cached normalization statistics from file if they exist and match current split.
+    """Load cached preprocessing statistics from file if they match current split.
 
     Looks for a hash-keyed file first (normalization_stats_<hash>.yaml), then
     falls back to the legacy normalization_stats.yaml with set-comparison validation.
@@ -141,9 +141,6 @@ def load_normalization_stats(
         Dictionary with 'feature_means' and 'feature_stds' if file exists and split matches,
         None otherwise.
     """
-    if not normalize:
-        return None
-
     expected_data_fingerprint = get_data_fingerprint(data_dir)
     expected_preprocessing_fingerprint = get_preprocessing_fingerprint()
 

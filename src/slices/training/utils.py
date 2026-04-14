@@ -354,7 +354,7 @@ def run_fairness_evaluation(
     print("Fairness Evaluation")
     print("=" * 80)
 
-    from slices.eval.fairness_evaluator import FairnessEvaluator
+    from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
     from slices.eval.inference import run_inference
 
     predictions, labels_tensor, all_stay_ids = run_inference(
@@ -375,16 +375,8 @@ def run_fairness_evaluation(
     evaluator.print_report(fairness_report)
 
     if logger:
-        for attr, metrics in fairness_report.items():
-            for metric_name, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    logger.experiment.summary[f"fairness/{attr}/{metric_name}"] = value
-                elif isinstance(value, dict):
-                    for sub_key, sub_val in value.items():
-                        if isinstance(sub_val, (int, float)):
-                            logger.experiment.summary[
-                                f"fairness/{attr}/{metric_name}/{sub_key}"
-                            ] = sub_val
+        for key, value in flatten_fairness_report(fairness_report).items():
+            logger.experiment.summary[key] = value
 
     return fairness_report
 

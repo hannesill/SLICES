@@ -140,7 +140,7 @@ chmod +x "$runner_script"
 status_cmd=(
   bash
   -lc
-  "cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; python scripts/run_experiments.py status; sleep $(printf "%q" "$STATUS_INTERVAL"); done"
+  "cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; uv run python scripts/run_experiments.py status; sleep $(printf "%q" "$STATUS_INTERVAL"); done"
 )
 printf -v status_line "%q " "${status_cmd[@]}"
 

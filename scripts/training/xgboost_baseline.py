@@ -256,7 +256,7 @@ def main(cfg: DictConfig) -> None:
         print("5. Fairness Evaluation")
         print("=" * 80)
 
-        from slices.eval.fairness_evaluator import FairnessEvaluator
+        from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
 
         # Get stay_ids for test set
         test_stay_ids = [datamodule.dataset.stay_ids[i] for i in datamodule.test_indices]
@@ -302,13 +302,7 @@ def main(cfg: DictConfig) -> None:
         )
         run.summary.update(metrics)
         if fairness_report:
-            run.summary.update(
-                {
-                    f"fairness/{k}": v
-                    for k, v in fairness_report.items()
-                    if isinstance(v, (int, float))
-                }
-            )
+            run.summary.update(flatten_fairness_report(fairness_report))
         wandb.finish()
 
     # =========================================================================
