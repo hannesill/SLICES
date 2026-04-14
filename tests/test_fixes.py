@@ -588,6 +588,12 @@ class TestFairnessRevisionScoping:
 
         assert excinfo.value.code == 2
 
+    def test_default_core_sprints_include_sprint12(self):
+        """The standalone thesis fairness corpus should include Sprint 12."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        assert "12" in mod.CORE_SPRINTS
+
     def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
         """A single revision should be sent as a W&B tag filter."""
         mod = importlib.import_module("scripts.eval.evaluate_fairness")
@@ -773,6 +779,44 @@ class TestFairnessRevisionScoping:
 
         assert "scripts/eval/evaluate_fairness.py" in runner_text
         assert "--revision thesis-v2" in runner_text
+
+    def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
+        """The status pane should use uv-managed Python."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux_log = tmp_path / "tmux.log"
+        tmux_script = bin_dir / "tmux"
+        tmux_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf \'%s\\n\' "$*" >> "$TMUX_LOG"\n'
+            'if [ "$1" = "has-session" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        tmux_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["TMUX_LOG"] = str(tmux_log)
+        env["SESSION_NAME"] = "test-session"
+        env["RUN_EXPORT"] = "0"
+
+        result = subprocess.run(
+            ["bash", "scripts/launch_thesis_tmux.sh"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "uv\\ run\\ python\\ scripts/run_experiments.py\\ status" in tmux_log.read_text()
 
 
 # ============================================================================

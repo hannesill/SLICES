@@ -7,7 +7,7 @@ This module provides:
 - Imputation evaluation for SSL encoder quality assessment
 """
 
-from slices.eval.fairness_evaluator import FairnessEvaluator
+from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
 from slices.eval.imputation import ImputationEvaluator
 from slices.eval.inference import run_inference
 from slices.eval.metrics import (
@@ -28,6 +28,7 @@ __all__ = [
     "build_metrics",
     "get_default_metrics",
     "FairnessEvaluator",
+    "flatten_fairness_report",
     "ImputationEvaluator",
     "bonferroni_correction",
     "bootstrap_ci",

@@ -122,7 +122,9 @@ class ICUDataset(Dataset):
             task_name: Name of the task for label extraction (e.g., 'mortality_24h').
                       If None, no labels are returned.
             seq_length: Override sequence length (uses metadata default if None).
-            normalize: Whether to normalize features (z-score per feature).
+            normalize: Whether to z-score features before imputation. When False,
+                      data remains in original units and missing values are
+                      imputed from the available feature means.
             train_indices: Optional list of indices for training set. If provided,
                           normalization statistics are computed only on these samples.
                           This prevents data leakage from val/test sets.
@@ -321,7 +323,7 @@ class ICUDataset(Dataset):
         n_samples = timeseries_tensor.shape[0]
         logger.info(f"Preprocessing {n_samples:,} samples...")
 
-        # Step 2: Compute normalization statistics
+        # Step 2: Compute preprocessing statistics used for normalization/imputation
         self.feature_means = torch.zeros(self.n_features)
         self.feature_stds = torch.ones(self.n_features)
 
@@ -347,6 +349,18 @@ class ICUDataset(Dataset):
             raise ValueError(
                 "train_indices must be provided when normalize=True to prevent data leakage. "
                 "Pass train_indices from your data splits, or set normalize=False."
+            )
+        else:
+            all_indices = list(range(n_samples))
+            self.feature_means, self.feature_stds = compute_normalization_stats(
+                timeseries_tensor,
+                masks_tensor,
+                all_indices,
+                self.n_features,
+                normalize=False,
+            )
+            logger.debug(
+                "Computed feature means on the loaded dataset for normalize=False imputation"
             )
 
         # Step 3: Normalize then impute missing values

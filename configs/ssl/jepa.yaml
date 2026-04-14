@@ -1,9 +1,9 @@
 # @package ssl
 # JEPA (Joint-Embedding Predictive Architecture) SSL Configuration
 #
-# Observation-level tokenization: same masking as MAE, but predicts
-# latent representations (d_model vectors) instead of raw input values.
-# Uses EMA target encoder for stable training targets.
+# Timestep-level tokenization: same masking interface as MAE, but predicts
+# latent timestep representations (d_model vectors) instead of raw features.
+# Uses an EMA target encoder to produce stable teacher targets.
 #
 # Key difference from MAE: latent-space prediction (not input-space)
 # Key difference from Contrastive: local positional prediction (not global invariance)

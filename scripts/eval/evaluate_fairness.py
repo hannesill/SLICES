@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
+from slices.eval.fairness_evaluator import flatten_fairness_report
 
 log = logging.getLogger("evaluate_fairness")
 
@@ -50,7 +51,7 @@ log = logging.getLogger("evaluate_fairness")
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "13"]
+CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "12", "13"]
 DEFAULT_PHASES = ["finetune", "supervised"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 
@@ -440,23 +441,6 @@ def evaluate_run_fairness(
     )
     report = evaluator.evaluate(predictions, labels, stay_ids)
     return report
-
-
-def flatten_fairness_report(report: dict[str, Any]) -> dict[str, Any]:
-    """Flatten nested fairness report into flat fairness/* keys for W&B.
-
-    Mirrors the flattening in run_fairness_evaluation() (training/utils.py).
-    """
-    flat: dict[str, Any] = {}
-    for attr, metrics in report.items():
-        for metric_name, value in metrics.items():
-            if isinstance(value, (int, float)):
-                flat[f"fairness/{attr}/{metric_name}"] = value
-            elif isinstance(value, dict):
-                for sub_key, sub_val in value.items():
-                    if isinstance(sub_val, (int, float)):
-                        flat[f"fairness/{attr}/{metric_name}/{sub_key}"] = sub_val
-    return flat
 
 
 # ---------------------------------------------------------------------------

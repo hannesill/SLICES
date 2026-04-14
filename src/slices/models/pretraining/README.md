@@ -6,11 +6,12 @@ This module implements various SSL objectives for pretraining on unlabeled ICU t
 
 ### MAE (Masked Autoencoder)
 
-Learns representations by masking portions of the input and reconstructing them.
+Learns representations by masking timestep tokens and reconstructing the masked
+features from the remaining context.
 
 **Key Features**:
-- 4 masking strategies: random, block, timestep, feature
-- Respects observation mask (ICU data-aware)
+- Timestep-level masking aligned with the benchmark encoder
+- Obs-aware tokenization that embeds values together with the observation mask
 - Lightweight transformer decoder
 - Configurable mask ratio and decoder architecture
 
@@ -19,8 +20,7 @@ Learns representations by masking portions of the input and reconstructing them.
 from slices.models.pretraining import MAEConfig, MAEObjective
 
 mae_config = MAEConfig(
-    mask_ratio=0.15,
-    mask_strategy="block",
+    mask_ratio=0.5,
     decoder_d_model=64,
     decoder_n_layers=2,
 )
@@ -67,7 +67,7 @@ pretraining/
 ## Requirements
 
 All SSL objectives require:
-- Encoder with `pooling="none"` (for per-timestep outputs)
+- Encoder with `pooling="none"` and `obs_aware=True`
 - Input shape: `(B, T, D)`
 - Observation mask shape: `(B, T, D)`
 

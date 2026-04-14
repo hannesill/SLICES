@@ -521,4 +521,4 @@ Later sprints reuse runs from earlier sprints as comparison baselines. To enable
 | Compute budget exceeded | Sprint ordering ensures usable results at each checkpoint |
 | Shared hyperparameters unfair to one paradigm | LR sensitivity (Sprint 1b) and mask ratio sensitivity (Sprint 1c) validate that rankings are robust to shared hyperparameter choices |
 | Reviewer requests more seeds | Sprint `10` expands the main matrix to 5 seeds, and Sprints `7p`/`11`/`12`/`13` keep the same 4 d.f. footing for variance estimates |
-| AKI label leakage | Fixed: forward-looking prediction window (hours 48–72) prevents model from seeing creatinine values used for KDIGO label construction |
+| AKI label leakage | Fixed: forward-looking prediction window (hours 24–48) prevents model from seeing creatinine values used for KDIGO label construction |

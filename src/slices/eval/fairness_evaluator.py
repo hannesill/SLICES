@@ -12,6 +12,7 @@ Race handling follows the thesis plan:
 
 import logging
 import re
+from numbers import Real
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
@@ -26,6 +27,24 @@ from slices.eval.fairness import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def flatten_fairness_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a nested fairness report into W&B-safe ``fairness/*`` keys."""
+
+    flat: dict[str, Any] = {}
+
+    def _flatten(prefix: str, value: Any) -> None:
+        if isinstance(value, Real) and not isinstance(value, bool):
+            flat[prefix] = value
+        elif isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                _flatten(f"{prefix}/{sub_key}", sub_value)
+
+    for attr, metrics in report.items():
+        _flatten(f"fairness/{attr}", metrics)
+
+    return flat
 
 
 class FairnessEvaluator:

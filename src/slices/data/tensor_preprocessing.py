@@ -235,8 +235,8 @@ def apply_normalization_and_imputation(
     """Normalize then impute missing values (Step 3 of preprocessing).
 
     When normalize=True: z-score normalize, then zero-fill (0 = population mean).
-    When normalize=False: impute with feature means (avoids physiologically
-    impossible values like 0 heart rate).
+    When normalize=False: impute with feature means when available. If callers
+    provide zero means, this degenerates to an explicit zero-fill fallback.
 
     Args:
         timeseries_tensor: Tensor to normalize (n_samples, seq_len, n_features).
@@ -258,9 +258,8 @@ def apply_normalization_and_imputation(
         # This is the most neutral default: "no information, assume population average."
         timeseries_tensor = torch.nan_to_num(timeseries_tensor, nan=0.0)
     else:
-        # Without normalization, impute with feature means (not 0).
-        # Zero-filling in original space creates physiologically impossible values
-        # (e.g., 0 heart rate, 0 blood pressure). Feature means are a better default.
+        # Without normalization, keep data in original units and impute each
+        # missing value with the corresponding feature mean.
         for f in range(n_features):
             nan_mask = torch.isnan(timeseries_tensor[:, :, f])
             timeseries_tensor[:, :, f][nan_mask] = feature_means[f]

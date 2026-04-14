@@ -159,8 +159,8 @@ class TestICUDataset:
         assert isinstance(sample["stay_id"], int)
         assert sample["label"].dtype == torch.float32
 
-    def test_zero_fill_after_preprocessing(self, mock_extracted_data):
-        """Test that zero-fill removes all NaN values."""
+    def test_mean_imputation_after_preprocessing(self, mock_extracted_data):
+        """Missing values should be imputed with feature means when normalize=False."""
         dataset = ICUDataset(
             mock_extracted_data,
             task_name="mortality_24h",
@@ -169,14 +169,29 @@ class TestICUDataset:
 
         sample = dataset[0]
 
-        # After zero-fill, there should be no NaN values
+        # After imputation, there should be no NaN values
         assert not torch.isnan(sample["timeseries"]).any()
 
-        # Missing positions (mask=False) should be zero
-        mask = sample["mask"]
-        missing_values = sample["timeseries"][~mask]
-        if len(missing_values) > 0:
-            assert (missing_values == 0.0).all()
+        # Missing positions should receive the per-feature imputation value.
+        missing_mask = ~sample["mask"]
+        if missing_mask.any():
+            expected = dataset.feature_means.unsqueeze(0).expand(dataset.seq_length, -1)
+            assert torch.allclose(sample["timeseries"][missing_mask], expected[missing_mask])
+
+    def test_train_scoped_imputation_means_are_used_when_available(self, mock_extracted_data):
+        """normalize=False should still use train-split means when train_indices are provided."""
+        dataset = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+            train_indices=[0, 1, 2, 3],
+        )
+
+        sample = dataset[5]
+        missing_mask = ~sample["mask"]
+        if missing_mask.any():
+            expected = dataset.feature_means.unsqueeze(0).expand(dataset.seq_length, -1)
+            assert torch.allclose(sample["timeseries"][missing_mask], expected[missing_mask])
 
     def test_normalization(self, mock_extracted_data):
         """Test that normalization is applied correctly."""
