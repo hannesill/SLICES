@@ -187,6 +187,21 @@ class TestContrastiveForward:
         assert metrics["contrastive_n_visible_view1"] > 0
         assert metrics["contrastive_n_visible_view2"] > 0
 
+    def test_empty_timesteps_are_excluded_from_visible_counts(self, encoder, contrastive_config):
+        """Contrastive views should ignore hours with no observed variables."""
+        obj = ContrastiveObjective(encoder, contrastive_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 2, :4] = True
+        obs_mask[:, 6, :4] = True
+
+        _, metrics = obj(x, obs_mask)
+
+        assert metrics["contrastive_n_visible_view1"] <= 2
+        assert metrics["contrastive_n_visible_view2"] <= 2
+
 
 # =============================================================================
 # NT-Xent loss tests

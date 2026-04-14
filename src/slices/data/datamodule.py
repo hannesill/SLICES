@@ -250,21 +250,27 @@ class ICUDataModule(L.LightningDataModule):
                 "This indicates an index consistency bug."
             )
 
-        # Save split information for reproducibility
-        logger.debug("[Step 3/3] Saving split information")
-        save_split_info(
-            self.processed_dir,
-            self.dataset,
-            self.full_train_indices,
-            self.val_indices,
-            self.test_indices,
-            self.seed,
-            self.train_ratio,
-            self.val_ratio,
-            self.test_ratio,
-            train_subset_indices=self.train_indices,
-            label_fraction=self.label_fraction,
-        )
+        # Save split information only when the canonical prep artifact is absent.
+        # Prepared datasets already own a stable splits.yaml, and downstream runs
+        # must not rewrite it after task filtering or label-efficiency subsampling.
+        logger.debug("[Step 3/3] Preserving canonical split information")
+        splits_path = self.processed_dir / "splits.yaml"
+        if not splits_path.exists():
+            save_split_info(
+                self.processed_dir,
+                self.dataset,
+                self.full_train_indices,
+                self.val_indices,
+                self.test_indices,
+                self.seed,
+                self.train_ratio,
+                self.val_ratio,
+                self.test_ratio,
+                train_subset_indices=self.train_indices,
+                label_fraction=self.label_fraction,
+            )
+        else:
+            logger.debug("Canonical splits.yaml already exists; leaving it unchanged")
 
         # Free temporary data used only during setup — Dataset holds its own copies
         del self._static_df, self._labels_df

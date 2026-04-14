@@ -26,8 +26,8 @@ import yaml
 from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 from slices.data.preparation import prepare_processed_dataset
 
-# Offset applied to stay_id and patient_id for the second dataset
-# to avoid collisions. Large enough to exceed any real ID range.
+# Offset applied to stay_id for the second dataset when needed to avoid
+# collisions. Large enough to exceed any real ID range.
 DATASET_ID_OFFSET = 100_000_000
 
 
@@ -53,19 +53,31 @@ def load_dataset(processed_dir: Path) -> dict:
 
 
 def offset_ids(df: pl.DataFrame, offset: int) -> pl.DataFrame:
-    """Add offset to stay_id and patient_id columns."""
+    """Add an offset to the stay_id column when collision resolution is needed."""
     exprs = []
     if "stay_id" in df.columns:
         exprs.append((pl.col("stay_id") + offset).alias("stay_id"))
-    if "patient_id" in df.columns:
-        exprs.append((pl.col("patient_id") + offset).alias("patient_id"))
     if exprs:
         return df.with_columns(exprs)
     return df
 
 
+def namespace_patient_ids(df: pl.DataFrame, dataset_name: str) -> pl.DataFrame:
+    """Namespace patient_id by source dataset to preserve combined split integrity."""
+    if "patient_id" not in df.columns:
+        return df
+
+    patient_expr = (
+        pl.when(pl.col("patient_id").is_null())
+        .then(None)
+        .otherwise(pl.format("{}:{}", pl.lit(dataset_name), pl.col("patient_id").cast(pl.Utf8)))
+        .alias("patient_id")
+    )
+    return df.with_columns(patient_expr)
+
+
 def validate_no_id_collision(static_a: pl.DataFrame, static_b: pl.DataFrame) -> None:
-    """Verify no stay_id overlap between two datasets."""
+    """Verify no stay_id or patient_id overlap between two datasets."""
     ids_a = set(static_a["stay_id"].to_list())
     ids_b = set(static_b["stay_id"].to_list())
     overlap = ids_a & ids_b
@@ -75,6 +87,16 @@ def validate_no_id_collision(static_a: pl.DataFrame, static_b: pl.DataFrame) -> 
             f"(e.g., {list(overlap)[:5]}). This should not happen after "
             "applying the dataset offset."
         )
+
+    if "patient_id" in static_a.columns and "patient_id" in static_b.columns:
+        patients_a = {str(value) for value in static_a["patient_id"].drop_nulls().to_list()}
+        patients_b = {str(value) for value in static_b["patient_id"].drop_nulls().to_list()}
+        patient_overlap = patients_a & patients_b
+        if patient_overlap:
+            raise ValueError(
+                f"patient_id collision detected after namespacing: {len(patient_overlap)} "
+                f"overlapping IDs (e.g., {list(patient_overlap)[:5]})."
+            )
 
 
 def validate_feature_compatibility(meta_a: dict, meta_b: dict) -> None:
@@ -234,6 +256,13 @@ def main():
     data_b = load_dataset(source_b)
     print(f"  {len(data_b['static'])} stays, {len(data_b['timeseries'])} timeseries rows")
 
+    # Namespace patient_id for both datasets up front so patient-level split
+    # generation cannot merge unrelated cross-dataset patients with the same
+    # raw identifier.
+    data_a["static"] = namespace_patient_ids(data_a["static"], names[0])
+    data_b["static"] = namespace_patient_ids(data_b["static"], names[1])
+    print("  Patient IDs namespaced by source dataset.")
+
     # Validate feature compatibility
     print("\nValidating feature compatibility...")
     validate_feature_compatibility(data_a["metadata"], data_b["metadata"])
@@ -387,6 +416,11 @@ def main():
             names[1]: len(data_b["static"]),
         },
         "id_offset_applied": DATASET_ID_OFFSET if natural_overlap else 0,
+        "patient_id_namespaced": True,
+        "patient_id_namespace_by_dataset": {
+            names[0]: names[0],
+            names[1]: names[1],
+        },
     }
 
     # Save

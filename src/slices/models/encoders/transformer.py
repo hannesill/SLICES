@@ -287,13 +287,14 @@ class TransformerEncoder(BaseEncoder):
         # Add sinusoidal time PE
         tokens = tokens + self.time_pe[:T].unsqueeze(0)  # (B, T, d_model)
 
-        # Fixed-length: all timesteps valid
-        padding_mask = torch.ones(B, T, dtype=torch.bool, device=device)
+        # Fully unobserved hours are not eligible SSL tokens.
+        padding_mask = obs_mask.any(dim=-1)
 
         token_info = {
             "timestep_idx": torch.arange(T, device=device).unsqueeze(0).expand(B, -1),
             "values": x,
             "obs_mask": obs_mask,
+            "valid_timestep_mask": padding_mask,
         }
 
         return tokens, padding_mask, token_info

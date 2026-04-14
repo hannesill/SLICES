@@ -167,28 +167,57 @@ class ContrastiveObjective(BaseSSLObjective):
 
         # 1. Tokenize (shared between both views)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
+        valid_timestep_mask = token_info["valid_timestep_mask"]
 
         # 2. Create two views via timestep masks
-        ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask_1 = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         if self.config.complementary_masks:
             ssl_mask_2 = ~ssl_mask_1
         else:
-            ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+            ssl_mask_2 = create_timestep_mask(
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                valid_timestep_mask=valid_timestep_mask,
+            )
+
+        effective_mask_1 = ssl_mask_1 & valid_timestep_mask
+        effective_mask_2 = ssl_mask_2 & valid_timestep_mask
 
         # 3. Encode both views
-        vis_tokens_1, vis_padding_1 = extract_visible_timesteps(tokens, ssl_mask_1)
+        vis_tokens_1, vis_padding_1 = extract_visible_timesteps(
+            tokens,
+            ssl_mask_1,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         encoded_1 = self.encoder.encode(vis_tokens_1, vis_padding_1)
 
-        vis_tokens_2, vis_padding_2 = extract_visible_timesteps(tokens, ssl_mask_2)
+        vis_tokens_2, vis_padding_2 = extract_visible_timesteps(
+            tokens,
+            ssl_mask_2,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         encoded_2 = self.encoder.encode(vis_tokens_2, vis_padding_2)
 
         if self.config.mode == "temporal":
             # 4a. Scatter encoded tokens back to full (B, T, d) grid
-            full_1 = self._scatter_to_full(encoded_1, ssl_mask_1, T)
-            full_2 = self._scatter_to_full(encoded_2, ssl_mask_2, T)
+            full_1 = self._scatter_to_full(encoded_1, effective_mask_1, T)
+            full_2 = self._scatter_to_full(encoded_2, effective_mask_2, T)
 
             # 5a. Temporal NT-Xent on overlapping timesteps
-            loss, metrics = self._temporal_nt_xent_loss(full_1, full_2, ssl_mask_1, ssl_mask_2)
+            loss, metrics = self._temporal_nt_xent_loss(
+                full_1,
+                full_2,
+                effective_mask_1,
+                effective_mask_2,
+            )
         else:
             # 4b. Instance mode: mean-pool -> project -> instance NT-Xent
             pooled_1 = self._mean_pool(encoded_1, vis_padding_1)
@@ -197,7 +226,7 @@ class ContrastiveObjective(BaseSSLObjective):
             z1 = self.projection_head(pooled_1)  # (B, proj_dim)
             z2 = self.projection_head(pooled_2)  # (B, proj_dim)
 
-            loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2)
+            loss, metrics = self._nt_xent_loss(z1, z2, effective_mask_1, effective_mask_2)
 
         return loss, metrics
 

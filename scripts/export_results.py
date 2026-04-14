@@ -3,11 +3,13 @@
 Canonical results export pipeline for SLICES.
 
 Pulls all experiment runs from W&B, extracts config + test metrics, and produces
-two structured parquet files:
+three structured parquet files:
 
   - results/per_seed_results.parquet   — one row per W&B run (~3000 rows)
   - results/aggregated_results.parquet — one row per unique config (~600 rows),
                                          with mean/std/min/max across seeds
+  - results/statistical_tests.parquet  — pairwise Wilcoxon + Bonferroni +
+                                         Cohen's d significance table
 
 Both files include wandb run IDs for traceability back to W&B.
 
@@ -27,10 +29,16 @@ import os
 import re
 import sys
 import time
+from itertools import combinations
 from pathlib import Path
 
 import pandas as pd
 import wandb
+from slices.eval.statistical import (
+    bonferroni_correction,
+    cohens_d,
+    paired_wilcoxon_signed_rank,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -171,6 +179,20 @@ MODEL_VARIANTS = {
     (64, 2): "default",
     (128, 4): "medium",
     (256, 4): "large",
+}
+
+PRIMARY_TEST_METRIC_BY_TASK = {
+    "mortality_24h": "test/auprc",
+    "mortality_hospital": "test/auprc",
+    "mortality": "test/auprc",
+    "aki_kdigo": "test/auprc",
+    "los_remaining": "test/mae",
+}
+
+LOWER_IS_BETTER_METRICS = {
+    "test/loss",
+    "test/mae",
+    "test/mse",
 }
 
 # Phases that correspond to evaluation runs (not pretraining).
@@ -754,6 +776,168 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     return agg_df
 
 
+def _primary_metric_for_task(task_name: str | None) -> str | None:
+    """Return the thesis-primary test metric for a downstream task."""
+    if task_name is None:
+        return None
+    if task_name in PRIMARY_TEST_METRIC_BY_TASK:
+        return PRIMARY_TEST_METRIC_BY_TASK[task_name]
+    if task_name.startswith("los"):
+        return "test/mae"
+    return "test/auprc"
+
+
+def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Build pairwise paradigm significance tables from per-seed results.
+
+    Comparisons are scoped by the canonical experiment fingerprint with
+    `paradigm` and `task` removed, then pooled across matched `(task, seed)`
+    pairs for tasks that share the same primary metric. This matches the thesis
+    plan's "paired across seeds and tasks" intent without mixing incompatible
+    scales such as AUPRC and MAE in the same test.
+    """
+    if per_seed_df.empty or "experiment_type" not in per_seed_df.columns:
+        return pd.DataFrame()
+
+    rows = []
+
+    for experiment_type in sorted(per_seed_df["experiment_type"].dropna().unique()):
+        subset = per_seed_df[per_seed_df["experiment_type"] == experiment_type].copy()
+        if subset.empty or "paradigm" not in subset.columns or "task" not in subset.columns:
+            continue
+
+        subset["primary_metric_name"] = subset["task"].map(_primary_metric_for_task)
+        subset["primary_metric_value"] = [
+            row.get(metric_name, float("nan")) if metric_name is not None else float("nan")
+            for _, row, metric_name in zip(
+                subset.index,
+                subset.to_dict("records"),
+                subset["primary_metric_name"],
+                strict=True,
+            )
+        ]
+
+        fingerprint = _fingerprint_for_experiment_type(experiment_type)
+        scope_cols = [
+            c for c in fingerprint if c in subset.columns and c not in {"paradigm", "task"}
+        ]
+        if "primary_metric_name" not in scope_cols:
+            scope_cols.append("primary_metric_name")
+
+        if not scope_cols:
+            continue
+
+        work = _fillna_for_grouping(subset, scope_cols)
+        for scope_key, scope_group in work.groupby(scope_cols, dropna=False):
+            if not isinstance(scope_key, tuple):
+                scope_key = (scope_key,)
+
+            scope = dict(zip(scope_cols, scope_key))
+            for col, value in list(scope.items()):
+                if value == "__none__":
+                    scope[col] = None
+
+            paradigms = sorted(
+                paradigm
+                for paradigm in scope_group["paradigm"].dropna().unique().tolist()
+                if paradigm != "__none__"
+            )
+            if len(paradigms) < 2:
+                continue
+
+            higher_is_better = scope.get("primary_metric_name") not in LOWER_IS_BETTER_METRICS
+            family_rows = []
+
+            for paradigm_a, paradigm_b in combinations(paradigms, 2):
+                pairs_a = scope_group[scope_group["paradigm"] == paradigm_a][
+                    ["task", "seed", "primary_metric_value"]
+                ].rename(columns={"primary_metric_value": "value_a"})
+                pairs_b = scope_group[scope_group["paradigm"] == paradigm_b][
+                    ["task", "seed", "primary_metric_value"]
+                ].rename(columns={"primary_metric_value": "value_b"})
+
+                paired = pairs_a.merge(pairs_b, on=["task", "seed"], how="inner")
+                paired = paired.dropna(subset=["value_a", "value_b"])
+                if paired.empty:
+                    continue
+
+                values_a = paired["value_a"].astype(float).tolist()
+                values_b = paired["value_b"].astype(float).tolist()
+                if higher_is_better:
+                    improvement = [a - b for a, b in zip(values_a, values_b, strict=True)]
+                else:
+                    improvement = [b - a for a, b in zip(values_a, values_b, strict=True)]
+
+                wilcoxon = paired_wilcoxon_signed_rank(improvement, [0.0] * len(improvement))
+                effect_size = cohens_d(improvement, [0.0] * len(improvement), paired=True)
+                mean_improvement = sum(improvement) / len(improvement)
+                median_improvement = float(pd.Series(improvement).median())
+                better_paradigm = (
+                    paradigm_a
+                    if mean_improvement > 0
+                    else paradigm_b if mean_improvement < 0 else None
+                )
+
+                row = {
+                    **scope,
+                    "paradigm_a": paradigm_a,
+                    "paradigm_b": paradigm_b,
+                    "n_pairs": int(len(paired)),
+                    "n_tasks": int(paired["task"].nunique()),
+                    "task_list": json.dumps(sorted(paired["task"].unique().tolist())),
+                    "seed_list": json.dumps(
+                        sorted(paired["seed"].dropna().astype(int).unique().tolist())
+                    ),
+                    "score_a_mean": float(sum(values_a) / len(values_a)),
+                    "score_b_mean": float(sum(values_b) / len(values_b)),
+                    "mean_improvement": float(mean_improvement),
+                    "median_improvement": median_improvement,
+                    "better_paradigm": better_paradigm,
+                    "wilcoxon_statistic": wilcoxon["statistic"],
+                    "wilcoxon_z": wilcoxon["z_score"],
+                    "p_value": wilcoxon["p_value"],
+                    "n_nonzero_pairs": int(wilcoxon["n_nonzero_pairs"]),
+                    "cohens_d": float(effect_size),
+                    "significant_at_005": bool(
+                        not math.isnan(wilcoxon["p_value"]) and wilcoxon["p_value"] < 0.05
+                    ),
+                }
+                family_rows.append(row)
+
+            if not family_rows:
+                continue
+
+            corrected = bonferroni_correction([row["p_value"] for row in family_rows])
+            for row, corrected_p in zip(family_rows, corrected, strict=True):
+                row["p_value_bonferroni"] = corrected_p
+                row["significant_bonferroni_005"] = bool(
+                    not math.isnan(corrected_p) and corrected_p < 0.05
+                )
+                rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    stats_df = pd.DataFrame(rows)
+    sort_cols = [
+        col
+        for col in [
+            "experiment_type",
+            "dataset",
+            "protocol",
+            "phase",
+            "label_fraction",
+            "primary_metric_name",
+            "paradigm_a",
+            "paradigm_b",
+        ]
+        if col in stats_df.columns
+    ]
+    if sort_cols:
+        stats_df = stats_df.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+    return stats_df
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -912,6 +1096,10 @@ def main():
     aggregated_df = build_aggregated_df(per_seed_df)
     print(f"  Shape: {aggregated_df.shape}", file=sys.stderr)
 
+    print("\nBuilding statistical significance table...", file=sys.stderr)
+    statistical_df = build_statistical_tests_df(per_seed_df)
+    print(f"  Shape: {statistical_df.shape}", file=sys.stderr)
+
     # Validate
     warnings = validate(per_seed_df, aggregated_df, expected_core_seeds=args.expected_core_seeds)
     for w in warnings:
@@ -920,17 +1108,23 @@ def main():
     # Save
     per_seed_path = output_dir / "per_seed_results.parquet"
     aggregated_path = output_dir / "aggregated_results.parquet"
+    statistical_path = output_dir / "statistical_tests.parquet"
 
     per_seed_df.to_parquet(per_seed_path, index=False)
     aggregated_df.to_parquet(aggregated_path, index=False)
+    statistical_df.to_parquet(statistical_path, index=False)
 
     print("\nSaved:", file=sys.stderr)
     print(f"  {per_seed_path} ({len(per_seed_df)} rows)", file=sys.stderr)
     print(f"  {aggregated_path} ({len(aggregated_df)} rows)", file=sys.stderr)
+    print(f"  {statistical_path} ({len(statistical_df)} rows)", file=sys.stderr)
 
     # Print quick summary to stdout for piping
     print("\n--- Quick Summary ---")
-    print(f"Runs: {len(per_seed_df)}, Configs: {len(aggregated_df)}")
+    print(
+        f"Runs: {len(per_seed_df)}, Configs: {len(aggregated_df)}, "
+        f"StatTests: {len(statistical_df)}"
+    )
     if "experiment_type" in aggregated_df.columns:
         for etype, group in aggregated_df.groupby("experiment_type"):
             seed_dist = dict(group["n_seeds"].value_counts().sort_index())

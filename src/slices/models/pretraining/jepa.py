@@ -218,17 +218,34 @@ class JEPAObjective(BaseSSLObjective):
 
         # 1. Tokenize timesteps (online encoder)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
+        valid_timestep_mask = token_info["valid_timestep_mask"]
 
         # 2. Create SSL mask on timesteps
         if self.config.mask_strategy == "block":
             ssl_mask = create_block_timestep_mask(
-                B, T, self.config.mask_ratio, device, n_blocks=self.config.mask_n_blocks
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                n_blocks=self.config.mask_n_blocks,
+                valid_timestep_mask=valid_timestep_mask,
             )
         else:
-            ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
+            ssl_mask = create_timestep_mask(
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                valid_timestep_mask=valid_timestep_mask,
+            )
+        effective_visible_mask = ssl_mask & valid_timestep_mask
 
         # 3. Extract visible tokens
-        visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
+        visible_tokens, vis_padding = extract_visible_timesteps(
+            tokens,
+            ssl_mask,
+            valid_timestep_mask=valid_timestep_mask,
+        )
 
         # 4. Encode visible tokens only (online encoder)
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
@@ -244,13 +261,18 @@ class JEPAObjective(BaseSSLObjective):
         # 6. Predictor predicts target representations
         predicted_repr = self.predictor(
             encoded_visible=encoded_visible,
-            ssl_mask=ssl_mask,
+            ssl_mask=effective_visible_mask,
             token_info=token_info,
             n_timesteps=T,
         )  # (B, T, d_encoder)
 
         # 7. Compute loss on masked positions
-        loss, metrics = self._compute_loss(predicted_repr, target_repr, ssl_mask)
+        loss, metrics = self._compute_loss(
+            predicted_repr,
+            target_repr,
+            ssl_mask,
+            valid_timestep_mask,
+        )
 
         return loss, metrics
 
@@ -259,6 +281,7 @@ class JEPAObjective(BaseSSLObjective):
         predicted: torch.Tensor,
         target: torch.Tensor,
         ssl_mask: torch.Tensor,
+        valid_timestep_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute loss on masked timestep representations.
 
@@ -270,14 +293,14 @@ class JEPAObjective(BaseSSLObjective):
         Returns:
             (loss, metrics_dict)
         """
-        # Loss only on masked timesteps
-        loss_mask = ~ssl_mask  # (B, T)
+        # Loss only on masked timesteps that had at least one observation.
+        loss_mask = (~ssl_mask) & valid_timestep_mask  # (B, T)
 
         # Collapse monitoring metrics (computed on raw target before normalization)
         with torch.no_grad():
             B, T = ssl_mask.shape
             n_masked = loss_mask.sum().item()
-            n_visible = ssl_mask.sum().item()
+            n_visible = (ssl_mask & valid_timestep_mask).sum().item()
 
             # Flatten to (B*T, d_encoder) for batch-level statistics
             target_flat = target.reshape(-1, self.d_encoder)
@@ -318,7 +341,7 @@ class JEPAObjective(BaseSSLObjective):
             metrics = {
                 "jepa_loss": loss.detach(),
                 "ssl_loss": loss.detach(),
-                "jepa_mask_ratio_actual": n_masked / max(B * T, 1),
+                "jepa_mask_ratio_actual": n_masked / max(valid_timestep_mask.sum().item(), 1),
                 "jepa_n_timesteps": T,
                 "jepa_n_visible_per_sample": n_visible / B,
                 "jepa_n_masked_per_sample": n_masked / B,

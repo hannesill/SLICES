@@ -380,6 +380,22 @@ class TestCombinedDatasetValidation:
         with pytest.raises(ValueError, match="preprocessing invariants"):
             mod.validate_feature_compatibility(meta_a, meta_b)
 
+    def test_patient_ids_are_namespaced_even_without_stay_collision(self):
+        """Combined setup should namespace patient IDs independently of stay_id overlap."""
+        import importlib
+
+        mod = importlib.import_module("scripts.preprocessing.create_combined_dataset")
+
+        static_a = pl.DataFrame({"stay_id": [1], "patient_id": [10]})
+        static_b = pl.DataFrame({"stay_id": [2], "patient_id": [10]})
+
+        namespaced_a = mod.namespace_patient_ids(static_a, "miiv")
+        namespaced_b = mod.namespace_patient_ids(static_b, "eicu")
+
+        mod.validate_no_id_collision(namespaced_a, namespaced_b)
+        assert namespaced_a["patient_id"].item() == "miiv:10"
+        assert namespaced_b["patient_id"].item() == "eicu:10"
+
 
 class TestCombinedSetupPath:
     """Regression tests for the combined-dataset setup flow."""
@@ -537,6 +553,8 @@ class TestFairnessRevisionScoping:
     def test_parse_args_accepts_revision_filter(self, monkeypatch):
         """The fairness CLI should expose a revision filter for rerun scoping."""
         mod = importlib.import_module("scripts.eval.evaluate_fairness")
+        monkeypatch.delenv("REVISION", raising=False)
+        monkeypatch.delenv("WANDB_REVISION", raising=False)
 
         monkeypatch.setattr(
             sys,
@@ -546,6 +564,29 @@ class TestFairnessRevisionScoping:
         args = mod.parse_args()
 
         assert args.revision == ["thesis-v1"]
+
+    def test_parse_args_uses_revision_env_when_cli_omits_it(self, monkeypatch):
+        """The standalone script may inherit an explicit revision from the environment."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+        monkeypatch.setenv("REVISION", "thesis-v1")
+        monkeypatch.delenv("WANDB_REVISION", raising=False)
+        monkeypatch.setattr(sys, "argv", ["evaluate_fairness.py"])
+
+        args = mod.parse_args()
+
+        assert args.revision == ["thesis-v1"]
+
+    def test_parse_args_requires_revision_when_no_scope_is_available(self, monkeypatch):
+        """Fail closed instead of running an unscoped fairness sweep."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+        monkeypatch.delenv("REVISION", raising=False)
+        monkeypatch.delenv("WANDB_REVISION", raising=False)
+        monkeypatch.setattr(sys, "argv", ["evaluate_fairness.py"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            mod.parse_args()
+
+        assert excinfo.value.code == 2
 
     def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
         """A single revision should be sent as a W&B tag filter."""
@@ -614,6 +655,80 @@ class TestFairnessRevisionScoping:
         )
 
         assert [run.id for run in filtered] == ["keep_v1", "keep_v2"]
+
+    def test_recorded_best_checkpoint_is_used_for_fairness(self, tmp_path):
+        """Standalone fairness should honor the run's recorded best checkpoint."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        run_dir = tmp_path / "run123" / "checkpoints"
+        run_dir.mkdir(parents=True)
+        best_ckpt = run_dir / "best.ckpt"
+        last_ckpt = run_dir / "last.ckpt"
+        best_ckpt.write_text("best")
+        last_ckpt.write_text("last")
+
+        run = SimpleNamespace(
+            id="run123",
+            config={"output_dir": "outputs/run123"},
+            summary_metrics={
+                "_eval_checkpoint_source": "best",
+                "_best_ckpt_path": "outputs/run123/checkpoints/best.ckpt",
+            },
+        )
+
+        ckpt_path, source = mod.resolve_evaluation_checkpoint(
+            run,
+            outputs_root=str(tmp_path),
+            task_type="binary",
+        )
+
+        assert ckpt_path == best_ckpt
+        assert source == "recorded_best"
+
+    def test_recorded_final_checkpoint_uses_last_ckpt(self, tmp_path):
+        """Standalone fairness should use last.ckpt when test metrics used the final model."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        run_dir = tmp_path / "run456" / "checkpoints"
+        run_dir.mkdir(parents=True)
+        (run_dir / "last.ckpt").write_text("last")
+
+        run = SimpleNamespace(
+            id="run456",
+            config={"output_dir": "outputs/run456"},
+            summary_metrics={"_eval_checkpoint_source": "final"},
+        )
+
+        ckpt_path, source = mod.resolve_evaluation_checkpoint(
+            run,
+            outputs_root=str(tmp_path),
+            task_type="binary",
+        )
+
+        assert ckpt_path == run_dir / "last.ckpt"
+        assert source == "recorded_final"
+
+    def test_missing_checkpoint_provenance_raises(self, tmp_path):
+        """Runs without recorded evaluation provenance must not use heuristic checkpoint lookup."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        run_dir = tmp_path / "run789" / "checkpoints"
+        run_dir.mkdir(parents=True)
+        (run_dir / "best.ckpt").write_text("best")
+        (run_dir / "last.ckpt").write_text("last")
+
+        run = SimpleNamespace(
+            id="run789",
+            config={"output_dir": "outputs/run789"},
+            summary_metrics={},
+        )
+
+        with pytest.raises(RuntimeError, match="lacks recorded checkpoint provenance"):
+            mod.resolve_evaluation_checkpoint(
+                run,
+                outputs_root=str(tmp_path),
+                task_type="binary",
+            )
 
     def test_tmux_launcher_passes_revision_to_fairness(self, tmp_path):
         """The thesis launcher should thread revision tags through the fairness sweep."""

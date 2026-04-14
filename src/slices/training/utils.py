@@ -369,6 +369,7 @@ def run_fairness_evaluation(
             fairness_cfg.get("protected_attributes", ["gender", "age_group"])
         ),
         min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
+        dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
     )
     fairness_report = evaluator.evaluate(predictions, labels_tensor, all_stay_ids)
     evaluator.print_report(fairness_report)

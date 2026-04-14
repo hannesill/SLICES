@@ -268,6 +268,7 @@ def main(cfg: DictConfig) -> None:
             ),
             min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
             task_type=task_type,
+            dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
         )
 
         if task_type == "regression":

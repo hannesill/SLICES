@@ -1,20 +1,15 @@
-"""Bootstrap confidence intervals and statistical tests for metric comparison.
+"""Bootstrap confidence intervals and paired statistical tests.
 
-Provides non-parametric bootstrap CIs for any torchmetrics-compatible metric,
-and paired bootstrap tests for comparing two models on the same test set.
-
-Example:
-    >>> from torchmetrics import AUROC
-    >>> ci = bootstrap_ci(AUROC(task="binary"), preds, labels)
-    >>> print(f"AUROC: {ci['point']:.3f} ({ci['ci_lower']:.3f}-{ci['ci_upper']:.3f})")
-    >>>
-    >>> p = paired_bootstrap_test(
-    ...     AUROC(task="binary"), preds_a, preds_b, labels
-    ... )
-    >>> print(f"p-value: {p['p_value']:.4f}")
+Provides:
+- non-parametric bootstrap CIs for torchmetrics-compatible metrics
+- paired bootstrap tests on shared test sets
+- paired Wilcoxon signed-rank tests for per-seed / per-task comparisons
+- Bonferroni correction for multiple comparisons
+- paired Cohen's d effect sizes
 """
 
-from typing import Any, Callable, Dict, Optional, Union
+import math
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Union
 
 import torch
 from torchmetrics import Metric
@@ -165,6 +160,141 @@ def paired_bootstrap_test(
     }
 
 
+def paired_wilcoxon_signed_rank(
+    values_a: Sequence[float],
+    values_b: Sequence[float],
+    correction: bool = True,
+) -> Dict[str, float]:
+    """Paired Wilcoxon signed-rank test with tie correction.
+
+    This implementation uses the standard large-sample normal approximation
+    with tie correction. It is sufficient for the thesis export pipeline where
+    comparisons pool multiple tasks x seeds and are primarily used for
+    significance tables rather than exact small-sample inference.
+
+    Args:
+        values_a: First paired sample.
+        values_b: Second paired sample.
+        correction: Whether to apply a 0.5 continuity correction.
+
+    Returns:
+        Dictionary with Wilcoxon statistic, z-score, p-value, and pair counts.
+    """
+    pairs = _finite_pairs(values_a, values_b)
+    n_pairs = len(pairs)
+    if n_pairs == 0:
+        return {
+            "statistic": 0.0,
+            "z_score": 0.0,
+            "p_value": float("nan"),
+            "n_pairs": 0.0,
+            "n_nonzero_pairs": 0.0,
+        }
+
+    diffs = [a - b for a, b in pairs]
+    nonzero_diffs = [diff for diff in diffs if diff != 0.0]
+    n_nonzero = len(nonzero_diffs)
+
+    if n_nonzero == 0:
+        return {
+            "statistic": 0.0,
+            "z_score": 0.0,
+            "p_value": 1.0,
+            "n_pairs": float(n_pairs),
+            "n_nonzero_pairs": 0.0,
+        }
+
+    abs_diffs = [abs(diff) for diff in nonzero_diffs]
+    ranks, tie_counts = _average_ranks(abs_diffs)
+
+    w_plus = sum(rank for rank, diff in zip(ranks, nonzero_diffs) if diff > 0.0)
+    w_minus = sum(rank for rank, diff in zip(ranks, nonzero_diffs) if diff < 0.0)
+    statistic = min(w_plus, w_minus)
+
+    expected = n_nonzero * (n_nonzero + 1) / 4.0
+    variance = n_nonzero * (n_nonzero + 1) * (2 * n_nonzero + 1) / 24.0
+    tie_correction = sum(t * (t + 1) * (2 * t + 1) for t in tie_counts) / 48.0
+    variance -= tie_correction
+
+    if variance <= 0.0:
+        z_score = 0.0
+        p_value = 1.0
+    else:
+        numerator = abs(w_plus - expected)
+        if correction:
+            numerator = max(numerator - 0.5, 0.0)
+        z_score = numerator / math.sqrt(variance)
+        p_value = min(2.0 * _normal_sf(z_score), 1.0)
+
+    return {
+        "statistic": float(statistic),
+        "z_score": float(z_score),
+        "p_value": float(p_value),
+        "n_pairs": float(n_pairs),
+        "n_nonzero_pairs": float(n_nonzero),
+    }
+
+
+def bonferroni_correction(p_values: Sequence[float]) -> list[float]:
+    """Apply Bonferroni correction, preserving NaNs."""
+    finite_count = sum(0 if _is_nan(p) else 1 for p in p_values)
+    if finite_count == 0:
+        return [float("nan") for _ in p_values]
+
+    corrected = []
+    for p in p_values:
+        if _is_nan(p):
+            corrected.append(float("nan"))
+        else:
+            corrected.append(min(float(p) * finite_count, 1.0))
+    return corrected
+
+
+def cohens_d(
+    values_a: Sequence[float],
+    values_b: Sequence[float],
+    paired: bool = False,
+) -> float:
+    """Compute Cohen's d effect size.
+
+    Args:
+        values_a: First sample.
+        values_b: Second sample.
+        paired: When True, compute the paired effect size using the standard
+            deviation of paired differences.
+    """
+    pairs = _finite_pairs(values_a, values_b)
+    if not pairs:
+        return float("nan")
+
+    sample_a = [a for a, _ in pairs]
+    sample_b = [b for _, b in pairs]
+
+    if paired:
+        diffs = [a - b for a, b in pairs]
+        return _cohens_d_from_differences(diffs)
+
+    n_a = len(sample_a)
+    n_b = len(sample_b)
+    if n_a < 2 or n_b < 2:
+        return float("nan")
+
+    mean_a = sum(sample_a) / n_a
+    mean_b = sum(sample_b) / n_b
+    var_a = _sample_variance(sample_a)
+    var_b = _sample_variance(sample_b)
+
+    pooled_var = ((n_a - 1) * var_a + (n_b - 1) * var_b) / max(n_a + n_b - 2, 1)
+    pooled_std = math.sqrt(max(pooled_var, 0.0))
+    if pooled_std == 0.0:
+        diff = mean_a - mean_b
+        if diff == 0.0:
+            return 0.0
+        return math.copysign(float("inf"), diff)
+
+    return (mean_a - mean_b) / pooled_std
+
+
 def _compute_metric(
     metric_fn: Union[Metric, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
     preds: torch.Tensor,
@@ -177,3 +307,70 @@ def _compute_metric(
         return metric_fn.compute().item()
     else:
         return metric_fn(preds, targets).item()
+
+
+def _finite_pairs(
+    values_a: Iterable[float],
+    values_b: Iterable[float],
+) -> list[tuple[float, float]]:
+    pairs = []
+    for a, b in zip(values_a, values_b, strict=True):
+        a_val = float(a)
+        b_val = float(b)
+        if math.isfinite(a_val) and math.isfinite(b_val):
+            pairs.append((a_val, b_val))
+    return pairs
+
+
+def _average_ranks(values: Sequence[float]) -> tuple[list[float], list[int]]:
+    indexed = sorted(enumerate(values), key=lambda item: item[1])
+    ranks = [0.0] * len(values)
+    tie_counts: list[int] = []
+
+    i = 0
+    while i < len(indexed):
+        j = i + 1
+        while j < len(indexed) and indexed[j][1] == indexed[i][1]:
+            j += 1
+
+        start_rank = i + 1
+        end_rank = j
+        average_rank = (start_rank + end_rank) / 2.0
+        for k in range(i, j):
+            original_index = indexed[k][0]
+            ranks[original_index] = average_rank
+
+        tie_size = j - i
+        if tie_size > 1:
+            tie_counts.append(tie_size)
+        i = j
+
+    return ranks, tie_counts
+
+
+def _sample_variance(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return float("nan")
+    mean = sum(values) / len(values)
+    return sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+
+
+def _cohens_d_from_differences(differences: Sequence[float]) -> float:
+    if len(differences) < 2:
+        return float("nan")
+
+    mean_diff = sum(differences) / len(differences)
+    std_diff = math.sqrt(max(_sample_variance(differences), 0.0))
+    if std_diff == 0.0:
+        if mean_diff == 0.0:
+            return 0.0
+        return math.copysign(float("inf"), mean_diff)
+    return mean_diff / std_diff
+
+
+def _normal_sf(z_score: float) -> float:
+    return 0.5 * math.erfc(z_score / math.sqrt(2.0))
+
+
+def _is_nan(value: float) -> bool:
+    return isinstance(value, float) and math.isnan(value)

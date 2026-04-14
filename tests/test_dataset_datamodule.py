@@ -925,6 +925,28 @@ class TestICUDataModule:
         assert saved_splits["train_subset_stays"] == len(dm.train_indices)
         assert sorted(saved_splits["train_subset_stay_ids"]) == subset_stay_ids
 
+    def test_existing_splits_yaml_is_not_rewritten_by_label_efficiency_runs(
+        self, mock_extracted_data
+    ):
+        """Prepared canonical splits.yaml should remain stable across downstream runs."""
+        dm_full = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+        )
+        dm_full.setup()
+        canonical_text = (mock_extracted_data / "splits.yaml").read_text()
+
+        dm_subset = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm_subset.setup()
+
+        assert (mock_extracted_data / "splits.yaml").read_text() == canonical_text
+
 
 class TestCollateFn:
     """Tests for the collate function."""
