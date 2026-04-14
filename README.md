@@ -160,8 +160,9 @@ SLICES/
 │   │   └── sliding_window.py       # Sliding window utilities
 │   ├── models/
 │   │   ├── encoders/               # Backbone architectures (factory pattern)
-│   │   │   ├── transformer.py      # Timestep-level Transformer
-│   │   │   ├── observation_transformer.py  # Observation-level Transformer
+│   │   │   ├── transformer.py      # Canonical timestep-level obs-aware Transformer
+│   │   │   ├── observation.py      # Observation-level Transformer (legacy/alternate)
+│   │   │   ├── gru_d.py            # GRU-D baseline encoder
 │   │   │   └── smart.py            # SMART/MART encoder
 │   │   ├── pretraining/            # SSL objectives (factory pattern)
 │   │   │   ├── masking.py          # Shared observation masking
@@ -177,8 +178,10 @@ SLICES/
 │   │   ├── finetune_module.py      # FineTuneModule (Lightning)
 │   │   └── utils.py                # Shared helpers (optimizer, scheduler, callbacks, logger, validation)
 │   └── eval/
-│       ├── metrics.py              # AUROC, AUPRC, F1, MSE, etc.
-│       ├── fairness.py             # Per-group AUROC, demographic parity
+│       ├── metrics.py              # AUROC, AUPRC, Brier, ECE, MSE, MAE, etc.
+│       ├── fairness.py             # Fairness primitives (parity, odds, impact)
+│       ├── fairness_evaluator.py   # Patient-aware subgroup fairness reports
+│       ├── statistical.py          # Bootstrap, Wilcoxon, Bonferroni, Cohen's d
 │       └── imputation.py           # SSL reconstruction quality
 ├── configs/                        # Hydra configs
 │   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/ts2vec/smart)
@@ -191,7 +194,7 @@ SLICES/
 ├── scripts/                        # Entry point scripts
 │   ├── preprocessing/
 │   └── training/
-└── tests/                          # pytest test suite (900+ tests)
+└── tests/                          # pytest test suite
 ```
 
 ## Configuration
@@ -242,9 +245,9 @@ uv run pytest tests/ -v
 uv run pytest tests/ --cov=slices --cov-report=html --cov-report=term
 
 # Format / lint / type check
-black src/ scripts/ tests/
-ruff check src/ scripts/ tests/
-mypy src/
+uv run black src/ scripts/ tests/
+uv run ruff check src/ scripts/ tests/
+uv run mypy src/
 ```
 
 ## Key Design Decisions
@@ -258,9 +261,12 @@ mypy src/
 
 ## Extending SLICES
 
-<!-- TODO: Create EXTENDING_SLICES.md documenting how to add new downstream tasks, SSL objectives, encoder architectures, and datasets using the existing factory patterns. -->
+The framework uses factory patterns throughout, making it straightforward to add new components. The concrete extension points live in:
 
-The framework uses factory patterns throughout, making it straightforward to add new components. See `EXTENDING_SLICES.md` (coming soon) for details on adding new downstream tasks, SSL objectives, encoder architectures, and datasets.
+- `src/slices/models/encoders/factory.py` and `configs/model/`
+- `src/slices/models/pretraining/factory.py` and `configs/ssl/`
+- `src/slices/models/heads/factory.py`
+- `src/slices/data/tasks/` for task definitions
 
 ## References
 

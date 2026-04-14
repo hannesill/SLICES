@@ -1,158 +1,77 @@
 # SLICES Test Suite
 
-Comprehensive test suite for the SLICES project, covering data extraction, processing, and task building.
+This directory contains the automated regression suite for data preparation,
+task labeling, model components, training flows, evaluation, and export logic.
 
-## Running Tests
+## What The Suite Covers
 
-### Run all tests
+At a high level, the tests exercise:
+
+- preprocessing and extractor behavior
+- dataset loading, caching, normalization, and split logic
+- task-label builders for mortality, AKI, and LOS
+- encoder implementations and factory registration
+- SSL objectives including MAE, JEPA, contrastive, TS2Vec, and SMART
+- finetuning and supervised training modules
+- metrics, fairness evaluation, and statistical utilities
+- experiment-integrity regressions and result export paths
+
+The suite size changes frequently. For the current inventory and collected test
+count, use `pytest --collect-only` instead of relying on this README.
+
+## Common Commands
+
+Run the full suite:
+
 ```bash
 uv run pytest tests/ -v
 ```
 
-### Run with coverage report
+Run with coverage:
+
 ```bash
 uv run pytest tests/ --cov=slices --cov-report=html --cov-report=term
 ```
 
-### Run specific test file
+Inspect the current collected tests:
+
 ```bash
-uv run pytest tests/test_dataset_datamodule.py -v
+uv run pytest --collect-only -q tests
 ```
 
-### Run specific test class
+Run a focused file:
+
 ```bash
-uv run pytest tests/test_dataset_datamodule.py::TestICUDataset -v
+uv run pytest tests/test_fairness_evaluator.py -v
 ```
 
-### Run specific test function
+Run a focused subset:
+
 ```bash
-uv run pytest tests/test_fixes.py::TestNormalizationStatsCache::test_legacy_stats_without_fingerprints_are_ignored -v
+uv run pytest tests/ -k "jepa or ts2vec" -v
 ```
 
-### Run tests matching a pattern
-```bash
-uv run pytest tests/ -k "mortality" -v
-```
+## Testing Philosophy
 
-### Run with verbose output
-```bash
-uv run pytest tests/ -vv
-```
+The suite is biased toward behavior and regression protection rather than
+snapshotting implementation details.
 
-## Test Structure
+Typical expectations for new work:
 
-| File | Purpose | Coverage |
-|------|---------|----------|
-| `conftest.py` | Shared fixtures and pytest configuration | - |
-| `test_package.py` | Package structure, imports, and dependencies | Package-level validation |
-| `test_extractor_config.py` | ExtractorConfig validation | Input validation, defaults |
-| `test_base_extractor.py` | BaseExtractor abstract class | Core extraction logic, `run()` method, dense conversion |
-| `test_dataset_datamodule.py` | ICUDataset and ICUDataModule | Data loading, imputation, normalization, patient-level splits |
-| `test_extractor_integration.py` | Extractor + task system integration | Multi-task extraction, label computation |
-| `test_task_builders.py` | Task label extraction | Mortality tasks, boundary conditions |
-| `test_ricu_extractor.py` | RICU extractor compatibility | Chunked parquet ingestion, schema migration, extraction edge cases |
-| `test_fixes.py` | Regression coverage for experiment-integrity fixes | Label freshness, cache invalidation, combined-dataset safety |
-
-## Test Categories
-
-### Unit Tests
-- `test_extractor_config.py` - Configuration validation
-- `test_base_extractor.py` - Core extractor methods
-- `test_transforms.py` - SSL/data augmentation utilities
-- `test_task_builders.py` - Task builders
-
-### Integration Tests
-- `test_extractor_integration.py` - Full extraction pipeline
-- `test_dataset_datamodule.py` - Data loading pipeline
-
-### Edge Case Tests
-- `test_ricu_extractor.py::TestRicuExtractorEdgeCases` - Missing schema pieces, chunked input, legacy migration
-- `test_task_builders.py::TestMortalityBoundaryConditions` - Boundary conditions
+- add focused unit coverage for new logic
+- add an integration or regression test when behavior spans modules
+- prefer explicit failure modes for experiment-integrity issues
+- keep tests deterministic across seeds and platforms where practical
 
 ## Writing New Tests
 
-### Test File Naming
-- Test files must start with `test_` or end with `_test.py`
-- Test functions must start with `test_`
-- Test classes must start with `Test`
+General conventions:
 
-### Using Fixtures
-Fixtures from `conftest.py` are automatically available:
+- test files start with `test_`
+- test functions start with `test_`
+- shared fixtures live in `conftest.py`
+- behavior-specific assertions are preferred over broad smoke tests
 
-```python
-def test_something(sample_batch):
-    # sample_batch fixture is automatically injected
-    assert sample_batch["timeseries"].shape[0] == 4
-```
-
-### Example Test Structure
-```python
-class TestMyFeature:
-    """Test suite for MyFeature."""
-
-    @pytest.fixture
-    def setup_data(self, tmp_path):
-        """Create test data."""
-        # Setup code
-        return data
-
-    def test_basic_functionality(self, setup_data):
-        """Test basic case."""
-        result = my_function(setup_data)
-        assert result == expected
-
-    def test_edge_case(self):
-        """Test edge case."""
-        with pytest.raises(ValueError, match="expected error"):
-            my_function(invalid_input)
-
-    def test_boundary_condition(self, setup_data):
-        """Test boundary condition."""
-        result = my_function(setup_data, boundary_value)
-        assert result == expected_boundary_result
-```
-
-### Best Practices
-1. **Test one thing per test** - Each test should verify a single behavior
-2. **Use descriptive names** - Test names should describe what they test
-3. **Include edge cases** - Test boundary conditions, empty inputs, extreme values
-4. **Use fixtures** - Share setup code via fixtures
-5. **Mock external dependencies** - Use `unittest.mock.patch` for external calls
-6. **Test error handling** - Verify exceptions are raised correctly
-
-## Test Coverage
-
-To view test coverage in browser:
-```bash
-uv run pytest tests/ --cov=slices --cov-report=html
-open htmlcov/index.html  # macOS
-```
-
-**Target: >80% coverage on core modules**
-
-## Key Test Scenarios
-
-### Data Extraction
-- Valid/invalid parquet paths
-- Feature mapping loading
-- Hourly binning and aggregation
-- Negative hour filtering
-- Multiple itemids per feature
-
-### Data Processing
-- Imputation strategies (forward_fill, zero, mean, none)
-- Normalization
-- Dense timeseries conversion
-- Observation mask handling
-
-### Task Building
-- Mortality task variants (24h, hospital, ICU) plus window-boundary cases
-- Boundary conditions (exact boundaries)
-- Empty data handling
-- Multiple tasks extraction
-
-### Data Loading
-- Patient-level splits (no leakage)
-- Reproducible splits with seeds
-- Batch collation
-- DataLoader configuration
+When a change affects experiment correctness, add a regression test even if unit
+coverage already exists elsewhere. This repo depends heavily on config-driven
+orchestration, so the failure mode often matters as much as the happy path.
