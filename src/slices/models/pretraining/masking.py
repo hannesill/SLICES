@@ -127,6 +127,50 @@ def create_timestep_mask(
     return ssl_mask
 
 
+def create_complementary_timestep_masks(
+    primary_mask: torch.Tensor,
+    valid_timestep_mask: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create paired timestep masks without allowing an empty eligible view.
+
+    The secondary mask is complementary over eligible timesteps whenever
+    possible. Sparse samples need a fallback:
+
+    - 0 eligible timesteps: both masks remain effectively empty
+    - 1 eligible timestep: expose it in both views
+    - >=2 eligible timesteps: keep views complementary, but if the primary view
+      happened to keep every eligible timestep visible, move one timestep into
+      the secondary view so both remain encodable
+    """
+    primary = primary_mask.to(dtype=torch.bool).clone()
+    valid = valid_timestep_mask.to(device=primary.device, dtype=torch.bool)
+    secondary = (~primary) | (~valid)
+
+    batch_size = primary.shape[0]
+    for b in range(batch_size):
+        valid_idx = valid[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+
+        if n_valid == 0:
+            secondary[b] = True
+            continue
+
+        if n_valid == 1:
+            idx = valid_idx[0]
+            primary[b, idx] = True
+            secondary[b, idx] = True
+            continue
+
+        secondary_visible = (secondary[b] & valid[b]).nonzero(as_tuple=True)[0]
+        if secondary_visible.numel() == 0:
+            primary_visible = (primary[b] & valid[b]).nonzero(as_tuple=True)[0]
+            idx = primary_visible[0]
+            primary[b, idx] = False
+            secondary[b, idx] = True
+
+    return primary, secondary
+
+
 def create_block_timestep_mask(
     batch_size: int,
     n_timesteps: int,
