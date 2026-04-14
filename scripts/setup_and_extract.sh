@@ -5,9 +5,10 @@
 # for one or more ICU datasets. Targets Debian/Ubuntu (e.g., GCP VMs).
 #
 # Usage:
-#   ./scripts/setup_and_extract.sh              # All datasets (miiv + eicu)
+#   ./scripts/setup_and_extract.sh              # All datasets (miiv + eicu + combined)
 #   ./scripts/setup_and_extract.sh miiv          # Single dataset
 #   ./scripts/setup_and_extract.sh miiv eicu     # Multiple datasets
+#   ./scripts/setup_and_extract.sh combined      # Build combined + its source datasets
 #   ./scripts/setup_and_extract.sh --skip-deps miiv  # Skip dependency installation
 
 set -euo pipefail
@@ -31,21 +32,48 @@ error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # Parse arguments
 # ---------------------------------------------------------------------------
 SKIP_DEPS=false
-DATASETS=()
+REQUESTED_DATASETS=()
+BASE_DATASETS=()
+
+append_base_dataset() {
+    local value="$1"
+    if [ ${#BASE_DATASETS[@]} -gt 0 ]; then
+        for existing in "${BASE_DATASETS[@]}"; do
+            if [ "$existing" = "$value" ]; then
+                return 0
+            fi
+        done
+    fi
+    BASE_DATASETS+=("$value")
+}
 
 for arg in "$@"; do
     case "$arg" in
         --skip-deps) SKIP_DEPS=true ;;
-        miiv|eicu)   DATASETS+=("$arg") ;;
+        miiv|eicu|combined) REQUESTED_DATASETS+=("$arg") ;;
         *)           error "Unknown argument: $arg"
-                     echo "Usage: $0 [--skip-deps] [miiv] [eicu]"
+                     echo "Usage: $0 [--skip-deps] [miiv] [eicu] [combined]"
                      exit 1 ;;
     esac
 done
 
 # Default to all datasets if none specified
-if [ ${#DATASETS[@]} -eq 0 ]; then
-    DATASETS=(miiv eicu)
+if [ ${#REQUESTED_DATASETS[@]} -eq 0 ]; then
+    REQUESTED_DATASETS=(miiv eicu combined)
+fi
+
+BUILD_COMBINED=false
+
+for ds in "${REQUESTED_DATASETS[@]}"; do
+    case "$ds" in
+        miiv|eicu) append_base_dataset "$ds" ;;
+        combined) BUILD_COMBINED=true ;;
+    esac
+done
+
+if [ "$BUILD_COMBINED" = true ]; then
+    append_base_dataset "miiv"
+    append_base_dataset "eicu"
 fi
 
 # Dataset name -> raw data directory mapping (matches extract_with_ricu.R DEFAULT_RAW_PATHS)
@@ -70,7 +98,7 @@ info "Project root: $PROJECT_ROOT"
 # ---------------------------------------------------------------------------
 section "Validating raw data"
 
-for ds in "${DATASETS[@]}"; do
+for ds in "${BASE_DATASETS[@]}"; do
     raw_dir="$(raw_dir_for "$ds")"
     if [ ! -d "$raw_dir" ]; then
         error "Raw data directory not found: $raw_dir"
@@ -136,7 +164,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 2: Run extraction pipeline for each dataset
 # ---------------------------------------------------------------------------
-for ds in "${DATASETS[@]}"; do
+for ds in "${BASE_DATASETS[@]}"; do
     section "Processing dataset: $ds"
 
     ricu_output="data/ricu_output/$ds"
@@ -178,12 +206,36 @@ for ds in "${DATASETS[@]}"; do
     info "Dataset $ds ready!"
 done
 
+if [ "$BUILD_COMBINED" = true ]; then
+    section "Processing dataset: combined"
+
+    processed_dir="data/processed/combined"
+
+    if [ -f "$processed_dir/timeseries.parquet" ] && \
+       [ -f "$processed_dir/static.parquet" ] && \
+       [ -f "$processed_dir/labels.parquet" ] && \
+       [ -f "$processed_dir/metadata.yaml" ] && \
+       [ -f "$processed_dir/splits.yaml" ] && \
+       [ -f "$processed_dir/normalization_stats.yaml" ]; then
+        info "Combined dataset already exists and is prepared: $processed_dir (skipping)"
+    else
+        info "Creating and preparing combined dataset..."
+        uv run python scripts/preprocessing/create_combined_dataset.py \
+            --source data/processed/miiv data/processed/eicu \
+            --names miiv eicu \
+            --output "$processed_dir"
+        info "Combined dataset creation complete: $processed_dir"
+    fi
+
+    info "Dataset combined ready!"
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 section "Pipeline Complete"
 
-for ds in "${DATASETS[@]}"; do
+for ds in "${REQUESTED_DATASETS[@]}"; do
     processed_dir="data/processed/$ds"
     echo -e "  ${GREEN}$ds${NC}: $processed_dir/"
     for f in timeseries.parquet static.parquet labels.parquet metadata.yaml splits.yaml normalization_stats.yaml; do

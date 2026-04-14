@@ -6,7 +6,12 @@ and exporter dedup logic.
 """
 
 import importlib
+import os
+import shutil
+import subprocess
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -374,6 +379,285 @@ class TestCombinedDatasetValidation:
 
         with pytest.raises(ValueError, match="preprocessing invariants"):
             mod.validate_feature_compatibility(meta_a, meta_b)
+
+
+class TestCombinedSetupPath:
+    """Regression tests for the combined-dataset setup flow."""
+
+    def _write_processed_dataset(
+        self,
+        processed_dir,
+        dataset_name: str,
+        stay_id: int,
+        patient_id: int,
+    ) -> None:
+        processed_dir.mkdir(parents=True, exist_ok=True)
+
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [stay_id],
+                "patient_id": [patient_id],
+                "age": [65],
+                "gender": ["M"],
+            }
+        )
+        static_df.write_parquet(processed_dir / "static.parquet")
+
+        timeseries_df = pl.DataFrame(
+            {
+                "stay_id": [stay_id],
+                "timeseries": [[[[1.0, 2.0], [3.0, 4.0]]]],
+                "mask": [[[[True, True], [True, True]]]],
+            }
+        )
+        timeseries_df.write_parquet(processed_dir / "timeseries.parquet")
+
+        labels_df = pl.DataFrame(
+            {
+                "stay_id": [stay_id],
+                "mortality_24h": [0],
+            }
+        )
+        labels_df.write_parquet(processed_dir / "labels.parquet")
+
+        metadata = {
+            "dataset": dataset_name,
+            "feature_set": "core",
+            "feature_names": ["hr", "map"],
+            "n_features": 2,
+            "seq_length_hours": 2,
+            "min_stay_hours": 2,
+            "label_horizon_hours": 24,
+            "task_names": ["mortality_24h"],
+            "label_manifest": {
+                "mortality_24h": {
+                    "builder_version": "1.0.0",
+                    "config_hash": "abc123",
+                }
+            },
+        }
+        with open(processed_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+    def test_create_combined_dataset_prepares_by_default(self, tmp_path, monkeypatch):
+        """Combined creation should trigger splits/stat prep unless explicitly skipped."""
+        mod = importlib.import_module("scripts.preprocessing.create_combined_dataset")
+        source_a = tmp_path / "miiv"
+        source_b = tmp_path / "eicu"
+        output_dir = tmp_path / "combined"
+
+        self._write_processed_dataset(source_a, "miiv", stay_id=1, patient_id=11)
+        self._write_processed_dataset(source_b, "eicu", stay_id=2, patient_id=22)
+
+        captured = {}
+
+        def fake_prepare_processed_dataset(processed_dir, seed, dataset_name=None):
+            captured["processed_dir"] = processed_dir
+            captured["seed"] = seed
+            captured["dataset_name"] = dataset_name
+            return {}, {}
+
+        monkeypatch.setattr(mod, "prepare_processed_dataset", fake_prepare_processed_dataset)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "create_combined_dataset.py",
+                "--source",
+                str(source_a),
+                str(source_b),
+                "--output",
+                str(output_dir),
+            ],
+        )
+
+        mod.main()
+
+        assert captured["processed_dir"] == output_dir
+        assert captured["seed"] == 42
+        assert captured["dataset_name"] == "combined"
+
+    def test_setup_and_extract_default_path_includes_combined(self, tmp_path):
+        """The default setup path should build the combined dataset as part of readiness prep."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo_root / "scripts" / "setup_and_extract.sh", temp_repo / "scripts")
+
+        for raw_dir in ("data/raw/mimiciv", "data/raw/eicu-crd"):
+            (temp_repo / raw_dir).mkdir(parents=True, exist_ok=True)
+
+        for ds in ("miiv", "eicu"):
+            ricu_output = temp_repo / "data" / "ricu_output" / ds
+            ricu_output.mkdir(parents=True, exist_ok=True)
+            (ricu_output / "done.txt").write_text("ok\n")
+
+            processed_dir = temp_repo / "data" / "processed" / ds
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            for name in (
+                "timeseries.parquet",
+                "static.parquet",
+                "labels.parquet",
+                "metadata.yaml",
+                "splits.yaml",
+                "normalization_stats.yaml",
+            ):
+                (processed_dir / name).write_text("")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        uv_log = tmp_path / "uv.log"
+        uv_script = bin_dir / "uv"
+        uv_script.write_text(
+            "#!/usr/bin/env bash\n" 'printf \'%s\\n\' "$*" >> "$UV_LOG"\n' "exit 0\n"
+        )
+        uv_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["UV_LOG"] = str(uv_log)
+
+        result = subprocess.run(
+            ["bash", "scripts/setup_and_extract.sh", "--skip-deps"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        log_text = uv_log.read_text()
+        assert "scripts/preprocessing/create_combined_dataset.py" in log_text
+        assert "--source data/processed/miiv data/processed/eicu" in log_text
+
+
+class TestFairnessRevisionScoping:
+    """Regression tests for revision-scoped standalone fairness evaluation."""
+
+    def test_parse_args_accepts_revision_filter(self, monkeypatch):
+        """The fairness CLI should expose a revision filter for rerun scoping."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["evaluate_fairness.py", "--revision", "thesis-v1"],
+        )
+        args = mod.parse_args()
+
+        assert args.revision == ["thesis-v1"]
+
+    def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
+        """A single revision should be sent as a W&B tag filter."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+        captured = {}
+
+        class DummyApi:
+            def __init__(self, timeout):
+                captured["timeout"] = timeout
+
+            def runs(self, path, filters, order):
+                captured["path"] = path
+                captured["filters"] = filters
+                captured["order"] = order
+                return []
+
+        monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(Api=DummyApi))
+
+        mod.fetch_eval_runs(
+            project="proj",
+            entity="entity",
+            sprints=["1"],
+            paradigms=["mae"],
+            datasets=["miiv"],
+            phases=["finetune"],
+            revisions=["thesis-v1"],
+        )
+
+        assert captured["path"] == "entity/proj"
+        assert captured["filters"]["tags"]["$all"] == [
+            "sprint:1",
+            "paradigm:mae",
+            "dataset:miiv",
+            "phase:finetune",
+            "revision:thesis-v1",
+        ]
+
+    def test_fetch_eval_runs_multi_revision_filters_client_side(self, monkeypatch):
+        """Multiple revisions should be filtered client-side without mixing reruns."""
+        mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+        runs = [
+            SimpleNamespace(id="keep_v1", tags=["phase:finetune", "revision:v1"]),
+            SimpleNamespace(id="keep_v2", tags=["phase:supervised", "revision:v2"]),
+            SimpleNamespace(id="drop_phase", tags=["phase:baseline", "revision:v1"]),
+            SimpleNamespace(id="drop_revision", tags=["phase:finetune", "revision:v3"]),
+        ]
+
+        class DummyApi:
+            def __init__(self, timeout):
+                pass
+
+            def runs(self, path, filters, order):
+                return runs
+
+        monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(Api=DummyApi))
+
+        filtered = mod.fetch_eval_runs(
+            project="proj",
+            entity=None,
+            sprints=None,
+            paradigms=None,
+            datasets=None,
+            phases=["finetune", "supervised"],
+            revisions=["v1", "v2"],
+        )
+
+        assert [run.id for run in filtered] == ["keep_v1", "keep_v2"]
+
+    def test_tmux_launcher_passes_revision_to_fairness(self, tmp_path):
+        """The thesis launcher should thread revision tags through the fairness sweep."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux_log = tmp_path / "tmux.log"
+        tmux_script = bin_dir / "tmux"
+        tmux_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf \'%s\\n\' "$*" >> "$TMUX_LOG"\n'
+            'if [ "$1" = "has-session" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        tmux_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["TMUX_LOG"] = str(tmux_log)
+        env["SESSION_NAME"] = "test-session"
+        env["REVISION"] = "thesis-v2"
+        env["RUN_EXPORT"] = "0"
+
+        result = subprocess.run(
+            ["bash", "scripts/launch_thesis_tmux.sh"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        runner_scripts = list((temp_repo / "logs" / "runner").glob("thesis-run-*.sh"))
+        assert len(runner_scripts) == 1
+        runner_text = runner_scripts[0].read_text()
+
+        assert "scripts/eval/evaluate_fairness.py" in runner_text
+        assert "--revision thesis-v2" in runner_text
 
 
 # ============================================================================
