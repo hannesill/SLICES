@@ -37,7 +37,7 @@ class MortalityLabelBuilder(LabelBuilder):
         - "unknown" or missing: falls back to hospital_expire_flag
     """
 
-    SEMANTIC_VERSION = "2.1.0"
+    SEMANTIC_VERSION = "2.1.1"
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build mortality labels from stay and mortality data.
@@ -133,9 +133,10 @@ class MortalityLabelBuilder(LabelBuilder):
     @staticmethod
     def _ensure_precision_columns(merged: pl.DataFrame) -> pl.DataFrame:
         """Ensure precision-aware columns exist, migrating legacy data if needed."""
+        merged = MortalityLabelBuilder._normalize_datetime_columns(merged)
+
         if "death_time_precision" in merged.columns:
-            # Ensure death_time column is tz-naive datetime for comparison with
-            # intime/outtime (which are always tz-naive in SLICES)
+            # Keep death_time in the repo's canonical tz-naive datetime form.
             if "death_time" in merged.columns:
                 dt_dtype = merged["death_time"].dtype
                 if dt_dtype not in (
@@ -196,6 +197,28 @@ class MortalityLabelBuilder(LabelBuilder):
                 .alias("death_time_precision"),
                 pl.lit("legacy").alias("death_source"),
             )
+
+    @staticmethod
+    def _normalize_datetime_columns(merged: pl.DataFrame) -> pl.DataFrame:
+        """Normalize timestamp columns to tz-naive microsecond datetimes.
+
+        RICU parquet exports use UTC-aware timestamps. Downstream label logic
+        also compares against date-only fields, so all temporal columns must
+        share the same tz-naive dtype before any comparisons run.
+        """
+        exprs = []
+        for column in ("intime", "outtime", "dischtime", "death_time", "date_of_death"):
+            if column not in merged.columns:
+                continue
+
+            dtype = merged[column].dtype
+            if isinstance(dtype, pl.datatypes.Datetime):
+                exprs.append(pl.col(column).cast(pl.Datetime("us")).alias(column))
+
+        if exprs:
+            return merged.with_columns(exprs)
+
+        return merged
 
     def _build_hospital_mortality_with_obs(
         self, merged: pl.DataFrame, obs_hours: int
