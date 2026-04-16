@@ -819,7 +819,7 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
 
         fingerprint = _fingerprint_for_experiment_type(experiment_type)
         scope_cols = [
-            c for c in fingerprint if c in subset.columns and c not in {"paradigm", "task"}
+            c for c in fingerprint if c in subset.columns and c not in {"paradigm", "task", "phase"}
         ]
         if "primary_metric_name" not in scope_cols:
             scope_cols.append("primary_metric_name")
@@ -1008,7 +1008,7 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
-def main():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export SLICES experiment results from W&B to parquet files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1066,8 +1066,23 @@ def main():
         default=5,
         help="Expected seed count for core configs (default: 5)",
     )
-
     args = parser.parse_args()
+
+    if not args.revision:
+        env_revision = os.environ.get("REVISION") or os.environ.get("WANDB_REVISION")
+        if env_revision:
+            args.revision = [env_revision]
+        else:
+            parser.error(
+                "--revision is required to avoid mixing reruns. "
+                "Pass --revision <name> or set REVISION/WANDB_REVISION."
+            )
+
+    return args
+
+
+def main():
+    args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

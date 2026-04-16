@@ -13,7 +13,6 @@ Example usage:
 from pathlib import Path
 
 import hydra
-import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import (
@@ -25,87 +24,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from slices.data.datamodule import ICUDataModule
+from slices.eval.inference import extract_tabular_features
 from xgboost import XGBClassifier, XGBRegressor
-
-
-def extract_tabular_features(dataset, indices: list[int]) -> tuple[np.ndarray, np.ndarray]:
-    """Extract per-feature summary statistics from time-series data.
-
-    For each of the D features, computes: mean, std, min, max, first, last,
-    obs_count, obs_fraction over observed values. Total = D * 8 features.
-    Vectorized over the full batch using the dataset's stacked tensors.
-
-    Args:
-        dataset: ICUDataset instance.
-        indices: List of sample indices.
-
-    Returns:
-        X: Feature matrix (N, D*8).
-        y: Label array (N,).
-    """
-    idx_tensor = torch.tensor(indices, dtype=torch.long)
-    ts = dataset._timeseries_tensor[idx_tensor]  # (N, T, D)
-    mask = dataset._mask_tensor[idx_tensor]  # (N, T, D) bool
-
-    N, T, D = ts.shape
-    mask_float = mask.float()
-
-    # obs_count, obs_fraction: (N, D)
-    obs_count = mask_float.sum(dim=1)  # (N, D)
-    obs_frac = obs_count / T
-
-    # Masked sum for mean: sum observed values / count
-    masked_ts = ts * mask_float  # zero out unobserved
-    feat_sum = masked_ts.sum(dim=1)  # (N, D)
-    safe_count = obs_count.clamp(min=1)
-    feat_mean = feat_sum / safe_count  # (N, D)
-
-    # Masked std
-    diff_sq = ((ts - feat_mean.unsqueeze(1)) ** 2) * mask_float
-    feat_var = diff_sq.sum(dim=1) / safe_count
-    feat_std = torch.sqrt(feat_var)
-
-    # Min/max: fill unobserved with +inf/-inf before taking min/max
-    zeros = ts.new_zeros(N, D)
-    ts_for_min = ts.clone()
-    ts_for_min[~mask] = float("inf")
-    raw_min = ts_for_min.min(dim=1).values
-    feat_min = torch.where(obs_count > 0, raw_min, zeros)
-
-    ts_for_max = ts.clone()
-    ts_for_max[~mask] = float("-inf")
-    raw_max = ts_for_max.max(dim=1).values
-    feat_max = torch.where(obs_count > 0, raw_max, zeros)
-
-    # first and last observed value per feature
-    # Use argmax on mask along time axis for first; flip for last
-    # For features with no observations, falls back to 0
-    first_idx = mask.float().argmax(dim=1)  # (N, D) — first True index
-    last_idx = T - 1 - mask.flip(dims=[1]).float().argmax(dim=1)  # (N, D)
-
-    feat_first = ts.gather(1, first_idx.unsqueeze(1)).squeeze(1)  # (N, D)
-    feat_last = ts.gather(1, last_idx.unsqueeze(1)).squeeze(1)  # (N, D)
-
-    # Zero out features with no observations
-    no_obs = obs_count == 0
-    feat_mean = torch.nan_to_num(feat_mean, nan=0.0)
-    feat_first[no_obs] = 0.0
-    feat_last[no_obs] = 0.0
-
-    # Stack: (N, D, 8) -> (N, D*8)
-    features = torch.stack(
-        [feat_mean, feat_std, feat_min, feat_max, feat_first, feat_last, obs_count, obs_frac],
-        dim=-1,
-    )  # (N, D, 8)
-    X = features.reshape(N, D * 8).numpy()
-
-    # Labels
-    if dataset._labels_tensor is not None:
-        y = dataset._labels_tensor[idx_tensor].numpy()
-    else:
-        y = np.zeros(N, dtype=np.float32)
-
-    return X, y
 
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="xgboost")

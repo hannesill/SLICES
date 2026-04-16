@@ -297,6 +297,54 @@ class TestMAEObjective:
         n_observed = obs_mask.sum().item()
         assert n_loss <= n_observed
 
+    def test_mae_passes_valid_timestep_mask_to_masking(self, encoder, mae_config, monkeypatch):
+        """Fully unobserved timesteps should be excluded from MAE masking."""
+        mae = MAEObjective(encoder, mae_config)
+        captured = {}
+
+        def fake_create_timestep_mask(
+            batch_size,
+            n_timesteps,
+            mask_ratio,
+            device,
+            valid_timestep_mask=None,
+        ):
+            captured["batch_size"] = batch_size
+            captured["n_timesteps"] = n_timesteps
+            captured["mask_ratio"] = mask_ratio
+            captured["device"] = device
+            captured["valid_timestep_mask"] = valid_timestep_mask.clone()
+            return torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+
+        monkeypatch.setattr(
+            "slices.models.pretraining.mae.create_timestep_mask",
+            fake_create_timestep_mask,
+        )
+
+        x = torch.randn(2, 4, 10)
+        obs_mask = torch.tensor(
+            [
+                [
+                    [True] * 10,
+                    [False] * 10,
+                    [True] * 10,
+                    [False] * 10,
+                ],
+                [
+                    [False] * 10,
+                    [True] * 10,
+                    [True] * 10,
+                    [False] * 10,
+                ],
+            ],
+            dtype=torch.bool,
+        )
+
+        mae(x, obs_mask)
+
+        expected = obs_mask.any(dim=-1)
+        assert torch.equal(captured["valid_timestep_mask"], expected)
+
     def test_mae_get_encoder(self, encoder, mae_config):
         mae = MAEObjective(encoder, mae_config)
         assert mae.get_encoder() is encoder

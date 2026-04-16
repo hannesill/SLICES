@@ -89,6 +89,7 @@ class TrainingConfig(BaseModel):
     early_stopping_mode: Optional[str] = None
     label_smoothing: float = 0.0
     overfit_batches: Union[int, float] = 0
+    allow_best_ckpt_fallback: bool = False
 
 
 class OptimizerConfig(BaseModel):

@@ -123,6 +123,36 @@ class TestWorstGroupAUROC:
         assert worst == pytest.approx(min(valid_aurocs))
 
 
+class TestRegressionFairness:
+    """Tests for regression-task fairness metrics."""
+
+    def test_singleton_prediction_dimension_is_squeezed(self):
+        """Regression fairness should treat (N, 1) predictions as samplewise outputs."""
+        static_df = make_static_df(
+            n=4,
+            genders=["M", "M", "F", "F"],
+            ages=[50.0, 50.0, 50.0, 50.0],
+        )
+        stay_ids = [0, 1, 2, 3]
+        labels = torch.tensor([0.0, 1.0, 0.0, 1.0])
+        predictions = torch.tensor([[0.0], [1.5], [0.0], [0.5]])
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=1,
+            task_type="regression",
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        per_group_mse = report["gender"]["per_group_mse"]
+        per_group_mae = report["gender"]["per_group_mae"]
+        assert per_group_mse["M"] == pytest.approx(0.125)
+        assert per_group_mse["F"] == pytest.approx(0.125)
+        assert per_group_mae["M"] == pytest.approx(0.25)
+        assert per_group_mae["F"] == pytest.approx(0.25)
+
+
 class TestAgeBinning:
     """Tests for age binning."""
 
