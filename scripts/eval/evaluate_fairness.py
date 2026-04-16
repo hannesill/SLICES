@@ -52,7 +52,7 @@ log = logging.getLogger("evaluate_fairness")
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "12", "13"]
+CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "11", "12", "13"]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 

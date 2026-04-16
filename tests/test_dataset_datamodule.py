@@ -233,6 +233,71 @@ class TestICUDataset:
         assert stats["mortality_24h"]["negative"] == 7
         assert stats["mortality_24h"]["prevalence"] == pytest.approx(0.3)
 
+    def test_get_label_statistics_regression_task(self, tmp_path):
+        """Regression tasks should report numeric summaries, not binary prevalence."""
+        data_dir = tmp_path / "processed_regression"
+        data_dir.mkdir(parents=True)
+
+        metadata = {
+            "dataset": "mock",
+            "feature_set": "core",
+            "feature_names": ["heart_rate"],
+            "n_features": 1,
+            "seq_length_hours": 4,
+            "min_stay_hours": 4,
+            "task_names": ["los_remaining"],
+            "n_stays": 3,
+        }
+
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "patient_id": [11, 12, 13],
+                "age": [60, 61, 62],
+                "gender": ["M", "F", "M"],
+            }
+        )
+        static_df.write_parquet(data_dir / "static.parquet")
+
+        timeseries_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "timeseries": [
+                    [[1.0], [2.0], [3.0], [4.0]],
+                    [[2.0], [3.0], [4.0], [5.0]],
+                    [[3.0], [4.0], [5.0], [6.0]],
+                ],
+                "mask": [
+                    [[True], [True], [True], [True]],
+                    [[True], [True], [True], [True]],
+                    [[True], [True], [True], [True]],
+                ],
+            }
+        )
+        timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+
+        labels_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "los_remaining": [1.5, 2.5, 4.0],
+            }
+        )
+        labels_df.write_parquet(data_dir / "labels.parquet")
+
+        dataset = ICUDataset(data_dir, task_name="los_remaining", normalize=False)
+        stats = dataset.get_label_statistics()
+
+        assert stats["los_remaining"]["task_type"] == "regression"
+        assert stats["los_remaining"]["total"] == 3
+        assert stats["los_remaining"]["mean"] == pytest.approx((1.5 + 2.5 + 4.0) / 3)
+        assert stats["los_remaining"]["min"] == pytest.approx(1.5)
+        assert stats["los_remaining"]["max"] == pytest.approx(4.0)
+        assert "positive" not in stats["los_remaining"]
+        assert "prevalence" not in stats["los_remaining"]
+
     def test_override_seq_length(self, mock_extracted_data):
         """Test that seq_length can be overridden."""
         dataset = ICUDataset(

@@ -36,6 +36,7 @@ from slices.data.datamodule import ICUDataModule
 from slices.training import FineTuneModule
 from slices.training.utils import (
     report_and_validate_train_label_support,
+    resolve_balanced_class_weights,
     run_fairness_evaluation,
     setup_finetune_callbacks,
     setup_wandb_logger,
@@ -163,23 +164,30 @@ def main(cfg: DictConfig) -> None:
 
     label_stats = datamodule.get_label_statistics()
     train_label_stats = datamodule.get_train_label_statistics()
+    task_type = cfg.task.get("task_type", "binary")
     if task_name in label_stats:
         stats = label_stats[task_name]
         print(f"\n Label distribution for '{task_name}':")
         print(f"  - Total samples: {stats['total']}")
-        print(
-            f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('prevalence', 0)*100:.1f}%)"
-        )
-        print(
-            f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
-        )
+        if stats.get("task_type") == "regression":
+            print(f"  - Mean: {stats.get('mean', 0.0):.4f}")
+            print(f"  - Std:  {stats.get('std', 0.0):.4f}")
+            print(f"  - Min:  {stats.get('min', 0.0):.4f}")
+            print(f"  - Max:  {stats.get('max', 0.0):.4f}")
+        else:
+            print(
+                f"  - Positive: {stats.get('positive', 'N/A')} "
+                f"({stats.get('prevalence', 0)*100:.1f}%)"
+            )
+            print(
+                f"  - Negative: {stats.get('negative', 'N/A')} "
+                f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
+            )
 
     report_and_validate_train_label_support(
         datamodule=datamodule,
         task_name=task_name,
-        task_type=cfg.task.get("task_type", "binary"),
+        task_type=task_type,
         dataset=cfg.dataset,
         seed=cfg.seed,
         label_fraction=cfg.get("label_fraction", 1.0),
@@ -199,25 +207,24 @@ def main(cfg: DictConfig) -> None:
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
-        if task_name in train_label_stats:
-            stats = train_label_stats[task_name]
-            n_pos = stats.get("positive", 0)
-            n_neg = stats.get("negative", 0)
-            n_total = n_pos + n_neg
-            if n_pos == 0 or n_neg == 0:
-                raise ValueError(
-                    f"Cannot compute balanced class weights for '{task_name}': "
-                    f"{n_pos} positive, {n_neg} negative. Check label extraction."
-                )
-            raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
-            cfg.training.class_weight = [w**0.5 for w in raw]
+        resolved_class_weight = resolve_balanced_class_weights(
+            task_name=task_name,
+            task_type=task_type,
+            train_label_stats=train_label_stats,
+        )
+        if resolved_class_weight is not None:
+            cfg.training.class_weight = resolved_class_weight
+            n_total = int(train_label_stats[task_name]["total"])
             print(f"\n Training-split labels used for class weighting: {n_total}")
             print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
-            print(
-                f"\n  Warning: No train-split label stats for '{task_name}', "
-                "skipping class weighting"
-            )
+            if task_type == "regression":
+                print(f"\n  class_weight='balanced' ignored for regression task '{task_name}'")
+            else:
+                print(
+                    f"\n  Warning: No train-split label stats for '{task_name}', "
+                    "skipping class weighting"
+                )
             cfg.training.class_weight = None
 
     OmegaConf.set_struct(cfg, True)

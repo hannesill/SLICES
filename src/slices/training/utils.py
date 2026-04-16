@@ -474,6 +474,50 @@ def report_and_validate_train_label_support(
     }
 
 
+def resolve_balanced_class_weights(
+    task_name: str,
+    task_type: str,
+    train_label_stats: Dict[str, Dict[str, Any]],
+) -> Optional[List[float]]:
+    """Resolve ``class_weight='balanced'`` for supported task types.
+
+    Only binary classification is supported. Regression returns ``None`` because
+    class weights do not apply. Other task types fail closed instead of
+    constructing incorrect weights.
+    """
+    normalized_task_type = {
+        "binary_classification": "binary",
+        "multiclass_classification": "multiclass",
+        "multilabel_classification": "multilabel",
+    }.get(task_type, task_type)
+
+    if normalized_task_type == "regression":
+        return None
+
+    if normalized_task_type != "binary":
+        raise ValueError(
+            f"class_weight='balanced' is only supported for binary tasks, got "
+            f"task_type='{task_type}'. Set class_weight=null or provide explicit weights."
+        )
+
+    if task_name not in train_label_stats:
+        return None
+
+    stats = train_label_stats[task_name]
+    n_pos = int(stats.get("positive", 0))
+    n_neg = int(stats.get("negative", 0))
+    n_total = n_pos + n_neg
+
+    if n_pos == 0 or n_neg == 0:
+        raise ValueError(
+            f"Cannot compute balanced class weights for '{task_name}': "
+            f"{n_pos} positive, {n_neg} negative. Check label extraction."
+        )
+
+    raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
+    return [w**0.5 for w in raw]
+
+
 def validate_data_prerequisites(
     processed_dir: str,
     dataset: str,

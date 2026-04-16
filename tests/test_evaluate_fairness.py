@@ -10,6 +10,12 @@ def test_default_phases_include_baseline():
     assert "baseline" in mod.DEFAULT_PHASES
 
 
+def test_default_core_sprints_include_sprint11():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    assert "11" in mod.CORE_SPRINTS
+
+
 def test_resolve_evaluation_artifact_supports_xgboost(tmp_path):
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 

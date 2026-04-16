@@ -826,6 +826,48 @@ class TestFairnessRevisionScoping:
         assert "scripts/eval/evaluate_fairness.py" in runner_text
         assert "--revision thesis-v2" in runner_text
 
+    def test_tmux_launcher_includes_sprint11_in_fairness(self, tmp_path):
+        """The fairness sweep should include the canonical baseline sprint by default."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux_log = tmp_path / "tmux.log"
+        tmux_script = bin_dir / "tmux"
+        tmux_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf \'%s\\n\' "$*" >> "$TMUX_LOG"\n'
+            'if [ "$1" = "has-session" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        tmux_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["TMUX_LOG"] = str(tmux_log)
+        env["SESSION_NAME"] = "test-session"
+        env["RUN_EXPORT"] = "0"
+
+        result = subprocess.run(
+            ["bash", "scripts/launch_thesis_tmux.sh"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        runner_scripts = list((temp_repo / "logs" / "runner").glob("thesis-run-*.sh"))
+        assert len(runner_scripts) == 1
+        runner_text = runner_scripts[0].read_text()
+
+        assert "--sprint 1 2 3 4 5 10 11" in runner_text
+
     def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
         """The status pane should use uv-managed Python."""
         repo_root = Path(__file__).resolve().parents[1]
@@ -1592,6 +1634,192 @@ class TestTrainingScriptClassWeighting:
         assert captured["class_weight"] == pytest.approx(expected)
         assert captured["d_input"] == 3
         assert captured["max_seq_length"] == 24
+
+    @pytest.mark.parametrize(
+        "module_name",
+        ["scripts.training.finetune", "scripts.training.supervised"],
+    )
+    def test_regression_task_disables_balanced_class_weight(self, monkeypatch, module_name):
+        """Regression runs should not derive binary class weights."""
+        module = importlib.import_module(module_name)
+        captured = {}
+
+        class DummyDataModule:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def setup(self):
+                return None
+
+            def get_feature_dim(self):
+                return 3
+
+            def get_seq_length(self):
+                return 24
+
+            def get_split_info(self):
+                return {
+                    "train_patients": 5,
+                    "train_stays": 10,
+                    "val_patients": 2,
+                    "val_stays": 4,
+                    "test_patients": 2,
+                    "test_stays": 4,
+                }
+
+            def get_label_statistics(self):
+                return {
+                    "los_remaining": {
+                        "task_type": "regression",
+                        "total": 10,
+                        "mean": 4.2,
+                        "std": 1.1,
+                        "min": 1.0,
+                        "max": 8.0,
+                    }
+                }
+
+            def get_train_label_statistics(self, use_full_train: bool = False):
+                return {
+                    "los_remaining": {
+                        "task_type": "regression",
+                        "total": 10,
+                        "mean": 4.2,
+                        "std": 1.1,
+                        "min": 1.0,
+                        "max": 8.0,
+                    }
+                }
+
+        class StopAfterCaptureError(Exception):
+            pass
+
+        def fake_finetune_module(config, checkpoint_path=None, pretrain_checkpoint_path=None):
+            captured["class_weight"] = config.training.class_weight
+            raise StopAfterCaptureError
+
+        monkeypatch.setattr(module, "validate_data_prerequisites", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "report_and_validate_train_label_support", lambda *a, **k: None)
+        monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
+        monkeypatch.setattr(module, "FineTuneModule", fake_finetune_module)
+        if hasattr(module, "_detect_paradigm_from_checkpoint"):
+            monkeypatch.setattr(module, "_detect_paradigm_from_checkpoint", lambda *a, **k: None)
+
+        cfg = OmegaConf.create(
+            {
+                "dataset": "miiv",
+                "seed": 42,
+                "paradigm": "mae",
+                "checkpoint": None,
+                "pretrain_checkpoint": "dummy.ckpt",
+                "data": {
+                    "processed_dir": "/tmp/processed",
+                    "num_workers": 0,
+                },
+                "task": {
+                    "task_name": "los_remaining",
+                    "task_type": "regression",
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 0,
+                    "max_seq_length": 0,
+                },
+                "training": {
+                    "batch_size": 8,
+                    "class_weight": "balanced",
+                    "freeze_encoder": False,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+                "logging": {
+                    "use_wandb": False,
+                },
+            }
+        )
+
+        with pytest.raises(StopAfterCaptureError):
+            module.main.__wrapped__(cfg)
+
+        assert captured["class_weight"] is None
+
+
+class TestSupervisedBaselineMetrics:
+    """Regression tests for supervised trivial baselines."""
+
+    def test_classification_baseline_uses_train_majority_class(self):
+        module = importlib.import_module("scripts.training.supervised")
+
+        class DummyDataset:
+            def __init__(self, labels):
+                self.labels = labels
+
+            def __len__(self):
+                return len(self.labels)
+
+            def __getitem__(self, idx):
+                return {"label": float(self.labels[idx])}
+
+        class DummyLoader:
+            def __init__(self, dataset):
+                self.dataset = dataset
+
+        class DummyDataModule:
+            def train_dataloader(self):
+                return DummyLoader(DummyDataset([1, 1, 1, 0]))
+
+            def test_dataloader(self):
+                return DummyLoader(DummyDataset([0, 0, 0]))
+
+        metrics = module.compute_baseline_metrics(
+            DummyDataModule(),
+            task_name="mortality_24h",
+            task_type="binary",
+        )
+
+        assert metrics["baseline/train_positive_ratio"] == pytest.approx(0.75)
+        assert metrics["baseline/majority_accuracy"] == pytest.approx(0.0)
+
+    def test_regression_baseline_fits_on_train_labels_only(self):
+        module = importlib.import_module("scripts.training.supervised")
+
+        class DummyDataset:
+            def __init__(self, labels):
+                self.labels = labels
+
+            def __len__(self):
+                return len(self.labels)
+
+            def __getitem__(self, idx):
+                return {"label": float(self.labels[idx])}
+
+        class DummyLoader:
+            def __init__(self, dataset):
+                self.dataset = dataset
+
+        class DummyDataModule:
+            def train_dataloader(self):
+                return DummyLoader(DummyDataset([10.0, 10.0]))
+
+            def test_dataloader(self):
+                return DummyLoader(DummyDataset([0.0, 0.0]))
+
+        metrics = module.compute_baseline_metrics(
+            DummyDataModule(),
+            task_name="los_remaining",
+            task_type="regression",
+        )
+
+        assert metrics["baseline/train_label_mean"] == pytest.approx(10.0)
+        assert metrics["baseline/mean_predictor_mse"] == pytest.approx(100.0)
+        assert metrics["baseline/median_predictor_mae"] == pytest.approx(10.0)
 
 
 class TestFinetuneCheckpointParadigmDetection:

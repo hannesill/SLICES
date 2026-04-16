@@ -35,6 +35,7 @@ from slices.models.encoders import EncoderWithMissingToken
 from slices.training import FineTuneModule
 from slices.training.utils import (
     report_and_validate_train_label_support,
+    resolve_balanced_class_weights,
     run_fairness_evaluation,
     save_encoder_checkpoint,
     setup_finetune_callbacks,
@@ -43,48 +44,68 @@ from slices.training.utils import (
 )
 
 
+def _collect_dataset_labels(dataset) -> torch.Tensor:
+    """Collect labels from a dataset into a flat tensor."""
+    labels = []
+    for i in range(len(dataset)):
+        sample = dataset[i]
+        if "label" not in sample:
+            continue
+        labels.append(torch.as_tensor(sample["label"], dtype=torch.float32).reshape(-1))
+
+    if not labels:
+        return torch.empty(0, dtype=torch.float32)
+
+    return torch.cat(labels, dim=0)
+
+
 def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binary") -> dict:
     """Compute baseline metrics for comparison.
 
+    Baselines are fit on the train split and evaluated on the test split.
+
     For classification tasks, computes AUROC for random predictions and
-    majority-class predictions. For regression tasks, computes mean/median
-    predictor baselines.
+    majority-class predictions. For regression tasks, computes train-fit
+    mean/median predictor baselines on the test labels.
     """
+    del task_name
     baselines = {}
 
+    train_dataset = datamodule.train_dataloader().dataset
     test_dataset = datamodule.test_dataloader().dataset
-    labels = []
-    for i in range(len(test_dataset)):
-        sample = test_dataset[i]
-        if "label" in sample:
-            labels.append(sample["label"])
 
-    if not labels:
+    train_labels = _collect_dataset_labels(train_dataset)
+    test_labels = _collect_dataset_labels(test_dataset)
+
+    if len(train_labels) == 0 or len(test_labels) == 0:
         return baselines
 
-    labels_tensor = torch.tensor(labels)
-    n_samples = len(labels_tensor)
+    n_samples = len(test_labels)
     baselines["test/n_samples"] = n_samples
 
     if task_type == "regression":
-        mean_label = labels_tensor.mean().item()
-        median_label = labels_tensor.median().item()
-        baselines["test/label_mean"] = mean_label
-        baselines["test/label_std"] = labels_tensor.std().item()
-        baselines["baseline/mean_predictor_mse"] = (labels_tensor - mean_label).pow(2).mean().item()
+        mean_label = train_labels.mean().item()
+        median_label = train_labels.median().item()
+        baselines["baseline/train_label_mean"] = mean_label
+        baselines["baseline/train_label_std"] = train_labels.std(unbiased=False).item()
+        baselines["baseline/train_label_median"] = median_label
+        baselines["baseline/mean_predictor_mse"] = (test_labels - mean_label).pow(2).mean().item()
         baselines["baseline/median_predictor_mae"] = (
-            (labels_tensor - median_label).abs().mean().item()
+            (test_labels - median_label).abs().mean().item()
         )
     else:
-        n_positive = labels_tensor.sum().item()
+        n_positive = test_labels.sum().item()
         n_negative = n_samples - n_positive
         positive_ratio = n_positive / n_samples
+        train_positive_ratio = train_labels.mean().item()
+        majority_class = 1.0 if train_positive_ratio >= 0.5 else 0.0
 
         baselines["test/n_positive"] = n_positive
         baselines["test/n_negative"] = n_negative
         baselines["test/positive_ratio"] = positive_ratio
+        baselines["baseline/train_positive_ratio"] = train_positive_ratio
         baselines["baseline/random_auroc"] = 0.5
-        majority_class_accuracy = max(positive_ratio, 1 - positive_ratio)
+        majority_class_accuracy = (test_labels == majority_class).float().mean().item()
         baselines["baseline/majority_accuracy"] = majority_class_accuracy
         baselines["baseline/trivial_auroc"] = 0.5
 
@@ -188,23 +209,30 @@ def main(cfg: DictConfig) -> None:
 
     label_stats = datamodule.get_label_statistics()
     train_label_stats = datamodule.get_train_label_statistics()
+    task_type = cfg.task.get("task_type", "binary")
     if task_name in label_stats:
         stats = label_stats[task_name]
         print(f"\n Label distribution for '{task_name}':")
         print(f"  - Total samples: {stats['total']}")
-        print(
-            f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('prevalence', 0)*100:.1f}%)"
-        )
-        print(
-            f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
-        )
+        if stats.get("task_type") == "regression":
+            print(f"  - Mean: {stats.get('mean', 0.0):.4f}")
+            print(f"  - Std:  {stats.get('std', 0.0):.4f}")
+            print(f"  - Min:  {stats.get('min', 0.0):.4f}")
+            print(f"  - Max:  {stats.get('max', 0.0):.4f}")
+        else:
+            print(
+                f"  - Positive: {stats.get('positive', 'N/A')} "
+                f"({stats.get('prevalence', 0)*100:.1f}%)"
+            )
+            print(
+                f"  - Negative: {stats.get('negative', 'N/A')} "
+                f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
+            )
 
     report_and_validate_train_label_support(
         datamodule=datamodule,
         task_name=task_name,
-        task_type=cfg.task.get("task_type", "binary"),
+        task_type=task_type,
         dataset=cfg.dataset,
         seed=cfg.seed,
         label_fraction=cfg.get("label_fraction", 1.0),
@@ -224,25 +252,24 @@ def main(cfg: DictConfig) -> None:
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
-        if task_name in train_label_stats:
-            stats = train_label_stats[task_name]
-            n_pos = stats.get("positive", 0)
-            n_neg = stats.get("negative", 0)
-            n_total = n_pos + n_neg
-            if n_pos == 0 or n_neg == 0:
-                raise ValueError(
-                    f"Cannot compute balanced class weights for '{task_name}': "
-                    f"{n_pos} positive, {n_neg} negative. Check label extraction."
-                )
-            raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
-            cfg.training.class_weight = [w**0.5 for w in raw]
+        resolved_class_weight = resolve_balanced_class_weights(
+            task_name=task_name,
+            task_type=task_type,
+            train_label_stats=train_label_stats,
+        )
+        if resolved_class_weight is not None:
+            cfg.training.class_weight = resolved_class_weight
+            n_total = int(train_label_stats[task_name]["total"])
             print(f"\n Training-split labels used for class weighting: {n_total}")
             print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
-            print(
-                f"\n  Warning: No train-split label stats for '{task_name}', "
-                "skipping class weighting"
-            )
+            if task_type == "regression":
+                print(f"\n  class_weight='balanced' ignored for regression task '{task_name}'")
+            else:
+                print(
+                    f"\n  Warning: No train-split label stats for '{task_name}', "
+                    "skipping class weighting"
+                )
             cfg.training.class_weight = None
 
     OmegaConf.set_struct(cfg, True)

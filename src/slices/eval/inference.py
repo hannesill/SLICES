@@ -50,16 +50,16 @@ def run_inference(
         if probs.dim() > 1 and probs.shape[1] == 2:
             all_preds.append(probs[:, 1].cpu())
         else:
-            all_preds.append(probs.squeeze(-1).cpu())
-        all_labels.append(batch["label"].squeeze(-1).cpu())
+            all_preds.append(probs.reshape(-1).cpu())
+        all_labels.append(batch["label"].reshape(-1).cpu())
         all_stay_ids.extend(
             batch["stay_id"].tolist()
             if isinstance(batch["stay_id"], torch.Tensor)
             else batch["stay_id"]
         )
 
-    predictions = torch.cat(all_preds).squeeze(-1)
-    labels = torch.cat(all_labels).squeeze(-1)
+    predictions = torch.cat(all_preds, dim=0)
+    labels = torch.cat(all_labels, dim=0)
     return predictions, labels, all_stay_ids
 
 

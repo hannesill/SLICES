@@ -13,14 +13,14 @@ defaults:
 
 # Checkpoint path (one of these must be provided)
 checkpoint: null            # encoder.pt file
-pretrain_checkpoint: null   # full pretrain .ckpt (includes MAE decoder)
+pretrain_checkpoint: null   # full pretrain .ckpt; evaluation still trains a probe decoder
 
 # Masking configuration
 masking:
   strategies: [random, feature_block, temporal_block]
   mask_ratio: 0.15
 
-# Reconstruction head (for non-MAE models only)
+# Reconstruction head probe (trained for all checkpoint types)
 reconstruction_head:
   max_epochs: 10
   lr: 1.0e-3
