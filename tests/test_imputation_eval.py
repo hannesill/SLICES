@@ -9,9 +9,12 @@ Tests cover:
 - from_encoder_checkpoint() creates linear decoder
 """
 
+import importlib
+
 import pytest
 import torch
 import torch.nn as nn
+from omegaconf import OmegaConf
 from slices.eval.imputation import ImputationEvaluator
 from torch.utils.data import DataLoader
 
@@ -406,3 +409,120 @@ class TestInit:
         decoder = nn.Linear(16, 10)
         evaluator = ImputationEvaluator(encoder, decoder=decoder)
         assert evaluator.decoder is decoder
+
+
+class TestEvaluateImputationScript:
+    """Regression tests for the standalone imputation evaluation script."""
+
+    def test_pretrain_checkpoint_still_trains_probe_decoder(self, monkeypatch):
+        """MAE checkpoints must not skip probe-decoder training."""
+        module = importlib.import_module("scripts.eval.evaluate_imputation")
+        captured = {}
+
+        class DummyDataset:
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, idx):
+                return {
+                    "timeseries": torch.zeros(2, 3),
+                    "mask": torch.ones(2, 3, dtype=torch.bool),
+                }
+
+            def get_feature_names(self):
+                return ["a", "b", "c"]
+
+        class DummyDataModule:
+            def __init__(self, *args, **kwargs):
+                self.dataset = DummyDataset()
+                self.train_indices = [0, 1]
+                self.pin_memory = False
+
+            def setup(self):
+                return None
+
+            def get_feature_dim(self):
+                return 3
+
+            def get_seq_length(self):
+                return 2
+
+            def train_dataloader(self):
+                return "train_loader"
+
+            def test_dataloader(self):
+                return "test_loader"
+
+        class DummyEvaluator:
+            def train_decoder(self, dataloader, max_epochs, lr):
+                captured["train_decoder"] = {
+                    "dataloader": dataloader,
+                    "max_epochs": max_epochs,
+                    "lr": lr,
+                }
+                return {"train_losses": [1.0]}
+
+            def compute_feature_stds(self, dataloader):
+                captured["feature_stds_loader"] = dataloader
+                return {0: 1.0, 1: 1.0, 2: 1.0}
+
+            def evaluate(self, dataloader, mask_strategy, mask_ratio, feature_stds):
+                captured["evaluate"] = {
+                    "dataloader": dataloader,
+                    "mask_strategy": mask_strategy,
+                    "mask_ratio": mask_ratio,
+                    "feature_stds": feature_stds,
+                }
+                return {
+                    "nrmse_per_feature": {"a": 0.1, "b": 0.2, "c": 0.3},
+                    "mae_overall": 0.2,
+                    "nrmse_overall": 0.25,
+                }
+
+        dummy_evaluator = DummyEvaluator()
+
+        monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
+        monkeypatch.setattr(module, "DataLoader", lambda dataset, **kwargs: "train_stats_loader")
+        monkeypatch.setattr(module, "Subset", lambda dataset, indices: dataset)
+        monkeypatch.setattr(
+            module.ImputationEvaluator,
+            "from_mae_checkpoint",
+            staticmethod(lambda *args, **kwargs: dummy_evaluator),
+        )
+
+        cfg = OmegaConf.create(
+            {
+                "seed": 42,
+                "data": {
+                    "processed_dir": "data/processed/miiv",
+                    "num_workers": 0,
+                },
+                "batch_size": 8,
+                "checkpoint": None,
+                "pretrain_checkpoint": "outputs/pretrain/ssl-last.ckpt",
+                "masking": {
+                    "strategies": ["random"],
+                    "mask_ratio": 0.15,
+                },
+                "reconstruction_head": {
+                    "max_epochs": 3,
+                    "lr": 1e-4,
+                },
+                "logging": {
+                    "use_wandb": False,
+                },
+                "output_dir": "outputs/test-imputation",
+            }
+        )
+
+        module.main.__wrapped__(cfg)
+
+        assert captured["train_decoder"] == {
+            "dataloader": "train_loader",
+            "max_epochs": 3,
+            "lr": 1e-4,
+        }
+        assert captured["feature_stds_loader"] == "train_stats_loader"
+        assert captured["evaluate"]["dataloader"] == "test_loader"
+        assert captured["evaluate"]["mask_strategy"] == "random"

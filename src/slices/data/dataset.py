@@ -5,6 +5,7 @@ returns (timeseries, mask, labels, static_features) tuples for training.
 """
 
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -169,6 +170,7 @@ class ICUDataset(Dataset):
         self.n_features: int = len(self.feature_names)
         self.seq_length: int = seq_length or self.metadata["seq_length_hours"]
         self.task_names: List[str] = self.metadata.get("task_names", [])
+        self.task_types: Dict[str, str] = self._resolve_task_types()
 
         # Validate task_name if provided
         if task_name is not None and task_name not in self.task_names:
@@ -187,6 +189,57 @@ class ICUDataset(Dataset):
         save_dataset_metadata(
             self.data_dir, self.task_name, self.handle_missing_labels, self.removed_samples
         )
+
+    @staticmethod
+    def _task_config_dirs() -> List[Path]:
+        """Return candidate task-config directories for task-type resolution."""
+        repo_tasks = Path(__file__).resolve().parents[3] / "configs" / "tasks"
+        package_tasks = Path(__file__).resolve().parent / "tasks"
+        return [repo_tasks, package_tasks]
+
+    def _resolve_task_type_from_config(self, task_name: str) -> Optional[str]:
+        """Resolve task type from the checked-in task configuration."""
+        for task_dir in self._task_config_dirs():
+            config_path = task_dir / f"{task_name}.yaml"
+            if not config_path.exists():
+                continue
+
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+
+            task_type = config.get("task_type")
+            if isinstance(task_type, str):
+                return task_type
+
+        return None
+
+    def _resolve_task_types(self) -> Dict[str, str]:
+        """Resolve task types from metadata with a config-file fallback."""
+        label_manifest = self.metadata.get("label_manifest") or {}
+        task_types: Dict[str, str] = {}
+
+        for task_name in self.task_names:
+            task_type = None
+
+            manifest_entry = label_manifest.get(task_name)
+            if isinstance(manifest_entry, dict):
+                manifest_task_type = manifest_entry.get("task_type")
+                if isinstance(manifest_task_type, str):
+                    task_type = manifest_task_type
+
+            if task_type is None:
+                task_type = self._resolve_task_type_from_config(task_name)
+
+            if task_type is None:
+                logger.warning(
+                    "Could not resolve task_type for '%s'; defaulting statistics to binary.",
+                    task_name,
+                )
+                task_type = "binary"
+
+            task_types[task_name] = task_type
+
+        return task_types
 
     def _load_data(self) -> None:
         """Load data from Parquet files into memory.
@@ -553,16 +606,18 @@ class ICUDataset(Dataset):
     ) -> Dict[str, Dict[str, Any]]:
         """Compute label statistics for each task or subset.
 
-        For single-label tasks, returns {total, positive, negative, prevalence}.
-        For multi-label tasks (detected by prefixed columns like {task_name}_{subtask}),
-        returns per-subtask prevalence and an aggregate mean prevalence.
+        Returns task-type-aware statistics:
+        - binary: {total, positive, negative, prevalence}
+        - regression: {total, mean, std, min, max}
+        - multiclass: {total, n_classes, class_counts}
+        - multilabel: per-subtask prevalence plus aggregate mean prevalence
 
         Args:
             indices: Optional dataset indices to restrict the computation to.
                 When None, computes statistics over the full dataset.
 
         Returns:
-            Dict mapping task_name -> {count, positive, negative, prevalence, ...}
+            Dict mapping task_name -> task-specific summary statistics.
         """
         labels_df = self.labels_df
         if indices is not None:
@@ -571,42 +626,92 @@ class ICUDataset(Dataset):
 
         stats: Dict[str, Dict[str, Any]] = {}
         for task_name in self.task_names:
-            if task_name in labels_df.columns:
-                labels = labels_df[task_name].drop_nulls()
-                positive = (labels == 1).sum()
-                total = len(labels)
-                stats[task_name] = {
-                    "total": total,
-                    "positive": positive,
-                    "negative": total - positive,
-                    "prevalence": positive / total if total > 0 else 0.0,
-                }
-            else:
-                # Check for multi-label columns (e.g., {task_name}_{subtask}, ...)
-                multilabel_cols = [c for c in labels_df.columns if c.startswith(f"{task_name}_")]
-                if multilabel_cols:
-                    subtask_stats = {}
-                    prevalences = []
-                    for col in multilabel_cols:
-                        col_labels = labels_df[col].drop_nulls()
-                        pos = (col_labels == 1).sum()
-                        tot = len(col_labels)
-                        prev = pos / tot if tot > 0 else 0.0
-                        subtask_stats[col] = {
-                            "total": tot,
-                            "positive": pos,
-                            "negative": tot - pos,
-                            "prevalence": prev,
-                        }
-                        prevalences.append(prev)
-                    stats[task_name] = {
-                        "total": len(labels_df),
-                        "n_labels": len(multilabel_cols),
-                        "mean_prevalence": (
-                            sum(prevalences) / len(prevalences) if prevalences else 0.0
-                        ),
-                        "subtasks": subtask_stats,
+            task_type = self.task_types.get(task_name, "binary")
+            multilabel_cols = [c for c in labels_df.columns if c.startswith(f"{task_name}_")]
+
+            if task_type == "multilabel" and multilabel_cols:
+                subtask_stats = {}
+                prevalences = []
+                for col in multilabel_cols:
+                    col_labels = labels_df[col].drop_nulls()
+                    pos = (col_labels == 1).sum()
+                    tot = len(col_labels)
+                    prev = pos / tot if tot > 0 else 0.0
+                    subtask_stats[col] = {
+                        "task_type": "binary",
+                        "total": tot,
+                        "positive": pos,
+                        "negative": tot - pos,
+                        "prevalence": prev,
                     }
+                    prevalences.append(prev)
+                stats[task_name] = {
+                    "task_type": "multilabel",
+                    "total": len(labels_df),
+                    "n_labels": len(multilabel_cols),
+                    "mean_prevalence": (
+                        sum(prevalences) / len(prevalences) if prevalences else 0.0
+                    ),
+                    "subtasks": subtask_stats,
+                }
+            elif task_name in labels_df.columns:
+                labels = labels_df[task_name].drop_nulls()
+                total = len(labels)
+
+                if task_type == "regression":
+                    labels_float = labels.cast(pl.Float64)
+                    std = labels_float.std()
+                    stats[task_name] = {
+                        "task_type": "regression",
+                        "total": total,
+                        "mean": float(labels_float.mean()) if total > 0 else 0.0,
+                        "std": float(std) if std is not None else 0.0,
+                        "min": float(labels_float.min()) if total > 0 else 0.0,
+                        "max": float(labels_float.max()) if total > 0 else 0.0,
+                    }
+                elif task_type == "multiclass":
+                    class_counts = {
+                        str(label): count
+                        for label, count in sorted(Counter(labels.to_list()).items())
+                    }
+                    stats[task_name] = {
+                        "task_type": "multiclass",
+                        "total": total,
+                        "n_classes": len(class_counts),
+                        "class_counts": class_counts,
+                    }
+                else:
+                    positive = (labels == 1).sum()
+                    stats[task_name] = {
+                        "task_type": "binary",
+                        "total": total,
+                        "positive": positive,
+                        "negative": total - positive,
+                        "prevalence": positive / total if total > 0 else 0.0,
+                    }
+            elif multilabel_cols:
+                subtask_stats = {}
+                prevalences = []
+                for col in multilabel_cols:
+                    col_labels = labels_df[col].drop_nulls()
+                    pos = (col_labels == 1).sum()
+                    tot = len(col_labels)
+                    prev = pos / tot if tot > 0 else 0.0
+                    subtask_stats[col] = {
+                        "task_type": "binary",
+                        "total": tot,
+                        "positive": pos,
+                        "negative": tot - pos,
+                        "prevalence": prev,
+                    }
+                    prevalences.append(prev)
+                stats[task_name] = {
+                    "task_type": "multilabel",
+                    "total": len(labels_df),
+                    "n_labels": len(multilabel_cols),
+                    "mean_prevalence": sum(prevalences) / len(prevalences) if prevalences else 0.0,
+                    "subtasks": subtask_stats,
+                }
         return stats
 
     def get_preprocessing_stages(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:

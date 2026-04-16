@@ -28,3 +28,29 @@ def test_run_inference_squeezes_singleton_regression_outputs():
     assert torch.allclose(predictions, torch.tensor([0.25, 0.75]))
     assert torch.allclose(labels, torch.tensor([1.0, 2.0]))
     assert stay_ids == [10, 11]
+
+
+class _DummySingletonModel(torch.nn.Module):
+    def forward(self, timeseries: torch.Tensor, mask: torch.Tensor):
+        del timeseries, mask
+        return {"probs": torch.tensor([[0.5]], dtype=torch.float32)}
+
+
+def test_run_inference_handles_singleton_batches_without_scalar_squeeze():
+    model = _DummySingletonModel()
+    dataloader = [
+        {
+            "timeseries": torch.zeros(1, 3, 4),
+            "mask": torch.ones(1, 3, 4, dtype=torch.bool),
+            "label": torch.tensor([1.0]),
+            "stay_id": torch.tensor([10]),
+        }
+    ]
+
+    predictions, labels, stay_ids = run_inference(model, dataloader)
+
+    assert predictions.shape == (1,)
+    assert labels.shape == (1,)
+    assert torch.allclose(predictions, torch.tensor([0.5]))
+    assert torch.allclose(labels, torch.tensor([1.0]))
+    assert stay_ids == [10]

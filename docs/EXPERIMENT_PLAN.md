@@ -411,11 +411,11 @@ and the thesis W&B project summaries.
 
 **Runs last**, after all training sprints are complete. Zero additional training — pure evaluation on existing test predictions.
 
-1. Compute fairness metrics on all finetune/supervised test predictions from Sprints 1–5, 7p, 10, 12, and 13
+1. Compute fairness metrics on all downstream test predictions from Sprints 1–5, 7p, 10, 11, 12, and 13
 2. Run `scripts/eval/evaluate_fairness.py` with an explicit `--revision` tag for the thesis rerun corpus
 3. Generate fairness tables and disparity plots
 4. Protected attributes: sex (all datasets), age group (all), race/ethnicity (MIMIC-IV only)
-5. Sprint `11` classical baselines are not part of the default standalone fairness sweep because `evaluate_fairness.py` currently targets `finetune` and `supervised` phases only
+5. The default standalone fairness sweep includes Sprint `11` classical baselines via `phase:baseline`
 
 ---
 

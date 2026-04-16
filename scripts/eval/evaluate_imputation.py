@@ -9,7 +9,7 @@ Example usage:
         checkpoint=outputs/pretrain/encoder.pt \
         data.processed_dir=data/processed/mimic-iv
 
-    # Evaluate full pretrain checkpoint (MAE with decoder)
+    # Evaluate a full pretrain checkpoint (reuses the encoder, trains a probe decoder)
     uv run python scripts/eval/evaluate_imputation.py \
         pretrain_checkpoint=outputs/pretrain/ssl-last.ckpt \
         data.processed_dir=data/processed/mimic-iv
@@ -101,19 +101,20 @@ def main(cfg: DictConfig) -> None:
         )
 
     # =========================================================================
-    # 3. Train decoder (if not MAE)
+    # 3. Train reconstruction decoder probe
     # =========================================================================
-    if not pretrain_ckpt:
-        print("\n" + "=" * 80)
-        print("3. Training Reconstruction Decoder")
-        print("=" * 80)
+    print("\n" + "=" * 80)
+    print("3. Training Reconstruction Decoder")
+    print("=" * 80)
+    if pretrain_ckpt:
+        print("  Using the MAE checkpoint to initialize the encoder, then fitting a probe decoder.")
 
-        recon_cfg = cfg.get("reconstruction_head", {})
-        evaluator.train_decoder(
-            dataloader=datamodule.train_dataloader(),
-            max_epochs=recon_cfg.get("max_epochs", 10),
-            lr=recon_cfg.get("lr", 1e-3),
-        )
+    recon_cfg = cfg.get("reconstruction_head", {})
+    evaluator.train_decoder(
+        dataloader=datamodule.train_dataloader(),
+        max_epochs=recon_cfg.get("max_epochs", 10),
+        lr=recon_cfg.get("lr", 1e-3),
+    )
 
     # =========================================================================
     # 4. Evaluate

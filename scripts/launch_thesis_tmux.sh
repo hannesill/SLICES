@@ -32,7 +32,7 @@ fi
 mkdir -p "$LOG_DIR"
 
 main_sprints=(1 1b 1c 2 3 4 5 6 7 8 10 11)
-fairness_sprints=(1 2 3 4 5 10)
+fairness_sprints=(1 2 3 4 5 10 11)
 tag_sprints=(1b 1c 2 5 6 7 8)
 appendix_sprints=()
 

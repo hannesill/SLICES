@@ -10,8 +10,8 @@ Three masking strategies:
 - feature_block: Mask entire features for the full window
 - temporal_block: Mask contiguous hour blocks across all features
 
-For MAE models: extracts encoder weights, uses a linear decoder for probing.
-For non-MAE models: train lightweight linear decoder (d_model -> d_input).
+Checkpoint loaders create a lightweight probe decoder (d_model -> d_input).
+This probe should be trained on the training split before evaluation.
 
 Metrics: NRMSE per feature, MAE overall.
 """
@@ -152,10 +152,10 @@ class ImputationEvaluator:
         device: str = "cpu",
         feature_names: Optional[List[str]] = None,
     ) -> "ImputationEvaluator":
-        """Load MAE encoder for reconstruction evaluation.
+        """Load a MAE encoder and initialize a probe decoder for evaluation.
 
         Extracts the encoder from a full MAE pretraining checkpoint and
-        creates a linear decoder for probing reconstruction quality.
+        creates a lightweight probe decoder for reconstruction quality.
 
         The MAE's native decoder operates in observation-token space which
         is incompatible with the timestep-level masking used by evaluate().
@@ -168,7 +168,7 @@ class ImputationEvaluator:
             feature_names: Optional feature names for per-feature reporting.
 
         Returns:
-            ImputationEvaluator with MAE encoder (adapted) and linear decoder.
+            ImputationEvaluator with MAE encoder (adapted) and probe decoder.
         """
         from slices.models.encoders import build_encoder
 
@@ -328,10 +328,11 @@ class ImputationEvaluator:
         max_epochs: int = 10,
         lr: float = 1e-3,
     ) -> Dict[str, Any]:
-        """Train lightweight decoder for non-MAE models.
+        """Train a lightweight reconstruction probe on frozen encoder features.
 
-        Freezes encoder and trains only the decoder to reconstruct
-        observed values from encoder representations.
+        Freezes the encoder and trains only the decoder to reconstruct
+        observed values from encoder representations. This is the intended
+        evaluation path for both MAE checkpoints and saved encoder checkpoints.
 
         Args:
             dataloader: DataLoader providing batches with 'timeseries' and 'mask'.
