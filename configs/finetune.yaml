@@ -84,6 +84,10 @@ training:
   # Use learned missing token from pretraining
   use_missing_token: true
 
+  # If best-checkpoint reload fails before test-time evaluation, optionally
+  # fall back to the final in-memory model instead of failing closed.
+  allow_best_ckpt_fallback: false
+
   # Class weighting for imbalanced tasks
   # null: no weighting (default)
   # "balanced": auto-compute inverse frequency weights from training labels

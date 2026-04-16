@@ -72,6 +72,10 @@ training:
   # and a random one would confound SSL vs supervised comparison)
   use_missing_token: false
 
+  # If best-checkpoint reload fails before test-time evaluation, optionally
+  # fall back to the final in-memory model instead of failing closed.
+  allow_best_ckpt_fallback: false
+
   # Compute settings
   accelerator: auto  # auto | cpu | gpu | mps
   devices: auto

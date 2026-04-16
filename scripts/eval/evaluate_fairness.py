@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Post-run fairness evaluation for SLICES experiment runs.
 
-Queries W&B for finished finetune/supervised runs, loads their best checkpoints,
-runs inference on the test set, computes fairness metrics via FairnessEvaluator,
-and writes results back to the same W&B run's summary.
+Queries W&B for finished downstream runs, reconstructs the exact evaluation
+artifact used for each run, runs inference on the test set, computes fairness
+metrics via FairnessEvaluator, and writes results back to the same W&B run's
+summary.
 
-Designed for batch evaluation of the thesis fairness corpus. Supports
-resumability via --skip-existing (default) and scoping via --sprint/--paradigm/
---dataset filters.
+Designed for batch evaluation of the thesis fairness corpus across finetune,
+supervised, and classical baseline runs. Supports resumability via
+--skip-existing (default) and scoping via --sprint/--paradigm/--dataset filters.
 
 Usage:
     # Evaluate the thesis fairness corpus for one explicit revision
@@ -52,7 +53,7 @@ log = logging.getLogger("evaluate_fairness")
 # ---------------------------------------------------------------------------
 
 CORE_SPRINTS = ["1", "2", "3", "4", "5", "7p", "10", "12", "13"]
-DEFAULT_PHASES = ["finetune", "supervised"]
+DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 
 
@@ -184,14 +185,19 @@ def write_fairness_to_wandb(
 
 def _resolve_ckpt_dir(output_dir: str, outputs_root: Optional[str] = None) -> Path:
     """Resolve the checkpoint directory, applying outputs_root rebase if needed."""
+    return _resolve_output_dir(output_dir, outputs_root) / "checkpoints"
+
+
+def _resolve_output_dir(output_dir: str, outputs_root: Optional[str] = None) -> Path:
+    """Resolve a run output directory, applying outputs_root rebase if needed."""
     if outputs_root:
         rel = output_dir
         if rel.startswith("outputs/"):
             rel = rel[len("outputs/") :]
         elif rel.startswith("/") and "/outputs/" in rel:
             rel = rel.split("/outputs/", 1)[1]
-        return Path(outputs_root) / rel / "checkpoints"
-    return Path(output_dir) / "checkpoints"
+        return Path(outputs_root) / rel
+    return Path(output_dir)
 
 
 def _resolve_logged_checkpoint_path(
@@ -333,6 +339,26 @@ def resolve_evaluation_checkpoint(
     )
 
 
+def resolve_evaluation_artifact(
+    run,
+    outputs_root: Optional[str] = None,
+    task_type: str = "binary",
+) -> tuple[Path, str]:
+    """Resolve the saved artifact needed to reproduce a run's test-time predictions."""
+    paradigm = str(run.config.get("paradigm", "")).lower()
+    if paradigm == "xgboost":
+        model_path = _resolve_output_dir(run.config.get("output_dir", ""), outputs_root)
+        model_path = model_path / "xgboost_model.json"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Saved XGBoost model not found: {model_path}")
+        return model_path, "xgboost_model"
+
+    ckpt_path, ckpt_source = resolve_evaluation_checkpoint(run, outputs_root, task_type)
+    if ckpt_path is None:
+        raise FileNotFoundError(f"Could not resolve evaluation checkpoint for run {run.id}")
+    return ckpt_path, ckpt_source
+
+
 # ---------------------------------------------------------------------------
 # Model + data reconstruction
 # ---------------------------------------------------------------------------
@@ -421,7 +447,6 @@ def evaluate_run_fairness(
     device: str,
 ) -> dict[str, Any]:
     """Run fairness evaluation on a single run."""
-    from slices.eval.fairness_evaluator import FairnessEvaluator
     from slices.eval.inference import run_inference
 
     model = model.to(device)
@@ -432,6 +457,30 @@ def evaluate_run_fairness(
     )
 
     task_type = getattr(model, "task_type", "binary")
+    report = evaluate_predictions_fairness(
+        predictions,
+        labels,
+        stay_ids,
+        datamodule,
+        protected_attributes,
+        min_subgroup_size,
+        task_type,
+    )
+    return report
+
+
+def evaluate_predictions_fairness(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    stay_ids: list[int],
+    datamodule,
+    protected_attributes: list[str],
+    min_subgroup_size: int,
+    task_type: str,
+) -> dict[str, Any]:
+    """Run fairness evaluation from materialized predictions and labels."""
+    from slices.eval.fairness_evaluator import FairnessEvaluator
+
     evaluator = FairnessEvaluator(
         static_df=datamodule.dataset.static_df,
         protected_attributes=protected_attributes,
@@ -439,8 +488,7 @@ def evaluate_run_fairness(
         task_type=task_type,
         dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
     )
-    report = evaluator.evaluate(predictions, labels, stay_ids)
-    return report
+    return evaluator.evaluate(predictions, labels, stay_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -607,8 +655,10 @@ def main() -> None:
             cfg = r.config
             task_type = _get_nested(cfg, "task.task_type", "binary")
             try:
-                ckpt, ckpt_source = resolve_evaluation_checkpoint(r, args.outputs_root, task_type)
-                ckpt_str = f"{ckpt} [{ckpt_source}]" if ckpt else "NOT FOUND"
+                artifact, artifact_source = resolve_evaluation_artifact(
+                    r, args.outputs_root, task_type
+                )
+                ckpt_str = f"{artifact} [{artifact_source}]"
             except Exception as e:
                 ckpt_str = f"ERROR: {e}"
             print(
@@ -634,16 +684,12 @@ def main() -> None:
         log.info("[%d/%d] %s (%s/%s/seed%s)", i + 1, len(runs), run_desc, ds, task, seed)
 
         try:
-            # 1. Find checkpoint
+            # 1. Resolve the saved evaluation artifact
             task_type = _get_nested(cfg, "task.task_type", "binary")
-            ckpt_path, ckpt_source = resolve_evaluation_checkpoint(
+            artifact_path, artifact_source = resolve_evaluation_artifact(
                 run, args.outputs_root, task_type
             )
-            if ckpt_path is None:
-                results["skipped"] += 1
-                results["errors"].append((run.id, run_desc, "no checkpoint found"))
-                continue
-            log.info("  Checkpoint: %s (%s)", ckpt_path, ckpt_source)
+            log.info("  Evaluation artifact: %s (%s)", artifact_path, artifact_source)
 
             # 2. Reconstruct model + data (reuse datamodule if same dataset/task/seed)
             dm_key = (ds, task, seed, cfg.get("label_fraction", 1.0))
@@ -653,15 +699,37 @@ def main() -> None:
                 datamodule = build_datamodule(cfg, args.batch_size, args.data_root)
                 prev_dm_key = dm_key
 
-            model = build_model(cfg, ckpt_path, datamodule)
+            paradigm = str(cfg.get("paradigm", "")).lower()
+            model = None
+            if paradigm == "xgboost":
+                from slices.eval.inference import run_xgboost_inference
+
+                predictions, labels, stay_ids = run_xgboost_inference(
+                    artifact_path,
+                    task_type,
+                    datamodule.dataset,
+                    datamodule.test_indices,
+                )
+            else:
+                from slices.eval.inference import run_inference
+
+                model = build_model(cfg, artifact_path, datamodule)
+                model = model.to(device)
+                predictions, labels, stay_ids = run_inference(
+                    model,
+                    datamodule.test_dataloader(),
+                    device=device,
+                )
 
             # 3. Evaluate fairness
-            report = evaluate_run_fairness(
-                model,
+            report = evaluate_predictions_fairness(
+                predictions,
+                labels,
+                stay_ids,
                 datamodule,
                 args.protected_attributes,
                 args.min_subgroup_size,
-                device,
+                task_type,
             )
 
             if not report:
@@ -680,7 +748,8 @@ def main() -> None:
             results["processed"] += 1
 
             # Free model memory
-            del model
+            if model is not None:
+                del model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

@@ -277,6 +277,11 @@ class FairnessEvaluator:
         Returns:
             Structured dict with per-attribute results, loggable to W&B.
         """
+        if predictions.ndim > 1 and predictions.shape[-1] == 1:
+            predictions = predictions.squeeze(-1)
+        if labels.ndim > 1 and labels.shape[-1] == 1:
+            labels = labels.squeeze(-1)
+
         report: Dict[str, Any] = {}
 
         for attr in self._available_attributes:
@@ -428,8 +433,8 @@ class FairnessEvaluator:
 
         for g in valid_groups:
             group_mask = group_ids == g
-            g_preds = predictions[group_mask].float()
-            g_labels = labels[group_mask].float()
+            g_preds = predictions[group_mask].float().reshape(-1)
+            g_labels = labels[group_mask].float().reshape(-1)
 
             residuals = g_preds - g_labels
             mse = (residuals**2).mean().item()

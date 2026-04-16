@@ -126,6 +126,11 @@ class TestTrainingConfigValidation:
         cfg = TrainingConfig(use_missing_token=False)
         assert cfg.use_missing_token is False
 
+    def test_allow_best_ckpt_fallback_field_exists(self):
+        """allow_best_ckpt_fallback should be accepted as a validated training flag."""
+        cfg = TrainingConfig(allow_best_ckpt_fallback=True)
+        assert cfg.allow_best_ckpt_fallback is True
+
 
 class TestOptimizerConfigValidation:
     """Tests that OptimizerConfig catches invalid configs."""
@@ -176,3 +181,25 @@ class TestUseMissingTokenYAML:
             "so users can discover and override it"
         )
         assert raw["training"]["use_missing_token"] is True
+
+
+class TestCheckpointFallbackYAML:
+    """Test that best-checkpoint fallback is discoverable in training configs."""
+
+    @pytest.mark.parametrize(
+        ("config_name", "expected"),
+        [
+            ("finetune.yaml", False),
+            ("supervised.yaml", False),
+        ],
+    )
+    def test_training_yaml_has_allow_best_ckpt_fallback(self, config_name, expected):
+        import pathlib
+
+        yaml_path = pathlib.Path(__file__).parent.parent / "configs" / config_name
+        with open(yaml_path) as f:
+            raw = yaml.safe_load(f)
+
+        assert "training" in raw
+        assert "allow_best_ckpt_fallback" in raw["training"]
+        assert raw["training"]["allow_best_ckpt_fallback"] is expected

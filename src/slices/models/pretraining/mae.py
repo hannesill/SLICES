@@ -212,7 +212,13 @@ class MAEObjective(BaseSSLObjective):
         # tokens: (B, T, d_model)
 
         # 2. Create SSL mask on timesteps
-        ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=token_info["valid_timestep_mask"],
+        )
 
         # 3. Extract visible tokens
         visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
