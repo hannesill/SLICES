@@ -133,8 +133,7 @@ class BaseExtractor(ABC):
         for task_name in task_names:
             config_file = tasks_path / f"{task_name}.yaml"
             if not config_file.exists():
-                console.print(f"[yellow]Warning: Task config not found: {config_file}[/yellow]")
-                continue
+                raise FileNotFoundError(f"Task config not found: {config_file}")
 
             with open(config_file) as f:
                 config_dict = yaml.safe_load(f)
@@ -147,6 +146,19 @@ class BaseExtractor(ABC):
             task_configs.append(task_config)
 
         return task_configs
+
+    def _build_label_manifest(
+        self, task_configs: Optional[List[LabelConfig]] = None
+    ) -> Dict[str, Dict]:
+        """Build the semantic label manifest for the current extraction config."""
+        manifest: Dict[str, Dict] = {}
+        for task_config in task_configs or self._load_task_configs(self.config.tasks or []):
+            builder = LabelBuilderFactory.create(task_config)
+            manifest[task_config.task_name] = {
+                "builder_version": builder.SEMANTIC_VERSION,
+                "config_hash": LabelBuilder.config_hash(task_config),
+            }
+        return manifest
 
     def _validate_observation_window(self, task_config: LabelConfig) -> None:
         """Validate that task's observation_window_hours matches extraction seq_length_hours.
@@ -268,8 +280,9 @@ class BaseExtractor(ABC):
         # Check for negative or invalid LOS
         invalid_los = stays.filter((pl.col("los_days").is_null()) | (pl.col("los_days") < 0))
         if len(invalid_los) > 0:
-            console.print(
-                f"[yellow]Warning: Found {len(invalid_los)} stays with invalid LOS[/yellow]"
+            raise ValueError(
+                f"Found {len(invalid_los)} stays with invalid LOS. "
+                "Extraction must fail closed until the upstream stay metadata is fixed."
             )
 
     def _validate_timeseries(
@@ -291,7 +304,10 @@ class BaseExtractor(ABC):
 
         missing = expected_stay_ids - timeseries_stay_ids
         if missing:
-            console.print(f"[yellow]Warning: {len(missing)} stays have no timeseries data[/yellow]")
+            raise ValueError(
+                f"Found {len(missing)} stays with no timeseries data. "
+                "Extraction must fail closed until upstream timeseries coverage is complete."
+            )
 
         # Check that expected features are present
         timeseries_features = {
@@ -301,8 +317,10 @@ class BaseExtractor(ABC):
         }
         missing_features = set(feature_names) - timeseries_features
         if missing_features:
-            console.print(
-                f"[yellow]Warning: Missing features in timeseries: {missing_features}[/yellow]"
+            raise ValueError(
+                "Missing expected timeseries features: "
+                f"{sorted(missing_features)}. "
+                "Extraction must fail closed until the upstream export is complete."
             )
 
     def _validate_labels(self, labels: pl.DataFrame, stay_ids: List[int]) -> None:
@@ -324,7 +342,10 @@ class BaseExtractor(ABC):
         # Check for missing labels
         missing = expected_stay_ids - label_stay_ids
         if missing:
-            console.print(f"[yellow]Warning: {len(missing)} stays have no labels[/yellow]")
+            raise ValueError(
+                f"Found {len(missing)} stays with no labels. "
+                "Extraction must fail closed until label coverage is complete."
+            )
 
         # Check for extra labels (shouldn't happen, but worth checking)
         extra = label_stay_ids - expected_stay_ids
@@ -623,6 +644,15 @@ class BaseExtractor(ABC):
                 console.print(
                     "[yellow]Warning: Existing extraction was built from different "
                     "upstream inputs. Will overwrite.[/yellow]"
+                )
+                return None
+
+            current_label_manifest = self._build_label_manifest()
+            existing_label_manifest = existing_metadata.get("label_manifest")
+            if existing_label_manifest != current_label_manifest:
+                console.print(
+                    "[yellow]Warning: Existing extraction was built from a different "
+                    "task config or label builder version. Will overwrite.[/yellow]"
                 )
                 return None
         except Exception:

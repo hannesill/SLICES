@@ -141,7 +141,10 @@ def main(cfg: DictConfig) -> None:
     # Validate data prerequisites
     task_name_for_validation = cfg.task.get("task_name", "mortality_24h")
     validate_data_prerequisites(
-        cfg.data.processed_dir, cfg.dataset, task_names=[task_name_for_validation]
+        cfg.data.processed_dir,
+        cfg.dataset,
+        task_names=[task_name_for_validation],
+        task_configs=[cfg.task],
     )
 
     # Set random seed for reproducibility

@@ -195,6 +195,52 @@ class TestLabelManifest:
         # Should not raise when the manifest matches the checked task config.
         validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
 
+    def test_validate_data_prerequisites_uses_provided_task_config(self, tmp_path):
+        """Active Hydra task configs should override the fallback task-definition tree."""
+        from slices.training.utils import validate_data_prerequisites
+
+        active_task = {
+            "task_name": "mortality_24h",
+            "task_type": "binary",
+            "prediction_window_hours": 24,
+            "observation_window_hours": 6,
+            "gap_hours": 6,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+            "head_type": "mlp",
+            "hidden_dims": [64],
+            "dropout": 0.1,
+            "activation": "relu",
+        }
+        label_config = LabelConfig(
+            task_name=active_task["task_name"],
+            task_type=active_task["task_type"],
+            prediction_window_hours=active_task["prediction_window_hours"],
+            observation_window_hours=active_task["observation_window_hours"],
+            gap_hours=active_task["gap_hours"],
+            label_sources=active_task["label_sources"],
+            label_params=active_task["label_params"],
+        )
+        builder = LabelBuilderFactory.create(label_config)
+        metadata = {
+            "label_manifest": {
+                "mortality_24h": {
+                    "builder_version": builder.SEMANTIC_VERSION,
+                    "config_hash": LabelBuilder.config_hash(label_config),
+                }
+            }
+        }
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        validate_data_prerequisites(
+            str(tmp_path),
+            "miiv",
+            task_names=["mortality_24h"],
+            task_configs=[active_task],
+        )
+
     def test_validate_data_prerequisites_missing_task_config_raises(self, tmp_path):
         """Missing task config should fail closed instead of skipping validation."""
         from slices.training.utils import validate_data_prerequisites
@@ -1497,6 +1543,8 @@ class TestTrainingScriptClassWeighting:
         monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
         monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
         monkeypatch.setattr(module, "FineTuneModule", fake_finetune_module)
+        if hasattr(module, "_detect_paradigm_from_checkpoint"):
+            monkeypatch.setattr(module, "_detect_paradigm_from_checkpoint", lambda *a, **k: None)
 
         cfg = OmegaConf.create(
             {
@@ -1544,6 +1592,135 @@ class TestTrainingScriptClassWeighting:
         assert captured["class_weight"] == pytest.approx(expected)
         assert captured["d_input"] == 3
         assert captured["max_seq_length"] == 24
+
+
+class TestFinetuneCheckpointParadigmDetection:
+    """Regression tests for checkpoint-driven finetune metadata."""
+
+    def test_pretrain_checkpoint_auto_detects_paradigm(self, monkeypatch, tmp_path):
+        module = importlib.import_module("scripts.training.finetune")
+        captured = {}
+
+        class DummyDataModule:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def setup(self):
+                return None
+
+            def get_feature_dim(self):
+                return 3
+
+            def get_seq_length(self):
+                return 24
+
+            def get_split_info(self):
+                return {
+                    "train_patients": 5,
+                    "train_stays": 10,
+                    "val_patients": 2,
+                    "val_stays": 4,
+                    "test_patients": 2,
+                    "test_stays": 4,
+                }
+
+            def get_label_statistics(self):
+                return {
+                    "mortality_24h": {
+                        "total": 100,
+                        "positive": 20,
+                        "negative": 80,
+                        "prevalence": 0.2,
+                    }
+                }
+
+            def get_train_label_statistics(self, use_full_train: bool = False):
+                return {
+                    "mortality_24h": {
+                        "total": 10,
+                        "positive": 2,
+                        "negative": 8,
+                        "prevalence": 0.2,
+                    }
+                }
+
+        class StopAfterCaptureError(Exception):
+            pass
+
+        def fake_finetune_module(config, checkpoint_path=None, pretrain_checkpoint_path=None):
+            captured["paradigm"] = config.paradigm
+            captured["pretrain_checkpoint_path"] = pretrain_checkpoint_path
+            raise StopAfterCaptureError
+
+        pretrain_checkpoint = tmp_path / "pretrain.ckpt"
+        torch.save(
+            {
+                "state_dict": {"encoder.weight": torch.zeros(1)},
+                "hyper_parameters": {
+                    "config": {
+                        "ssl": {"name": "jepa"},
+                        "paradigm": "jepa",
+                    }
+                },
+            },
+            pretrain_checkpoint,
+        )
+
+        monkeypatch.setattr(module, "validate_data_prerequisites", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "report_and_validate_train_label_support", lambda *a, **k: None)
+        monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
+        monkeypatch.setattr(module, "FineTuneModule", fake_finetune_module)
+
+        cfg = OmegaConf.create(
+            {
+                "dataset": "miiv",
+                "seed": 42,
+                "paradigm": "mae",
+                "checkpoint": None,
+                "pretrain_checkpoint": str(pretrain_checkpoint),
+                "data": {
+                    "processed_dir": "/tmp/processed",
+                    "num_workers": 0,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "prediction_window_hours": 24,
+                    "observation_window_hours": 24,
+                    "gap_hours": 0,
+                    "label_sources": ["stays", "mortality_info"],
+                    "label_params": {},
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 0,
+                    "max_seq_length": 0,
+                },
+                "training": {
+                    "batch_size": 8,
+                    "class_weight": None,
+                    "freeze_encoder": False,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+                "logging": {
+                    "use_wandb": False,
+                },
+            }
+        )
+
+        with pytest.raises(StopAfterCaptureError):
+            module.main.__wrapped__(cfg)
+
+        assert captured["paradigm"] == "jepa"
+        assert captured["pretrain_checkpoint_path"] == str(pretrain_checkpoint)
 
 
 class TestExperimentRunnerMatrix:

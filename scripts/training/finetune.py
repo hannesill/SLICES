@@ -43,6 +43,42 @@ from slices.training.utils import (
 )
 
 
+def _detect_paradigm_from_checkpoint(path: str, *, full_checkpoint: bool) -> str | None:
+    """Infer the SSL paradigm recorded in an encoder or Lightning checkpoint."""
+    checkpoint = torch.load(
+        path,
+        map_location="cpu",
+        weights_only=not full_checkpoint,
+    )
+
+    if not isinstance(checkpoint, dict):
+        return None
+
+    if "ssl_name" in checkpoint:
+        return checkpoint["ssl_name"]
+
+    if not full_checkpoint:
+        return None
+
+    hyper_parameters = checkpoint.get("hyper_parameters") or {}
+    config = hyper_parameters.get("config") or {}
+    if isinstance(config, DictConfig):
+        config = OmegaConf.to_container(config, resolve=True)
+
+    if not isinstance(config, dict):
+        return None
+
+    ssl_config = config.get("ssl") or {}
+    if isinstance(ssl_config, DictConfig):
+        ssl_config = OmegaConf.to_container(ssl_config, resolve=True)
+
+    if isinstance(ssl_config, dict) and ssl_config.get("name") is not None:
+        return str(ssl_config["name"])
+
+    paradigm = config.get("paradigm")
+    return str(paradigm) if paradigm is not None else None
+
+
 @hydra.main(version_base=None, config_path="../../configs", config_name="finetune")
 def main(cfg: DictConfig) -> None:
     """Run downstream task finetuning."""
@@ -60,21 +96,33 @@ def main(cfg: DictConfig) -> None:
             "'pretrain_checkpoint' (full .ckpt file)"
         )
 
-    # Auto-detect paradigm from encoder checkpoint metadata
+    # Auto-detect paradigm from checkpoint metadata
+    detected_paradigm = None
     if cfg.checkpoint is not None:
-        ckpt = torch.load(cfg.checkpoint, map_location="cpu", weights_only=True)
-        if isinstance(ckpt, dict) and "ssl_name" in ckpt:
-            detected = ckpt["ssl_name"]
-            if cfg.paradigm != detected:
-                print(f"\n  Auto-detected paradigm from checkpoint: {detected}")
-                OmegaConf.set_struct(cfg, False)
-                cfg.paradigm = detected
-                OmegaConf.set_struct(cfg, True)
-        del ckpt
+        detected_paradigm = _detect_paradigm_from_checkpoint(
+            cfg.checkpoint,
+            full_checkpoint=False,
+        )
+    elif cfg.pretrain_checkpoint is not None:
+        detected_paradigm = _detect_paradigm_from_checkpoint(
+            cfg.pretrain_checkpoint,
+            full_checkpoint=True,
+        )
+
+    if detected_paradigm and cfg.paradigm != detected_paradigm:
+        print(f"\n  Auto-detected paradigm from checkpoint: {detected_paradigm}")
+        OmegaConf.set_struct(cfg, False)
+        cfg.paradigm = detected_paradigm
+        OmegaConf.set_struct(cfg, True)
 
     # Validate data prerequisites
     task_name = cfg.task.get("task_name", "mortality_24h")
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset, task_names=[task_name])
+    validate_data_prerequisites(
+        cfg.data.processed_dir,
+        cfg.dataset,
+        task_names=[task_name],
+        task_configs=[cfg.task],
+    )
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)

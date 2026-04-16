@@ -4,6 +4,13 @@
 
 task_name: mortality_hospital
 task_type: binary
+observation_window_hours: 24
+prediction_window_hours: null
+gap_hours: 0
+label_sources:
+  - stays
+  - mortality_info
+label_params: {}
 primary_metric: auprc
 n_classes: null
 head_type: mlp
