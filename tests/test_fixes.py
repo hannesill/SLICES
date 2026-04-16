@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1022,6 +1022,31 @@ class TestMortalityPrecision:
         )
         labels = builder.build_labels(raw_data)
         assert labels["label"][0] is None
+
+    def test_timezone_aware_stays_with_date_only_death(self):
+        """UTC-aware stay times should not break date-only mortality comparisons."""
+        base = datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        from datetime import date
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, None, date(2020, 1, 3), "date", "patients.dod", 1)],
+        )
+
+        assert raw_data["stays"]["intime"].dtype == pl.Datetime("us", "UTC")
+
+        labels = builder.build_labels(raw_data)
+        assert labels["label"][0] == 1
 
     def test_survived_patient(self):
         """Patient who survived → label 0."""
