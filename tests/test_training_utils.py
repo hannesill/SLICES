@@ -7,6 +7,7 @@ Tests cover:
 - Supervised script save_encoder_weights: v3 format, loadable by FineTuneModule
 """
 
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ import torch
 import torch.nn as nn
 import yaml
 from omegaconf import OmegaConf
+from slices.data.labels import LabelBuilder, LabelConfig
 from slices.training import FineTuneModule
 from slices.training.utils import (
     build_optimizer,
@@ -326,6 +328,7 @@ class TestSetupFinetuneCallbacks:
     def test_training_task_configs_cover_package_tasks(self):
         package_tasks_dir = Path("src/slices/data/tasks")
         hydra_tasks_dir = Path("configs/tasks")
+        label_config_fields = {field.name for field in fields(LabelConfig)}
 
         package_tasks = {
             yaml.safe_load(path.read_text())["task_name"]
@@ -336,6 +339,18 @@ class TestSetupFinetuneCallbacks:
         }
 
         assert hydra_tasks == package_tasks
+
+        for task_name in sorted(package_tasks):
+            package_config = LabelConfig(
+                **yaml.safe_load((package_tasks_dir / f"{task_name}.yaml").read_text())
+            )
+            hydra_raw = yaml.safe_load((hydra_tasks_dir / f"{task_name}.yaml").read_text())
+            hydra_config = LabelConfig(
+                **{key: value for key, value in hydra_raw.items() if key in label_config_fields}
+            )
+            assert LabelBuilder.config_hash(hydra_config) == LabelBuilder.config_hash(
+                package_config
+            )
 
 
 class TestSupervisedCheckpointFormat:

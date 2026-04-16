@@ -29,7 +29,7 @@ from rich.progress import (
 
 from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
-from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+from slices.data.labels import LabelBuilderFactory, LabelConfig
 
 from .base import BaseExtractor, ExtractorConfig
 
@@ -355,6 +355,8 @@ class RicuExtractor(BaseExtractor):
             stays = self.extract_stays()
             progress.update(task, completed=True)
 
+        self._validate_stays(stays)
+
         # Filter by minimum stay length
         min_los_days = self.config.min_stay_hours / 24.0
         stays_filtered = stays.filter(pl.col("los_days") >= min_los_days)
@@ -383,7 +385,6 @@ class RicuExtractor(BaseExtractor):
                 console.print("[red]Error: No stays remaining after filtering![/red]")
                 return
 
-        self._validate_stays(stays_filtered)
         self._stays_cache = stays_filtered
 
         # -----------------------------------------------------------------
@@ -473,14 +474,7 @@ class RicuExtractor(BaseExtractor):
 
             self._validate_labels(labels, stay_ids)
 
-            # Build label manifest for freshness checking at training time
-            label_manifest = {}
-            for tc in task_configs:
-                builder = LabelBuilderFactory.create(tc)
-                label_manifest[tc.task_name] = {
-                    "builder_version": builder.SEMANTIC_VERSION,
-                    "config_hash": LabelBuilder.config_hash(tc),
-                }
+            label_manifest = self._build_label_manifest(task_configs)
 
             metadata = {
                 "dataset": self._get_dataset_name(),

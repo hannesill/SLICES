@@ -54,7 +54,12 @@ def main(cfg: DictConfig) -> None:
     task_type = cfg.task.get("task_type", "binary")
 
     # Validate data prerequisites including label freshness
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset, task_names=[task_name])
+    validate_data_prerequisites(
+        cfg.data.processed_dir,
+        cfg.dataset,
+        task_names=[task_name],
+        task_configs=[cfg.task],
+    )
 
     datamodule = ICUDataModule(
         processed_dir=cfg.data.processed_dir,

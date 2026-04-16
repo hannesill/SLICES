@@ -699,8 +699,8 @@ class TestLoadTaskConfigs:
         assert loaded[0].task_type == "binary_classification"
         assert loaded[0].prediction_window_hours == 24
 
-    def test_load_missing_task_config_skipped(self, tmp_path):
-        """Test that missing task configs are skipped with warning."""
+    def test_load_missing_task_config_raises(self, tmp_path):
+        """Missing task configs should fail closed."""
         parquet_root = tmp_path / "parquet"
         tasks_dir = tmp_path / "tasks"
         parquet_root.mkdir(parents=True)
@@ -712,9 +712,8 @@ class TestLoadTaskConfigs:
         )
         extractor = MockExtractor(config)
 
-        loaded = extractor._load_task_configs(["nonexistent_task"])
-
-        assert len(loaded) == 0
+        with pytest.raises(FileNotFoundError, match="Task config not found"):
+            extractor._load_task_configs(["nonexistent_task"])
 
     def test_load_multiple_task_configs(self, tmp_path):
         """Test loading multiple task configs at once."""
@@ -829,6 +828,39 @@ class TestLoadTaskConfigs:
         loaded = extractor._load_task_configs(["mortality_hospital"])
         assert len(loaded) == 1
         assert loaded[0].observation_window_hours is None
+
+
+class TestValidationFailures:
+    """Tests for fail-closed validation behavior."""
+
+    def test_validate_stays_raises_on_invalid_los(self, temp_parquet_structure):
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)
+        stays = extractor.extract_stays().with_columns(
+            pl.when(pl.col("stay_id") == 2)
+            .then(None)
+            .otherwise(pl.col("los_days"))
+            .alias("los_days")
+        )
+
+        with pytest.raises(ValueError, match="invalid LOS"):
+            extractor._validate_stays(stays)
+
+    def test_validate_timeseries_raises_on_missing_stays(self, temp_parquet_structure):
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)
+        timeseries = extractor.extract_timeseries([1, 2])
+
+        with pytest.raises(ValueError, match="no timeseries data"):
+            extractor._validate_timeseries(timeseries, [1, 2, 3], ["heart_rate", "sbp"])
+
+    def test_validate_labels_raises_on_missing_stays(self, temp_parquet_structure):
+        config = ExtractorConfig(parquet_root=str(temp_parquet_structure))
+        extractor = MockExtractor(config)
+        labels = pl.DataFrame({"stay_id": [1, 2], "mortality_24h": [0, 1]})
+
+        with pytest.raises(ValueError, match="no labels"):
+            extractor._validate_labels(labels, [1, 2, 3])
 
 
 class TestPathResolution:

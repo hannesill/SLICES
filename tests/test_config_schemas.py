@@ -77,12 +77,32 @@ class TestTaskConfigValidation:
         """Missing optional fields should use defaults."""
         cfg = TaskConfig(task_name="mortality_24h")
         assert cfg.task_type == "binary"
+        assert cfg.prediction_window_hours is None
+        assert cfg.observation_window_hours is None
+        assert cfg.gap_hours == 0
+        assert cfg.label_sources == []
+        assert cfg.label_params == {}
         assert cfg.head_type == "mlp"
         assert cfg.hidden_dims == [64]
         assert cfg.dropout == 0.1
         assert cfg.activation == "relu"
         assert cfg.n_classes is None
         assert cfg.use_layer_norm is False
+
+    def test_label_definition_fields_are_accepted(self):
+        """Training task configs may include label semantics for freshness validation."""
+        cfg = TaskConfig(
+            task_name="mortality_24h",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+            label_params={},
+        )
+
+        assert cfg.prediction_window_hours == 24
+        assert cfg.observation_window_hours == 24
+        assert cfg.label_sources == ["stays", "mortality_info"]
 
 
 class TestTrainingConfigValidation:

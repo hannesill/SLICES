@@ -815,6 +815,189 @@ class TestRicuExtractorRun:
         # Should have same number of stays (no duplicates)
         assert len(static_second) == n_first
 
+    def test_run_rebuilds_when_task_config_changes(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Task-config drift should invalidate resume instead of silently skipping work."""
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_24h",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 24,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        task_path = tasks_dir / "mortality_24h.yaml"
+        with open(task_path, "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_24h"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            initial_metadata = yaml.safe_load(f)
+
+        task_config["gap_hours"] = 6
+        with open(task_path, "w") as f:
+            yaml.dump(task_config, f)
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        assert (
+            updated_metadata["label_manifest"]["mortality_24h"]["config_hash"]
+            != initial_metadata["label_manifest"]["mortality_24h"]["config_hash"]
+        )
+
+    def test_run_rebuilds_when_builder_version_changes(
+        self, ricu_output_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Builder-version drift should invalidate resume instead of merging stale labels."""
+        from slices.data.labels.mortality import MortalityLabelBuilder
+
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_hospital",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": None,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_hospital"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            initial_metadata = yaml.safe_load(f)
+
+        initial_version = MortalityLabelBuilder.SEMANTIC_VERSION
+        monkeypatch.setattr(MortalityLabelBuilder, "SEMANTIC_VERSION", "9.9.9")
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        assert (
+            initial_metadata["label_manifest"]["mortality_hospital"]["builder_version"]
+            == initial_version
+        )
+        assert (
+            updated_metadata["label_manifest"]["mortality_hospital"]["builder_version"] == "9.9.9"
+        )
+
+    def test_run_fails_closed_on_invalid_los(self, ricu_output_dir: Path, tmp_path: Path) -> None:
+        """Abort when stay metadata is incomplete instead of emitting a partial dataset."""
+        output_dir = tmp_path / "processed"
+
+        stays_path = ricu_output_dir / "ricu_stays.parquet"
+        stays = pl.read_parquet(stays_path).with_columns(
+            pl.when(pl.col("stay_id") == 200)
+            .then(None)
+            .otherwise(pl.col("los_days"))
+            .alias("los_days")
+        )
+        stays.write_parquet(stays_path)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        with pytest.raises(ValueError, match="invalid LOS"):
+            RicuExtractor(config).run()
+
+    def test_run_fails_closed_on_missing_timeseries_coverage(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Missing timeseries rows for an extracted stay should abort the run."""
+        output_dir = tmp_path / "processed"
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path).filter(pl.col("stay_id") != 300)
+        timeseries.write_parquet(timeseries_path)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        with pytest.raises(ValueError, match="no timeseries data"):
+            RicuExtractor(config).run()
+
+    def test_run_fails_closed_on_missing_labels(
+        self, ricu_output_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Missing label rows should abort extraction instead of producing a degraded dataset."""
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_hospital",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": None,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_hospital"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        extractor = RicuExtractor(config)
+        original_extract_labels = extractor.extract_labels
+
+        def drop_one_label(stay_ids, task_configs):
+            labels = original_extract_labels(stay_ids, task_configs)
+            return labels.filter(pl.col("stay_id") != 300)
+
+        monkeypatch.setattr(extractor, "extract_labels", drop_one_label)
+
+        with pytest.raises(ValueError, match="no labels"):
+            extractor.run()
+
     def test_run_rebuilds_when_upstream_timeseries_changes(
         self, ricu_output_dir: Path, tmp_path: Path
     ) -> None:

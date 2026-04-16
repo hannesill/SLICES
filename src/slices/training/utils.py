@@ -5,11 +5,13 @@ shared callback/logger setup, fairness evaluation, and checkpoint save helper.
 """
 
 import math
+from dataclasses import fields
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 import torch
 import torch.nn as nn
+import yaml
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -17,6 +19,8 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
+
+from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 # =============================================================================
 # Optimizer / Scheduler
@@ -474,21 +478,22 @@ def validate_data_prerequisites(
     processed_dir: str,
     dataset: str,
     task_names: Optional[List[str]] = None,
+    task_configs: Optional[List[Union[LabelConfig, DictConfig, Dict[str, Any]]]] = None,
 ) -> None:
     """Validate that required data files exist before training.
 
-    Checks file existence and, if task_names are provided, validates the label
-    manifest in metadata.yaml to ensure labels were built with the current
-    builder version and task config.
+    Checks file existence and, if task definitions are provided, validates the
+    label manifest in metadata.yaml to ensure labels were built with the
+    current builder version and task config.
+
+    When ``task_configs`` are supplied, they are treated as the source of truth
+    because they represent the active Hydra-composed task configuration for the
+    run. ``task_names`` remain as a fallback for callers that only know names.
 
     Raises:
         FileNotFoundError: If required files are missing.
         RuntimeError: If label manifest indicates stale labels.
     """
-
-    import yaml
-
-    from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
     path = Path(processed_dir)
 
@@ -505,8 +510,62 @@ def validate_data_prerequisites(
             f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
         )
 
-    # Validate label manifest if task_names are provided
-    if task_names:
+    label_config_fields = {field.name for field in fields(LabelConfig)}
+
+    def coerce_label_config(
+        task_config: Union[LabelConfig, DictConfig, Dict[str, Any]]
+    ) -> LabelConfig:
+        if isinstance(task_config, LabelConfig):
+            return task_config
+
+        if isinstance(task_config, DictConfig):
+            raw_config = OmegaConf.to_container(task_config, resolve=True)
+        else:
+            raw_config = dict(task_config)
+
+        if not isinstance(raw_config, dict):
+            raise TypeError("Task configuration must resolve to a mapping.")
+
+        label_config_dict = {
+            key: value for key, value in raw_config.items() if key in label_config_fields
+        }
+        return LabelConfig(**label_config_dict)
+
+    def get_training_tasks_path() -> Path:
+        repo_root = Path(__file__).resolve().parents[3]
+        hydra_tasks_path = repo_root / "configs" / "tasks"
+        if hydra_tasks_path.exists():
+            return hydra_tasks_path
+        return Path(__file__).resolve().parents[1] / "data" / "tasks"
+
+    resolved_task_configs: List[LabelConfig] = []
+    if task_configs is not None:
+        resolved_task_configs = [coerce_label_config(task_config) for task_config in task_configs]
+        if task_names is not None:
+            resolved_names = {task_config.task_name for task_config in resolved_task_configs}
+            requested_names = set(task_names)
+            if resolved_names != requested_names:
+                raise ValueError(
+                    "task_names does not match task_configs: "
+                    f"task_names={sorted(requested_names)}, "
+                    f"task_configs={sorted(resolved_names)}"
+                )
+    elif task_names:
+        tasks_path = get_training_tasks_path()
+        for task_name in task_names:
+            config_file = tasks_path / f"{task_name}.yaml"
+            if not config_file.exists():
+                raise FileNotFoundError(
+                    f"Task config not found for '{task_name}': {config_file}. "
+                    "Cannot validate label freshness safely."
+                )
+
+            with open(config_file) as f:
+                config_dict = yaml.safe_load(f)
+            resolved_task_configs.append(coerce_label_config(config_dict))
+
+    # Validate label manifest if task configs are provided or can be resolved.
+    if resolved_task_configs:
         metadata_path = path / "metadata.yaml"
         if not metadata_path.exists():
             raise FileNotFoundError(
@@ -527,19 +586,8 @@ def validate_data_prerequisites(
                 f"extract_ricu.py dataset={dataset}"
             )
 
-        # Load current task configs and compare against manifest
-        tasks_path = Path(__file__).parent.parent / "data" / "tasks"
-        for task_name in task_names:
-            config_file = tasks_path / f"{task_name}.yaml"
-            if not config_file.exists():
-                raise FileNotFoundError(
-                    f"Task config not found for '{task_name}': {config_file}. "
-                    "Cannot validate label freshness safely."
-                )
-
-            with open(config_file) as f:
-                config_dict = yaml.safe_load(f)
-            current_config = LabelConfig(**config_dict)
+        for current_config in resolved_task_configs:
+            task_name = current_config.task_name
             current_hash = LabelBuilder.config_hash(current_config)
 
             builder = LabelBuilderFactory.create(current_config)

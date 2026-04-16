@@ -4,6 +4,12 @@
 
 task_name: los_remaining
 task_type: regression
+observation_window_hours: 24
+prediction_window_hours: null
+gap_hours: 0
+label_sources:
+  - stays
+label_params: {}
 primary_metric: mae
 n_classes: null
 head_type: mlp
