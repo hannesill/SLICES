@@ -110,7 +110,9 @@ class JEPAPredictor(nn.Module):
         Args:
             encoded_visible: (B, n_vis, d_encoder) encoded visible tokens.
             ssl_mask: (B, T) bool, True = visible, False = masked.
-            token_info: dict with timestep_idx (B, T).
+            token_info: dict with timestep_idx (B, T) and optional
+                valid_timestep_mask (B, T) marking timesteps that had at
+                least one observed variable.
             n_timesteps: total number of timesteps T.
 
         Returns:
@@ -135,8 +137,16 @@ class JEPAPredictor(nn.Module):
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        # Run predictor transformer (no padding mask, all T valid)
-        decoded = self.predictor(full_tokens)
+        valid_timestep_mask = token_info.get("valid_timestep_mask")
+        predictor_padding_mask = None
+        if valid_timestep_mask is not None:
+            predictor_padding_mask = ~valid_timestep_mask.to(
+                device=full_tokens.device,
+                dtype=torch.bool,
+            )
+
+        # Fully unobserved hours should not be available as predictor context.
+        decoded = self.predictor(full_tokens, src_key_padding_mask=predictor_padding_mask)
 
         # Project to encoder representation space
         predictions = self.output_proj(decoded)  # (B, T, d_encoder)

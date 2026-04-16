@@ -263,6 +263,37 @@ class TestJEPAForward:
             "jepa_n_masked_per_sample"
         ] == pytest.approx(3.0)
 
+    def test_empty_timesteps_are_masked_in_predictor_attention(self, encoder, jepa_config):
+        """Fully unobserved hours should not participate in JEPA predictor attention."""
+        jepa = JEPAObjective(encoder, jepa_config)
+        captured: dict[str, torch.Tensor] = {}
+
+        def capture_padding_mask(module, args, kwargs):
+            padding_mask = kwargs.get("src_key_padding_mask")
+            assert padding_mask is not None
+            captured["src_key_padding_mask"] = padding_mask.detach().clone()
+
+        handle = jepa.predictor.predictor.register_forward_pre_hook(
+            capture_padding_mask,
+            with_kwargs=True,
+        )
+
+        try:
+            B, T, D = 2, 8, 10
+            x = torch.randn(B, T, D)
+            obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+            obs_mask[:, 1, :3] = True
+            obs_mask[:, 5, :3] = True
+            obs_mask[:, 6, :3] = True
+
+            jepa(x, obs_mask)
+        finally:
+            handle.remove()
+
+        expected_padding_mask = ~obs_mask.any(dim=-1)
+        assert "src_key_padding_mask" in captured
+        assert torch.equal(captured["src_key_padding_mask"], expected_padding_mask)
+
 
 # =============================================================================
 # Momentum tests
