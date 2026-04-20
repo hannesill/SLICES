@@ -216,6 +216,8 @@ class Run:
             cmd.append(f"label_fraction={self.label_fraction}")
         for k, v in self.extra_overrides.items():
             cmd.append(f"{k}={v}")
+        if self.source_dataset is not None:
+            cmd.append(f"+source_dataset={self.source_dataset}")
         # Propagate upstream pretrain metadata so it lands in W&B config
         if self.upstream_pretrain_lr is not None:
             cmd.append(f"+upstream_pretrain_lr={self.upstream_pretrain_lr}")
@@ -1029,10 +1031,57 @@ def recover_stale_running(state: dict):
                 print(f"  Recovered stale run: {run_id}")
 
 
+# Scheduler slot weights. Pretraining occupies the full default budget of 4
+# slots so `--parallel 4` does not mix heavyweight pretrains with downstream
+# GPU jobs on a single device.
+RUN_SLOT_COSTS = {
+    "pretrain": 4,
+    "finetune": 1,
+    "supervised": 1,
+    "gru_d": 1,
+    "xgboost": 1,
+}
+
+
+def _slot_cost(run: Run, slot_budget: int) -> int:
+    """Return the scheduler slot cost for a run under the active budget."""
+    return min(RUN_SLOT_COSTS.get(run.run_type, 1), slot_budget)
+
+
+def _select_ready_runs(
+    ready: list[Run],
+    active_run_ids: set[str],
+    runs_by_id: dict[str, Run],
+    slot_budget: int,
+) -> list[Run]:
+    """Choose a launch batch that fits the available scheduler slots.
+
+    Heavier runs are prioritized first so pretrains claim the budget before
+    lighter downstream jobs, avoiding accidental co-scheduling on one GPU.
+    """
+    active_slots = sum(_slot_cost(runs_by_id[rid], slot_budget) for rid in active_run_ids)
+    available_slots = slot_budget - active_slots
+    selected: list[Run] = []
+
+    indexed_ready = list(enumerate(ready))
+    indexed_ready.sort(key=lambda item: (-_slot_cost(item[1], slot_budget), item[0]))
+
+    for _, run in indexed_ready:
+        cost = _slot_cost(run, slot_budget)
+        if cost <= available_slots:
+            selected.append(run)
+            available_slots -= cost
+
+    return selected
+
+
 # ---------------------------------------------------------------------------
 # Scheduler
 # ---------------------------------------------------------------------------
 def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
+    if parallel < 1:
+        raise ValueError(f"--parallel must be >= 1, got {parallel}")
+
     runs_by_id = {r.id: r for r in runs}
     active: dict[str, subprocess.Popen] = {}  # run_id -> Popen
     shutting_down = False
@@ -1072,7 +1121,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
         _print_dry_run(runs, runs_by_id)
         return
 
-    print(f"Scheduler started (parallel={parallel})")
+    print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}")
     print()
 
@@ -1124,9 +1173,9 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
             if deps_ok:
                 ready.append(r)
 
-        # 4. Launch runs up to parallel limit
-        slots = parallel - len(active)
-        for r in ready[:slots]:
+        # 4. Launch runs that fit the remaining scheduler slots
+        launch_batch = _select_ready_runs(ready, set(active), runs_by_id, parallel)
+        for r in launch_batch:
             cmd = r.build_command(runs_by_id)
             log_file = LOG_DIR / f"{r.id}.log"
             now = datetime.now(timezone.utc).isoformat()
@@ -1575,7 +1624,12 @@ def main():
     # run
     p_run = sub.add_parser("run", help="Run experiments for given sprints")
     p_run.add_argument("--sprint", nargs="+", required=True, help="Sprint(s) to run (e.g. 1 1b 2)")
-    p_run.add_argument("--parallel", type=int, default=4, help="Max parallel jobs (default: 4)")
+    p_run.add_argument(
+        "--parallel",
+        type=int,
+        default=4,
+        help="Max scheduler slots (default: 4). Pretrains consume 4 slots, other runs 1.",
+    )
     p_run.add_argument("--dry-run", action="store_true", help="Print runs without executing")
     p_run.add_argument("--revision", type=str, default=None, help="Revision name (e.g. v2)")
     p_run.add_argument("--reason", type=str, default=None, help="Reason for rerun")
@@ -1600,7 +1654,12 @@ def main():
     p_retry = sub.add_parser("retry", help="Retry failed/skipped runs")
     p_retry.add_argument("--failed", action="store_true", help="Retry failed runs")
     p_retry.add_argument("--skipped", action="store_true", help="Retry skipped runs")
-    p_retry.add_argument("--parallel", type=int, default=4, help="Max parallel jobs (default: 4)")
+    p_retry.add_argument(
+        "--parallel",
+        type=int,
+        default=4,
+        help="Max scheduler slots (default: 4). Pretrains consume 4 slots, other runs 1.",
+    )
     p_retry.add_argument("--sprint", nargs="+", default=None, help="Scope retry to sprint(s)")
     p_retry.add_argument("--revision", type=str, default=None, help="Revision name to retry")
     p_retry.add_argument("--reason", type=str, default=None, help="Reason for rerun")
