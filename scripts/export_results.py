@@ -33,12 +33,13 @@ from itertools import combinations
 from pathlib import Path
 
 import pandas as pd
-import wandb
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
     paired_wilcoxon_signed_rank,
 )
+
+import wandb
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -357,6 +358,20 @@ _LR_DECODE = {
 _MR_DECODE = {"03": 0.3, "075": 0.75}
 
 
+def _recover_source_dataset(run_name: str, config: dict) -> str | None:
+    """Recover transfer provenance from explicit config or historical names."""
+    source_dataset = config.get("source_dataset")
+    if source_dataset in {"miiv", "eicu", "combined"}:
+        return source_dataset
+
+    for candidate in [config.get("output_dir", ""), run_name]:
+        match = re.search(r"_from_(miiv|eicu|combined)(?:_|$)", candidate or "")
+        if match:
+            return match.group(1)
+
+    return None
+
+
 def _recover_pretrain_metadata(
     run_name: str, config: dict
 ) -> tuple[float | None, float | None, str | None]:
@@ -423,27 +438,6 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         lambda: _load_run_data(run)
     )
 
-    # Derive protocol from freeze_encoder
-    freeze = _get_nested(config, "training.freeze_encoder")
-    if freeze is True:
-        protocol = "A"
-    elif freeze is False:
-        protocol = "B"
-    else:
-        protocol = None
-
-    model_size = _infer_model_size(config)
-
-    # Detect source_dataset for transfer runs from run name or config
-    source_dataset = config.get("source_dataset", None)
-    if source_dataset is None:
-        if "_from_" in run_name:
-            parts = run_name.split("_from_")
-            if len(parts) >= 2:
-                source_part = parts[1].split("_")[0]
-                if source_part in ("miiv", "eicu", "combined"):
-                    source_dataset = source_part
-
     # Detect phase from tags
     phase = None
     for tag in tags:
@@ -456,6 +450,23 @@ def extract_run(run, metric_keys: list[str]) -> dict:
             phase = p
         else:
             phase = "finetune"
+
+    # Derive protocol from freeze_encoder. XGBoost runs do not use this field,
+    # but they belong with the full-training / Protocol-B comparison family.
+    freeze = _get_nested(config, "training.freeze_encoder")
+    if freeze is True:
+        protocol = "A"
+    elif freeze is False:
+        protocol = "B"
+    elif config.get("paradigm") == "xgboost" or phase == "baseline":
+        protocol = "B"
+    else:
+        protocol = None
+
+    model_size = _infer_model_size(config)
+
+    # Detect source_dataset for transfer runs from config, output_dir, or run name.
+    source_dataset = _recover_source_dataset(run_name, config)
 
     # Extract metrics from summary
     metrics = {}

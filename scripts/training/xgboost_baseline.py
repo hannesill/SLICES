@@ -28,6 +28,11 @@ from slices.eval.inference import extract_tabular_features
 from xgboost import XGBClassifier, XGBRegressor
 
 
+def _xgboost_eval_metric(task_type: str) -> str:
+    """Return the eval metric aligned with the benchmark primary metric."""
+    return "mae" if task_type == "regression" else "aucpr"
+
+
 @hydra.main(version_base=None, config_path="../../configs", config_name="xgboost")
 def main(cfg: DictConfig) -> None:
     """Train XGBoost baseline."""
@@ -123,7 +128,10 @@ def main(cfg: DictConfig) -> None:
     }
 
     if task_type == "regression":
-        model = XGBRegressor(**common_params)
+        model = XGBRegressor(
+            **common_params,
+            eval_metric=_xgboost_eval_metric(task_type),
+        )
     else:
         # Auto-compute scale_pos_weight if requested
         scale_pos_weight = xgb_cfg.get("scale_pos_weight", None)
@@ -135,7 +143,7 @@ def main(cfg: DictConfig) -> None:
         model = XGBClassifier(
             **common_params,
             scale_pos_weight=scale_pos_weight,
-            eval_metric="logloss",
+            eval_metric=_xgboost_eval_metric(task_type),
         )
 
     model.fit(

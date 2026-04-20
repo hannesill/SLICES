@@ -1294,6 +1294,49 @@ class TestExporterHistoricalRecovery:
         )
         assert extract_run(ts2vec, [])["experiment_type"] == "temporal_contrastive"
 
+    def test_extract_run_recovers_transfer_from_output_dir(self):
+        """Historical transfer runs should recover source_dataset from output_dir."""
+        from scripts.export_results import extract_run
+
+        transfer = DummyWandbRun(
+            run_id="transfer_output_dir",
+            config={
+                "sprint": "10",
+                "dataset": "eicu",
+                "paradigm": "mae",
+                "seed": 789,
+                "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_eicu_seed789_from_miiv",
+                "encoder": {"d_model": 64, "n_layers": 2},
+                "training": {"freeze_encoder": False},
+                "task": {"task_name": "mortality_24h"},
+            },
+            tags=["phase:finetune"],
+            name="s10_finetune_eicu_mae_mortality_24h_seed789",
+        )
+
+        row = extract_run(transfer, [])
+        assert row["source_dataset"] == "miiv"
+        assert row["experiment_type"] == "transfer"
+
+    def test_extract_run_assigns_protocol_b_to_xgboost_baselines(self):
+        """XGBoost baselines must align with the Protocol-B comparison family."""
+        from scripts.export_results import extract_run
+
+        run = DummyWandbRun(
+            run_id="xgb",
+            config={
+                "sprint": "11",
+                "dataset": "miiv",
+                "paradigm": "xgboost",
+                "seed": 42,
+                "task": {"task_name": "mortality_24h"},
+            },
+            tags=["phase:baseline"],
+            name="s11_xgboost_miiv_mortality_24h_seed42",
+        )
+
+        assert extract_run(run, [])["protocol"] == "B"
+
     def test_build_per_seed_df_keeps_distinct_hp_ablation_configs(self):
         """Distinct upstream HP-ablation configs must not deduplicate together."""
         from scripts.export_results import build_per_seed_df
@@ -1440,6 +1483,35 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
 
+    def test_transfer_finetune_command_propagates_source_dataset(self):
+        from scripts.run_experiments import Run
+
+        pretrain = Run(
+            id="pretrain_mae_miiv_seed42",
+            sprint="7",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint7/pretrain_mae_miiv_seed42",
+        )
+        finetune = Run(
+            id="finetune_mae_eicu_seed42",
+            sprint="7",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="eicu",
+            seed=42,
+            output_dir="outputs/sprint7/finetune_mae_mortality_24h_eicu_seed42_from_miiv",
+            depends_on=[pretrain.id],
+            task="mortality_24h",
+            freeze_encoder=False,
+            source_dataset="miiv",
+        )
+
+        cmd = finetune.build_command({pretrain.id: pretrain, finetune.id: finetune})
+        assert "+source_dataset=miiv" in cmd
+
 
 class TestExperimentRunnerRetry:
     """Tests for retry scoping and dependency preservation."""
@@ -1515,6 +1587,121 @@ class TestExperimentRunnerRetry:
         assert target.id in scheduled_ids
         assert dependency.id in scheduled_ids
         assert other.id not in scheduled_ids
+
+    def test_select_ready_runs_prioritizes_pretrains_with_slot_budget(self):
+        import scripts.run_experiments as runner
+
+        pretrain = runner.Run(
+            id="pretrain",
+            sprint="10",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint10/pretrain_mae_miiv_seed42",
+        )
+        finetune = runner.Run(
+            id="finetune",
+            sprint="10",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint10/finetune_mae_miiv_seed42",
+            task="mortality_24h",
+        )
+
+        selected = runner._select_ready_runs(
+            [finetune, pretrain],
+            active_run_ids=set(),
+            runs_by_id={pretrain.id: pretrain, finetune.id: finetune},
+            slot_budget=4,
+        )
+
+        assert [run.id for run in selected] == [pretrain.id]
+
+    def test_select_ready_runs_does_not_mix_pretrain_with_active_gpu_work(self):
+        import scripts.run_experiments as runner
+
+        pretrain = runner.Run(
+            id="pretrain",
+            sprint="10",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint10/pretrain_mae_miiv_seed42",
+        )
+        finetune = runner.Run(
+            id="finetune",
+            sprint="10",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint10/finetune_mae_miiv_seed42",
+            task="mortality_24h",
+        )
+
+        selected = runner._select_ready_runs(
+            [pretrain],
+            active_run_ids={finetune.id},
+            runs_by_id={pretrain.id: pretrain, finetune.id: finetune},
+            slot_budget=4,
+        )
+
+        assert selected == []
+
+
+class TestExportStatisticalScope:
+    """Regression tests for classical-baseline significance comparisons."""
+
+    def test_build_statistical_tests_df_includes_xgboost_comparisons(self):
+        from scripts.export_results import build_statistical_tests_df
+
+        rows = []
+        for paradigm, phase, protocol, offset in [
+            ("xgboost", "baseline", "B", 0.08),
+            ("gru_d", "baseline", "B", 0.03),
+            ("supervised", "supervised", "B", 0.0),
+        ]:
+            for seed in [42, 123]:
+                for task, base in [("mortality_24h", 0.30), ("aki_kdigo", 0.25)]:
+                    rows.append(
+                        {
+                            "experiment_type": "classical_baselines",
+                            "sprint": "11",
+                            "paradigm": paradigm,
+                            "dataset": "miiv",
+                            "task": task,
+                            "seed": seed,
+                            "protocol": protocol,
+                            "label_fraction": 1.0,
+                            "model_size": "default",
+                            "source_dataset": None,
+                            "phase": phase,
+                            "test/auprc": base + offset + (seed / 100000.0),
+                        }
+                    )
+
+        stats_df = build_statistical_tests_df(pd.DataFrame(rows))
+        pairs = {
+            tuple(sorted((row["paradigm_a"], row["paradigm_b"]))) for _, row in stats_df.iterrows()
+        }
+
+        assert ("gru_d", "supervised") in pairs
+        assert ("supervised", "xgboost") in pairs
+        assert ("gru_d", "xgboost") in pairs
+
+
+class TestXGBoostBaseline:
+    """Regression tests for XGBoost configuration choices."""
+
+    def test_xgboost_uses_primary_metric_for_early_stopping(self):
+        from scripts.training.xgboost_baseline import _xgboost_eval_metric
+
+        assert _xgboost_eval_metric("binary") == "aucpr"
+        assert _xgboost_eval_metric("regression") == "mae"
 
 
 class TestTrainingScriptClassWeighting:
