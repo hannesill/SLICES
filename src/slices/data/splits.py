@@ -27,7 +27,7 @@ def load_cached_splits(
     """Load cached splits from splits.yaml if valid.
 
     Validates that cached splits match current parameters (seed, ratios) and
-    that the patient lists are consistent with current data.
+    that the patient lists are consistent with the current task-filtered cohort.
 
     Args:
         processed_dir: Path to processed data directory containing splits.yaml.
@@ -83,8 +83,19 @@ def load_cached_splits(
             zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
         )
 
-        # Validate all patients in data are accounted for
-        current_patients = set(stay_to_patient.values())
+        # Validate cached patient lists against the current cohort represented by
+        # stay_ids. For supervised tasks this may be a label-filtered subset, so
+        # validating against the full static table would incorrectly reuse
+        # full-cohort cached splits for a smaller task-specific cohort.
+        current_patients = set()
+        for stay_id in stay_ids:
+            patient_id = stay_to_patient.get(stay_id)
+            if patient_id is None:
+                logger.debug(
+                    f"Stay {stay_id} missing from static stay->patient mapping, recomputing"
+                )
+                return None
+            current_patients.add(patient_id)
         cached_patients = train_patients | val_patients | test_patients
 
         if current_patients != cached_patients:

@@ -10,6 +10,7 @@ import torch
 import yaml
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.data.dataset import ICUDataset
+from slices.data.splits import load_cached_splits
 
 
 @pytest.fixture
@@ -976,6 +977,52 @@ class TestICUDataModule:
         assert dm1.train_indices == dm2.train_indices, "Train indices should match after reload"
         assert dm1.val_indices == dm2.val_indices, "Val indices should match after reload"
         assert dm1.test_indices == dm2.test_indices, "Test indices should match after reload"
+
+    def test_cached_splits_are_invalidated_when_task_filter_removes_patients(
+        self, mock_extracted_data
+    ):
+        """Task-filtered cohorts must not reuse a full-cohort cached split."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+        )
+        dm.setup()
+
+        metadata_path = mock_extracted_data / "metadata.yaml"
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+        metadata["task_names"] = [*metadata["task_names"], "aki_kdigo"]
+        with open(metadata_path, "w") as f:
+            yaml.safe_dump(metadata, f)
+
+        labels_path = mock_extracted_data / "labels.parquet"
+        labels_df = pl.read_parquet(labels_path).with_columns(
+            pl.Series(
+                "aki_kdigo",
+                [None, None, 0, 1, 1, 0, 1, 1, 0, 0],
+                dtype=pl.Int64,
+            )
+        )
+        labels_df.write_parquet(labels_path)
+
+        static_df = pl.read_parquet(
+            mock_extracted_data / "static.parquet",
+            columns=["stay_id", "patient_id"],
+        )
+        filtered_stay_ids = labels_df.filter(pl.col("aki_kdigo").is_not_null())["stay_id"].to_list()
+
+        cached = load_cached_splits(
+            processed_dir=mock_extracted_data,
+            static_df=static_df,
+            stay_ids=filtered_stay_ids,
+            seed=42,
+            train_ratio=0.7,
+            val_ratio=0.15,
+            test_ratio=0.15,
+        )
+
+        assert cached is None
 
     def test_label_efficiency_splits_preserve_full_split_provenance(self, mock_extracted_data):
         """splits.yaml should keep the full split and record the train subset separately."""
