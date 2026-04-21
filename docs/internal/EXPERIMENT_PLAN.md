@@ -38,9 +38,18 @@ Secondary questions addressed through ablations:
 | Min stay | 24 hours | Ensures a full observation window before downstream labeling |
 | Splits | 70/15/15 train/val/test | Patient-level, no leakage |
 | Imputation | Normalize-then-zero-fill | Eliminates imputation as confound |
-| Finetuning head | MLP, hidden_dims=[64] | Same head architecture across all paradigms |
+| Downstream head | Protocol A: linear; Protocol B/supervised: MLP, hidden_dims=[64] | Same head within each protocol across all paradigms |
 | Precision | fp32 | Avoids bf16 numerical issues with small model |
 | Weight decay | 0.05 | Same regularization across all downstream runs |
+
+**AKI labelable cohort**: `aki_kdigo` is evaluated on a task-specific subset
+with ascertainable creatinine-based KDIGO labels. A stay requires non-null
+creatinine in the 0-24h baseline window and at least one creatinine measurement
+in the 24-48h prediction window; stays without an ascertainable AKI label are
+excluded from AKI supervised training/evaluation but remain available for SSL
+pretraining and non-AKI tasks. This leaves 56,403/74,829 MIIV stays,
+88,239/132,900 eICU stays, and 144,642/207,729 combined stays. Most exclusions
+are due to no 24-48h creatinine measurement.
 
 ### 1.3 Shared Encoder Architecture
 
@@ -92,13 +101,13 @@ Isolates representation quality — the only variable is the SSL pretraining obj
 | Learning rate | 1e-4 |
 | Scheduler | Cosine decay (eta_min=1e-6) |
 | Early stopping | Patience=10 on val AUPRC (classification) or val MAE (regression) |
-| Head | MLP, hidden_dims=[64], dropout=0.3, ReLU |
+| Head | Single linear layer, dropout=0.0 |
 | Gradient clipping | 1.0 |
 | Label smoothing | 0.1 |
 | Weight decay | 0.05 |
 | Class weighting | sqrt(balanced) — square root of inverse frequency |
 
-**Rationale**: Linear probing answers "Which SSL objective produces the best representations?" by preventing the encoder from adapting to the downstream task.
+**Rationale**: Linear probing answers "Which SSL objective produces the best representations?" by preventing the encoder from adapting to the downstream task and by removing nonlinear head capacity as a confound.
 
 #### Protocol B: Full Finetuning (practical utility)
 
@@ -138,7 +147,7 @@ Measures how useful SSL pretraining is as weight initialization.
 | Weight decay | 0.05 |
 | Class weighting | sqrt(balanced) — square root of inverse frequency |
 
-**Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then evaluate via Protocol A (linear probe) and Protocol B (full finetune). Comparing supervised vs. Protocol B isolates the effect of SSL initialization; comparing SSL paradigms via Protocol A isolates representation quality.
+**Same-architecture rationale**: The supervised baseline uses the identical encoder architecture and tokenization as the SSL paradigms to eliminate model capacity as a confounding variable. The only difference is the training procedure: supervised trains end-to-end on labeled data from random initialization, while SSL paradigms pretrain on unlabeled data and then evaluate via Protocol A (strict linear probe) and Protocol B (full finetune). Comparing supervised vs. Protocol B isolates the effect of SSL initialization; comparing SSL paradigms via Protocol A isolates representation quality.
 
 ---
 
@@ -154,6 +163,9 @@ Measures how useful SSL pretraining is as weight initialization.
 | los_remaining | Regression | MAE | MSE, R² |
 
 **AUPRC as primary** for classification: ICU tasks are heavily imbalanced; AUPRC is more informative than AUROC in this regime.
+
+For `aki_kdigo`, prevalence and sample counts are reported on the labelable
+cohort defined in Section 1.2, not on the full >=24h ICU stay cohort.
 
 ### 3.2 Fairness Metrics
 
@@ -411,7 +423,7 @@ and the thesis W&B project summaries.
 
 **Runs last**, after all training sprints are complete. Zero additional training — pure evaluation on existing test predictions.
 
-1. Compute fairness metrics on all downstream test predictions from Sprints 1–5, 7p, 10, 11, 12, and 13
+1. Compute fairness metrics on all downstream test predictions from Sprints 1–8, 7p, 10, 11, 12, and 13
 2. Run `scripts/eval/evaluate_fairness.py` with an explicit `--revision` tag for the thesis rerun corpus
 3. Generate fairness tables and disparity plots
 4. Protected attributes: sex (all datasets), age group (all), race/ethnicity (MIMIC-IV only)

@@ -47,6 +47,49 @@ def test_build_statistical_tests_df_produces_pairwise_significance_rows():
     assert row["p_value_bonferroni"] >= row["p_value"]
 
 
+def test_build_statistical_tests_df_adds_classical_context_rows():
+    mod = importlib.import_module("scripts.export_results")
+
+    rows = []
+    for experiment_type, paradigm, phase, offset in [
+        ("core", "mae", "finetune", 0.10),
+        ("core", "supervised", "supervised", 0.0),
+        ("classical_baselines", "xgboost", "baseline", 0.03),
+        ("classical_baselines", "gru_d", "baseline", 0.05),
+    ]:
+        for seed in [42, 123]:
+            for task, base in [("mortality_24h", 0.30), ("aki_kdigo", 0.25)]:
+                rows.append(
+                    {
+                        "experiment_type": experiment_type,
+                        "sprint": "11" if experiment_type == "classical_baselines" else "1",
+                        "paradigm": paradigm,
+                        "dataset": "miiv",
+                        "task": task,
+                        "seed": seed,
+                        "protocol": "B",
+                        "label_fraction": 1.0,
+                        "model_size": "default",
+                        "source_dataset": None,
+                        "phase": phase,
+                        "test/auprc": base + offset + (seed / 100000.0),
+                    }
+                )
+
+    stats_df = mod.build_statistical_tests_df(pd.DataFrame(rows))
+    contextual = stats_df[stats_df["experiment_type"] == "classical_context_full"]
+    pairs = {
+        tuple(sorted((row["paradigm_a"], row["paradigm_b"]))) for _, row in contextual.iterrows()
+    }
+
+    assert ("supervised", "xgboost") in pairs
+    assert ("mae", "xgboost") in pairs
+    assert ("gru_d", "supervised") in pairs
+    assert ("gru_d", "mae") in pairs
+    assert ("gru_d", "xgboost") not in pairs
+    assert ("mae", "supervised") not in pairs
+
+
 def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
     mod = importlib.import_module("scripts.export_results")
 

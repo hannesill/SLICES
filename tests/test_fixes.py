@@ -634,11 +634,13 @@ class TestFairnessRevisionScoping:
 
         assert excinfo.value.code == 2
 
-    def test_default_core_sprints_include_sprint12(self):
-        """The standalone thesis fairness corpus should include Sprint 12."""
+    def test_default_core_sprints_include_all_downstream_training_sprints(self):
+        """The standalone thesis fairness corpus should include every downstream sprint."""
         mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
-        assert "12" in mod.CORE_SPRINTS
+        assert set(["1", "2", "3", "4", "5", "6", "7", "8", "7p", "10", "11", "12", "13"]).issubset(
+            set(mod.CORE_SPRINTS)
+        )
 
     def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
         """A single revision should be sent as a W&B tag filter."""
@@ -872,7 +874,7 @@ class TestFairnessRevisionScoping:
         assert len(runner_scripts) == 1
         runner_text = runner_scripts[0].read_text()
 
-        assert "--sprint 1 2 3 4 5 10 11" in runner_text
+        assert "--sprint 1 2 3 4 5 6 7 8 10 11" in runner_text
 
     def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
         """The status pane should use uv-managed Python."""
@@ -1349,6 +1351,28 @@ class TestExporterHistoricalRecovery:
 
         assert extract_run(run, [])["protocol"] == "B"
 
+    def test_xgboost_wandb_tags_include_revision_scope(self):
+        """XGBoost runs must be visible to revision-scoped export and fairness jobs."""
+        from scripts.training.xgboost_baseline import _build_wandb_tags
+
+        cfg = OmegaConf.create(
+            {
+                "logging": {"wandb_tags": ["phase:baseline"]},
+                "sprint": "11",
+                "revision": "thesis-v1",
+                "rerun_reason": "rerun canonical thesis baseline sweep with fixed tags",
+                "label_fraction": 0.1,
+            }
+        )
+
+        tags = _build_wandb_tags(cfg)
+
+        assert "phase:baseline" in tags
+        assert "sprint:11" in tags
+        assert "revision:thesis-v1" in tags
+        assert "label_fraction:0.1" in tags
+        assert any(tag.startswith("rerun-reason:") and len(tag) <= 64 for tag in tags)
+
     def test_build_per_seed_df_keeps_distinct_hp_ablation_configs(self):
         """Distinct upstream HP-ablation configs must not deduplicate together."""
         from scripts.export_results import build_per_seed_df
@@ -1524,6 +1548,68 @@ class TestExperimentRunnerWandbOverrides:
         cmd = finetune.build_command({pretrain.id: pretrain, finetune.id: finetune})
         assert "+source_dataset=miiv" in cmd
 
+    def test_protocol_a_finetune_command_uses_strict_linear_probe(self):
+        from scripts.internal.run_experiments import Run
+
+        pretrain = Run(
+            id="pretrain_mae_miiv_seed42",
+            sprint="2",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+        )
+        probe = Run(
+            id="probe_mae_miiv_seed42",
+            sprint="2",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint2/probe_mae_mortality_24h_miiv_seed42",
+            depends_on=[pretrain.id],
+            task="mortality_24h",
+            freeze_encoder=True,
+        )
+
+        cmd = probe.build_command({pretrain.id: pretrain, probe.id: probe})
+
+        assert "training.freeze_encoder=true" in cmd
+        assert "task.head_type=linear" in cmd
+        assert "task.hidden_dims=[]" in cmd
+        assert "task.dropout=0.0" in cmd
+
+    def test_protocol_b_finetune_command_keeps_task_mlp_head(self):
+        from scripts.internal.run_experiments import Run
+
+        pretrain = Run(
+            id="pretrain_mae_miiv_seed42",
+            sprint="1",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+        )
+        finetune = Run(
+            id="finetune_mae_miiv_seed42",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/finetune_mae_mortality_24h_miiv_seed42",
+            depends_on=[pretrain.id],
+            task="mortality_24h",
+            freeze_encoder=False,
+        )
+
+        cmd = finetune.build_command({pretrain.id: pretrain, finetune.id: finetune})
+
+        assert "training.freeze_encoder=false" in cmd
+        assert "task.head_type=linear" not in cmd
+
 
 class TestExperimentRunnerRetry:
     """Tests for retry scoping and dependency preservation."""
@@ -1599,6 +1685,71 @@ class TestExperimentRunnerRetry:
         assert target.id in scheduled_ids
         assert dependency.id in scheduled_ids
         assert other.id not in scheduled_ids
+
+    def test_cmd_retry_revises_dependencies_for_revision_scoped_retry(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        dependency = runner.Run(
+            id="s1_pretrain_mae_miiv_seed42",
+            sprint="1",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="s2_finetune_mae_mortality_24h_miiv_seed42",
+            sprint="2",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint2/finetune_mae_mortality_24h_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+
+        revised_dep_id = "s1_rev-thesis-v1_pretrain_mae_miiv_seed42"
+        revised_target_id = "s2_rev-thesis-v1_finetune_mae_mortality_24h_miiv_seed42"
+        state = {
+            "version": 1,
+            "runs": {
+                revised_dep_id: {"status": "completed"},
+                revised_target_id: {"status": "failed"},
+            },
+        }
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            sprint=["2"],
+            failed=True,
+            skipped=False,
+            revision="thesis-v1",
+            reason="retry downstream failure",
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        runner.cmd_retry(args)
+
+        scheduled_by_id = {run.id: run for run in scheduled["runs"]}
+        assert revised_dep_id in scheduled_by_id
+        assert revised_target_id in scheduled_by_id
+        assert scheduled_by_id[revised_target_id].depends_on == [revised_dep_id]
+        assert scheduled_by_id[revised_dep_id].extra_overrides["revision"] == "thesis-v1"
+        assert scheduled_by_id[revised_target_id].extra_overrides["revision"] == "thesis-v1"
 
     def test_select_ready_runs_prioritizes_pretrains_with_slot_budget(self):
         import scripts.internal.run_experiments as runner
