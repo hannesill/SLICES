@@ -202,6 +202,7 @@ cython_debug/
 .cursorrules
 .claude/
 .cursor/
+.rulesync/
 
 # Marimo
 marimo/_static/
