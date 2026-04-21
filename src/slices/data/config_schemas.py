@@ -203,9 +203,9 @@ class DataConfig(BaseModel):
     pin_memory: bool = PIN_MEMORY
 
     # Patient-level split ratios
-    train_ratio: float = TRAIN_RATIO
-    val_ratio: float = VAL_RATIO
-    test_ratio: float = TEST_RATIO
+    train_ratio: float = Field(default=TRAIN_RATIO, ge=0.0, le=1.0)
+    val_ratio: float = Field(default=VAL_RATIO, ge=0.0, le=1.0)
+    test_ratio: float = Field(default=TEST_RATIO, ge=0.0, le=1.0)
 
     # Preprocessing applied during training
     normalize: bool = NORMALIZE

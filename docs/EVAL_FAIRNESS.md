@@ -12,8 +12,8 @@ to W&B summaries and the parquet exports produced by `scripts/export_results.py`
 - The standalone script is revision-scoped. Pass `--revision <name>` so reruns
   do not get mixed together.
 - Default benchmark fairness corpus:
-  - Internal experiment groups `1`, `2`, `3`, `4`, `5`, `7p`, `10`, `11`,
-    `12`, `13`
+  - Internal experiment groups `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `7p`,
+    `10`, `11`, `12`, `13`
   - Phases `finetune`, `supervised`, and `baseline`
 - The script re-runs inference from the checkpoint provenance recorded by the
   original training run, then writes fairness metrics back to that same W&B run.

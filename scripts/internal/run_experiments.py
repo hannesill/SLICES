@@ -19,6 +19,8 @@ Usage:
     uv run python scripts/internal/run_experiments.py status --sprint 1
     uv run python scripts/internal/run_experiments.py retry --failed --parallel 4 \\
         --project slices-thesis --revision thesis-v1 --entity <entity>
+    uv run python scripts/internal/run_experiments.py retry --skipped --failed --parallel 4 \\
+        --project slices-thesis --revision thesis-v1 --entity <entity>
     uv run python scripts/internal/run_experiments.py retry --failed \\
         --sprint 1 --revision thesis-v1 --parallel 4 \\
         --project slices-thesis --entity <entity>
@@ -480,6 +482,12 @@ class MatrixBuilder:
         self.runs.append(run)
         return run
 
+    @staticmethod
+    def _add_model_size_metadata(run: Run, size_name: str) -> Run:
+        """Add Hydra metadata used by W&B naming/tagging without changing run IDs."""
+        run.extra_overrides = {**run.extra_overrides, "+model_size": size_name}
+        return run
+
     # --- Sprint builders ---
 
     def build_sprint1(self):
@@ -642,33 +650,40 @@ class MatrixBuilder:
                     **size_cfg["ssl_scale"]["mae"],
                 }
                 pt = self._add_pretrain(sprint, "mae", ds, seed, extra=pretrain_extra)
+                self._add_model_size_metadata(pt, size_name)
 
                 # --- MAE finetune (Protocol B) + probe (Protocol A) ---
                 finetune_extra = {**model_extra}
                 for frac in LABEL_FRACTIONS_PILOT:
-                    self._add_finetune(
-                        sprint,
-                        "mae",
-                        ds,
-                        seed,
-                        task,
-                        False,
-                        pt,
-                        label_fraction=frac,
-                        extra=finetune_extra,
-                        name_extra={"size": size_name},
+                    self._add_model_size_metadata(
+                        self._add_finetune(
+                            sprint,
+                            "mae",
+                            ds,
+                            seed,
+                            task,
+                            False,
+                            pt,
+                            label_fraction=frac,
+                            extra=finetune_extra,
+                            name_extra={"size": size_name},
+                        ),
+                        size_name,
                     )
-                    self._add_finetune(
-                        sprint,
-                        "mae",
-                        ds,
-                        seed,
-                        task,
-                        True,
-                        pt,
-                        label_fraction=frac,
-                        extra=finetune_extra,
-                        name_extra={"size": size_name},
+                    self._add_model_size_metadata(
+                        self._add_finetune(
+                            sprint,
+                            "mae",
+                            ds,
+                            seed,
+                            task,
+                            True,
+                            pt,
+                            label_fraction=frac,
+                            extra=finetune_extra,
+                            name_extra={"size": size_name},
+                        ),
+                        size_name,
                     )
 
                 # --- Supervised baseline (same larger encoder, from scratch) ---
@@ -690,6 +705,7 @@ class MatrixBuilder:
                         label_fraction=frac,
                         extra_overrides=sup_extra,
                     )
+                    self._add_model_size_metadata(run, size_name)
                     self.runs.append(run)
 
     def build_sprint7(self):
@@ -1451,6 +1467,89 @@ def cmd_status(args):
     print_status(sprint_filter)
 
 
+def _collect_dependency_closure(
+    runs: list[Run],
+    all_by_id: dict[str, Run],
+) -> tuple[list[Run], dict[str, set[str]], set[str]]:
+    """Return transitive dependencies for runs, with provenance for reporting."""
+    deps: list[Run] = []
+    required_by: dict[str, set[str]] = {}
+    missing: set[str] = set()
+    seen: set[str] = set()
+    queue: list[tuple[str, str]] = [(dep_id, run.id) for run in runs for dep_id in run.depends_on]
+
+    while queue:
+        dep_id, parent_id = queue.pop(0)
+        required_by.setdefault(dep_id, set()).add(parent_id)
+        if dep_id in seen:
+            continue
+        seen.add(dep_id)
+
+        dep = all_by_id.get(dep_id)
+        if dep is None:
+            missing.add(dep_id)
+            continue
+
+        deps.append(dep)
+        queue.extend((child_dep_id, dep.id) for child_dep_id in dep.depends_on)
+
+    return deps, required_by, missing
+
+
+def _retry_command_suggestion(args, *, include_failed: bool, include_skipped: bool) -> str:
+    """Build a retry command that preserves the user's current retry scope."""
+    cmd = ["uv", "run", "python", "scripts/internal/run_experiments.py", "retry"]
+    if include_failed:
+        cmd.append("--failed")
+    if include_skipped:
+        cmd.append("--skipped")
+    if args.sprint:
+        cmd.append("--sprint")
+        cmd.extend(str(s) for s in args.sprint)
+    if args.revision:
+        cmd.extend(["--revision", str(args.revision)])
+    if args.reason:
+        cmd.extend(["--reason", str(args.reason)])
+    if args.project:
+        cmd.extend(["--project", str(args.project)])
+    if args.entity:
+        cmd.extend(["--entity", str(args.entity)])
+    cmd.extend(["--parallel", str(args.parallel)])
+    return shlex.join(cmd)
+
+
+def _fail_for_blocked_retry_dependencies(
+    blocked: list[Run],
+    missing: set[str],
+    state: dict,
+    required_by: dict[str, set[str]],
+    args,
+) -> None:
+    """Print a dependency report for retry requests that cannot make progress."""
+    print("Cannot retry the selected runs because required dependencies are blocked.")
+    if blocked:
+        print("\nBlocked dependencies:")
+        for dep in sorted(blocked, key=lambda run: (get_run_status(state, run.id), run.id)):
+            dependents = ", ".join(sorted(required_by.get(dep.id, set())))
+            print(f"  {dep.id} [{get_run_status(state, dep.id)}] required by: {dependents}")
+    if missing:
+        print("\nMissing generated dependencies:")
+        for dep_id in sorted(missing):
+            dependents = ", ".join(sorted(required_by.get(dep_id, set())))
+            print(f"  {dep_id} required by: {dependents}")
+
+    suggested = _retry_command_suggestion(
+        args,
+        include_failed=args.failed
+        or any(get_run_status(state, dep.id) == "failed" for dep in blocked),
+        include_skipped=args.skipped
+        or any(get_run_status(state, dep.id) == "skipped" for dep in blocked),
+    )
+    print("\nSuggested command:")
+    print(f"  {suggested}")
+    raise SystemExit(1)
+
+
 def cmd_retry(args):
     all_runs = generate_all_runs()
     sprint_filter = {str(s) for s in args.sprint} if args.sprint else None
@@ -1484,26 +1583,46 @@ def cmd_retry(args):
     for r in candidate_runs:
         status = get_run_status(state, r.id)
         if args.failed and status == "failed":
-            set_run_status(state, r.id, "pending")
             runs_to_retry.append(r)
         elif args.skipped and status == "skipped":
-            set_run_status(state, r.id, "pending")
             runs_to_retry.append(r)
 
     if not runs_to_retry:
         print("No runs to retry.")
         return 0
 
-    # Include their dependencies that are completed (already fine) or pending
     all_by_id = {r.id: r for r in all_runs}
-    retry_ids = {r.id for r in runs_to_retry}
-    deps_needed = set()
-    for r in runs_to_retry:
-        for d in r.depends_on:
-            if d not in retry_ids:
-                deps_needed.add(d)
-    extra = [all_by_id[d] for d in deps_needed if d in all_by_id]
-    runs_to_retry = extra + runs_to_retry
+    dependencies, required_by, missing = _collect_dependency_closure(runs_to_retry, all_by_id)
+
+    # Failed/skipped dependencies cannot satisfy downstream runs. Treat --failed
+    # and --skipped as the explicit request to reset those dependency states too.
+    blocked = [
+        dep
+        for dep in dependencies
+        if (get_run_status(state, dep.id) == "failed" and not args.failed)
+        or (get_run_status(state, dep.id) == "skipped" and not args.skipped)
+    ]
+    unresolved_missing = {
+        dep_id for dep_id in missing if get_run_status(state, dep_id) != "completed"
+    }
+    if blocked or unresolved_missing:
+        _fail_for_blocked_retry_dependencies(
+            blocked,
+            unresolved_missing,
+            state,
+            required_by,
+            args,
+        )
+
+    runs_by_retry_id: dict[str, Run] = {}
+    for run in dependencies + runs_to_retry:
+        runs_by_retry_id.setdefault(run.id, run)
+
+    for run in runs_by_retry_id.values():
+        if get_run_status(state, run.id) in {"failed", "skipped"}:
+            set_run_status(state, run.id, "pending")
+
+    runs_to_retry = list(runs_by_retry_id.values())
 
     save_state(state)
     print(f"Retrying {len(runs_to_retry)} runs")

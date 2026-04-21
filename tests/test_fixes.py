@@ -20,6 +20,7 @@ import pytest
 import torch
 import yaml
 from omegaconf import OmegaConf
+
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.labels.aki import AKILabelBuilder
 from slices.data.labels.los import LOSLabelBuilder
@@ -109,6 +110,36 @@ class TestLabelManifest:
             gap_hours=6,
         )
         assert LabelBuilder.config_hash(config_0) != LabelBuilder.config_hash(config_6)
+
+    def test_config_hash_changes_on_label_sources_change(self):
+        """Different label_sources must invalidate stale emitted labels."""
+        config_stays = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            label_sources=["stays"],
+        )
+        config_mortality = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            label_sources=["stays", "mortality_info"],
+        )
+
+        assert LabelBuilder.config_hash(config_stays) != LabelBuilder.config_hash(config_mortality)
+
+    def test_config_hash_changes_on_supported_datasets_change(self):
+        """Dataset support affects whether a task emits labels."""
+        config_miiv = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            supported_datasets=["miiv"],
+        )
+        config_all = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            supported_datasets=None,
+        )
+
+        assert LabelBuilder.config_hash(config_miiv) != LabelBuilder.config_hash(config_all)
 
     def test_validate_data_prerequisites_version_mismatch(self, tmp_path):
         """Builder version mismatch should raise RuntimeError."""
@@ -397,6 +428,26 @@ class TestRawTensorCacheFreshness:
 
         monkeypatch.setattr(cache_mod, "get_data_fingerprint", lambda data_dir: "data-v2")
         assert load_cached_tensors(tmp_path, seq_length=4, n_features=3) is None
+
+    def test_failed_tensor_cache_save_removes_temp_file(self, tmp_path, monkeypatch):
+        """Failed atomic writes should not leave a target cache or stale temp file."""
+        import slices.data.tensor_cache as cache_mod
+
+        monkeypatch.setattr(cache_mod, "get_data_fingerprint", lambda data_dir: "data-v1")
+        monkeypatch.setattr(cache_mod, "get_preprocessing_fingerprint", lambda: "prep-v1")
+
+        def fail_save(cache_data, path):
+            raise RuntimeError("simulated save failure")
+
+        monkeypatch.setattr(cache_mod.torch, "save", fail_save)
+
+        timeseries = torch.zeros((2, 4, 3), dtype=torch.float32)
+        masks = torch.ones((2, 4, 3), dtype=torch.bool)
+        save_cached_tensors(tmp_path, timeseries, masks, seq_length=4, n_features=3)
+
+        cache_path = cache_mod.get_tensor_cache_path(tmp_path, seq_length=4, n_features=3)
+        assert not cache_path.exists()
+        assert list(cache_path.parent.glob("*.tmp")) == []
 
 
 class TestCombinedDatasetValidation:
@@ -1569,6 +1620,50 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
 
+    def test_wandb_logger_includes_model_size_metadata(self, monkeypatch):
+        import slices.training.utils as training_utils
+
+        captured = {}
+
+        class DummyConfig:
+            def update(self, cfg):
+                captured["config_update"] = cfg
+
+        class DummyExperiment:
+            config = DummyConfig()
+
+        class DummyWandbLogger:
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                self.experiment = DummyExperiment()
+
+        monkeypatch.setattr(training_utils, "WandbLogger", DummyWandbLogger)
+
+        cfg = OmegaConf.create(
+            {
+                "output_dir": "outputs/sprint7p/example",
+                "sprint": "7p",
+                "model_size": "medium",
+                "label_fraction": 0.1,
+                "training": {"freeze_encoder": False},
+                "logging": {
+                    "use_wandb": True,
+                    "wandb_project": "slices",
+                    "wandb_entity": None,
+                    "run_name": "s7p_finetune_miiv_mae_mortality_24h_seed42",
+                    "wandb_group": "finetune_miiv_mae_mortality_24h",
+                    "wandb_tags": ["phase:finetune"],
+                },
+            }
+        )
+
+        logger = training_utils.setup_wandb_logger(cfg)
+
+        assert isinstance(logger, DummyWandbLogger)
+        assert captured["kwargs"]["name"] == "s7p_finetune_miiv_mae_mortality_24h_seed42_medium"
+        assert captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_medium_frac01"
+        assert "model_size:medium" in captured["kwargs"]["tags"]
+
     def test_transfer_finetune_command_propagates_source_dataset(self):
         from scripts.internal.run_experiments import Run
 
@@ -1735,6 +1830,131 @@ class TestExperimentRunnerRetry:
         assert target.id in scheduled_ids
         assert dependency.id in scheduled_ids
         assert other.id not in scheduled_ids
+
+    def test_cmd_retry_skipped_reports_failed_dependencies(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        dependency = runner.Run(
+            id="dep_pretrain",
+            sprint="0",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="target_finetune",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+
+        state = {
+            "version": 1,
+            "runs": {
+                dependency.id: {"status": "failed"},
+                target.id: {"status": "skipped"},
+            },
+        }
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: pytest.fail("scheduler should not run"),
+        )
+
+        args = SimpleNamespace(
+            sprint=["1"],
+            failed=False,
+            skipped=True,
+            revision=None,
+            reason=None,
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        with pytest.raises(SystemExit):
+            runner.cmd_retry(args)
+
+        output = capsys.readouterr().out
+        assert "dep_pretrain [failed]" in output
+        assert (
+            "uv run python scripts/internal/run_experiments.py retry --failed --skipped" in output
+        )
+        assert state["runs"][target.id]["status"] == "skipped"
+        assert state["runs"][dependency.id]["status"] == "failed"
+
+    def test_cmd_retry_skipped_resets_failed_dependencies_when_requested(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        dependency = runner.Run(
+            id="dep_pretrain",
+            sprint="0",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="target_finetune",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+
+        state = {
+            "version": 1,
+            "runs": {
+                dependency.id: {"status": "failed"},
+                target.id: {"status": "skipped"},
+            },
+        }
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            sprint=["1"],
+            failed=True,
+            skipped=True,
+            revision=None,
+            reason=None,
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        runner.cmd_retry(args)
+
+        scheduled_ids = [run.id for run in scheduled["runs"]]
+        assert dependency.id in scheduled_ids
+        assert target.id in scheduled_ids
+        assert state["runs"][dependency.id]["status"] == "pending"
+        assert state["runs"][target.id]["status"] == "pending"
 
     def test_cmd_retry_revises_dependencies_for_revision_scoped_retry(self, monkeypatch):
         import scripts.internal.run_experiments as runner
@@ -1962,6 +2182,11 @@ class TestXGBoostBaseline:
         y_prob = [0.1, 0.3, 0.7, 0.9]
 
         assert _binary_ece(y_true, y_prob, n_bins=2) == pytest.approx(0.2)
+
+    def test_xgboost_config_caps_cpu_parallelism(self):
+        cfg = OmegaConf.load("configs/xgboost.yaml")
+
+        assert cfg.xgboost.n_jobs == 4
 
 
 class TestTrainingScriptClassWeighting:
@@ -2431,6 +2656,10 @@ class TestExperimentRunnerMatrix:
         assert len(builder.runs) == 100
         assert sorted({run.seed for run in builder.runs}) == SEEDS_EXTENDED
         assert BASELINE_SPRINTS["7p"] == ["6", "10"]
+        assert {run.extra_overrides["+model_size"] for run in builder.runs} == {
+            "medium",
+            "large",
+        }
 
     def test_sprint13_includes_both_protocols(self):
         from scripts.internal.run_experiments import MatrixBuilder

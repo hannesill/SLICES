@@ -61,13 +61,18 @@ class LabelBuilder(ABC):
         """
         # NOTE: quality_checks intentionally excluded because they only control
         # warnings/analysis thresholds, not the label semantics themselves.
+        supported_datasets = (
+            sorted(config.supported_datasets) if config.supported_datasets is not None else None
+        )
         hashable = {
             "task_name": config.task_name,
             "task_type": config.task_type,
             "prediction_window_hours": config.prediction_window_hours,
             "observation_window_hours": config.observation_window_hours,
             "gap_hours": config.gap_hours,
+            "label_sources": sorted(config.label_sources),
             "label_params": config.label_params,
+            "supported_datasets": supported_datasets,
         }
         content = json.dumps(hashable, sort_keys=True, default=str)
         return hashlib.sha256(content.encode()).hexdigest()[:16]

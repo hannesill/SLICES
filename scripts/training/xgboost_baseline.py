@@ -25,9 +25,10 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
+from xgboost import XGBClassifier, XGBRegressor
+
 from slices.data.datamodule import ICUDataModule
 from slices.eval.inference import extract_tabular_features
-from xgboost import XGBClassifier, XGBRegressor
 
 
 def _xgboost_eval_metric(task_type: str) -> str:
@@ -156,6 +157,9 @@ def main(cfg: DictConfig) -> None:
 
     xgb_cfg = cfg.xgboost
     early_stopping_rounds = xgb_cfg.get("early_stopping_rounds", 20)
+    n_jobs = xgb_cfg.get("n_jobs", 4)
+    if n_jobs is None:
+        n_jobs = 4
     common_params = {
         "n_estimators": xgb_cfg.n_estimators,
         "max_depth": xgb_cfg.max_depth,
@@ -165,7 +169,7 @@ def main(cfg: DictConfig) -> None:
         "min_child_weight": xgb_cfg.min_child_weight,
         "early_stopping_rounds": early_stopping_rounds,
         "random_state": cfg.seed,
-        "n_jobs": -1,
+        "n_jobs": n_jobs,
     }
 
     if task_type == "regression":

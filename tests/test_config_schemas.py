@@ -9,6 +9,8 @@ Tests cover:
 import pytest
 import yaml
 from pydantic import ValidationError
+
+from slices.data.config_schemas import DataConfig
 from slices.training.config_schemas import (
     OptimizerConfig,
     SchedulerConfig,
@@ -103,6 +105,28 @@ class TestTaskConfigValidation:
         assert cfg.prediction_window_hours == 24
         assert cfg.observation_window_hours == 24
         assert cfg.label_sources == ["stays", "mortality_info"]
+
+
+class TestDataConfigValidation:
+    """Tests for data loading config bounds."""
+
+    def test_split_ratios_must_be_bounded(self):
+        with pytest.raises(ValidationError, match="train_ratio"):
+            DataConfig(
+                processed_dir="data/processed/miiv",
+                train_ratio=1.2,
+                val_ratio=-0.1,
+                test_ratio=-0.1,
+            )
+
+    def test_split_ratios_must_sum_to_one(self):
+        with pytest.raises(ValidationError, match="Split ratios must sum to 1.0"):
+            DataConfig(
+                processed_dir="data/processed/miiv",
+                train_ratio=0.5,
+                val_ratio=0.3,
+                test_ratio=0.3,
+            )
 
 
 class TestTrainingConfigValidation:
