@@ -1955,6 +1955,14 @@ class TestXGBoostBaseline:
         assert _xgboost_eval_metric("binary") == "aucpr"
         assert _xgboost_eval_metric("regression") == "mae"
 
+    def test_xgboost_binary_ece_matches_uniform_bin_definition(self):
+        from scripts.training.xgboost_baseline import _binary_ece
+
+        y_true = [0, 0, 1, 1]
+        y_prob = [0.1, 0.3, 0.7, 0.9]
+
+        assert _binary_ece(y_true, y_prob, n_bins=2) == pytest.approx(0.2)
+
 
 class TestTrainingScriptClassWeighting:
     """Regression tests for entrypoint-level class weight resolution."""

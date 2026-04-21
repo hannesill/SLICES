@@ -228,6 +228,13 @@ class TestWilcoxonHelpers:
         assert result["n_nonzero_pairs"] == pytest.approx(6.0)
         assert result["p_value"] < 0.05
 
+    def test_paired_wilcoxon_uses_exact_small_sample_with_tied_differences(self):
+        result = paired_wilcoxon_signed_rank([1, 1, 1, 1, 1], [0, 0, 0, 0, 0])
+
+        assert result["n_pairs"] == pytest.approx(5.0)
+        assert result["n_nonzero_pairs"] == pytest.approx(5.0)
+        assert result["p_value"] == pytest.approx(0.0625)
+
     def test_paired_wilcoxon_handles_all_zero_differences(self):
         result = paired_wilcoxon_signed_rank([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
         assert result["p_value"] == pytest.approx(1.0)

@@ -412,6 +412,30 @@ class TestFineTuneModule:
         assert module.task_head is not None
         assert isinstance(module.task_head, MLPTaskHead)
 
+    def test_obs_aware_transformer_forward_masks_empty_timesteps(self, sample_config):
+        """Downstream pooling should exclude fully unobserved obs-aware timesteps."""
+        config = OmegaConf.create(OmegaConf.to_container(sample_config, resolve=True))
+        config.encoder.obs_aware = True
+        config.training.use_missing_token = False
+        module = FineTuneModule(config)
+
+        captured = {}
+
+        def capture_forward(timeseries, mask=None, padding_mask=None):
+            captured["padding_mask"] = padding_mask.detach().clone()
+            return torch.zeros(timeseries.size(0), module.encoder.get_output_dim())
+
+        module.encoder.forward = capture_forward
+
+        timeseries = torch.randn(2, 4, 35)
+        obs_mask = torch.ones(2, 4, 35, dtype=torch.bool)
+        obs_mask[0, 1, :] = False
+        obs_mask[1, 2, :] = False
+
+        module(timeseries, obs_mask)
+
+        assert torch.equal(captured["padding_mask"], obs_mask.any(dim=-1))
+
     def test_load_encoder_checkpoint(self, sample_config, encoder_checkpoint):
         """Test loading encoder from checkpoint."""
         module = FineTuneModule(sample_config, checkpoint_path=encoder_checkpoint)

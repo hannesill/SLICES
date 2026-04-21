@@ -55,8 +55,8 @@ class GRUDEncoder(BaseEncoder):
         self.W_gamma_x = nn.Parameter(torch.Tensor(d_input))
         self.b_gamma_x = nn.Parameter(torch.Tensor(d_input))
 
-        # Hidden state decay parameters
-        self.W_gamma_h = nn.Parameter(torch.Tensor(d_model))
+        # Hidden state decay parameters: feature-wise deltas -> hidden units.
+        self.W_gamma_h = nn.Parameter(torch.Tensor(d_model, d_input))
         self.b_gamma_h = nn.Parameter(torch.Tensor(d_model))
 
         # Empirical mean in z-space is 0 (after z-normalization)
@@ -71,6 +71,36 @@ class GRUDEncoder(BaseEncoder):
         nn.init.zeros_(self.b_gamma_x)
         nn.init.uniform_(self.W_gamma_h, -0.1, 0.1)
         nn.init.zeros_(self.b_gamma_h)
+
+    def _compute_input_decay(self, delta_t: torch.Tensor) -> torch.Tensor:
+        """Compute feature-wise input decay gamma_x for one timestep."""
+        return torch.exp(-torch.relu(self.W_gamma_x * delta_t + self.b_gamma_x))
+
+    def _compute_hidden_decay(self, delta_t: torch.Tensor) -> torch.Tensor:
+        """Compute hidden-state decay gamma_h from feature-wise deltas."""
+        return torch.exp(-torch.relu(delta_t @ self.W_gamma_h.t() + self.b_gamma_h))
+
+    def _impute_inputs(
+        self,
+        x_t: torch.Tensor,
+        mask_t: torch.Tensor,
+        gamma_x: torch.Tensor,
+        x_last_observed: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply GRU-D input decay toward the empirical mean for missing values."""
+        mask_float = mask_t.float()
+        return mask_float * x_t + (1 - mask_float) * (
+            gamma_x * x_last_observed + (1 - gamma_x) * self.x_mean
+        )
+
+    def _update_last_observed(
+        self,
+        x_t: torch.Tensor,
+        mask_t: torch.Tensor,
+        x_last_observed: torch.Tensor,
+    ) -> torch.Tensor:
+        """Update x_last only with actually observed raw values."""
+        return torch.where(mask_t, x_t, x_last_observed)
 
     def _compute_time_deltas(self, mask: torch.Tensor) -> torch.Tensor:
         """Compute time since last observation per feature.
@@ -119,25 +149,31 @@ class GRUDEncoder(BaseEncoder):
         delta = self._compute_time_deltas(mask)
 
         h = torch.zeros(B, self.config.d_model, device=device)
-        x_prev = self.x_mean.expand(B, -1).clone()
+        x_last_observed = self.x_mean.expand(B, -1).clone()
 
         for t in range(T):
             # Input decay
-            gamma_x = torch.exp(-torch.relu(self.W_gamma_x * delta[:, t, :] + self.b_gamma_x))
-            x_decayed = mask_float[:, t, :] * x[:, t, :] + (1 - mask_float[:, t, :]) * (
-                gamma_x * x_prev + (1 - gamma_x) * self.x_mean
+            gamma_x = self._compute_input_decay(delta[:, t, :])
+            x_decayed = self._impute_inputs(
+                x[:, t, :],
+                mask[:, t, :],
+                gamma_x,
+                x_last_observed,
             )
 
             # Hidden state decay
-            delta_h = delta[:, t, :].mean(dim=-1, keepdim=True).expand(-1, self.config.d_model)
-            gamma_h = torch.exp(-torch.relu(self.W_gamma_h * delta_h + self.b_gamma_h))
+            gamma_h = self._compute_hidden_decay(delta[:, t, :])
             h = gamma_h * h
 
             # GRU update
             gru_input = torch.cat([x_decayed, mask_float[:, t, :]], dim=-1)
             h = self.gru_cell(gru_input, h)
 
-            x_prev = x_decayed
+            x_last_observed = self._update_last_observed(
+                x[:, t, :],
+                mask[:, t, :],
+                x_last_observed,
+            )
 
         h = self.dropout(h)
         return h

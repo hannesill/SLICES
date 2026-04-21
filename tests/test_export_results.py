@@ -7,6 +7,18 @@ import pandas as pd
 import pytest
 
 
+class DummyRun:
+    def __init__(self, config, tags, summary=None, name="dummy"):
+        self.config = config
+        self.tags = tags
+        self.summary_metrics = summary or {}
+        self.id = "dummy-id"
+        self.url = "https://wandb.test/dummy-id"
+        self.name = name
+        self.group = None
+        self.created_at = "2026-04-21T00:00:00"
+
+
 def test_build_statistical_tests_df_produces_pairwise_significance_rows():
     mod = importlib.import_module("scripts.export_results")
 
@@ -46,6 +58,35 @@ def test_build_statistical_tests_df_produces_pairwise_significance_rows():
     assert row["n_tasks"] == 2
     assert row["better_paradigm"] == "mae"
     assert row["p_value_bonferroni"] >= row["p_value"]
+    assert row["n_shared_task_seed_pairs"] == 6
+    assert row["n_union_task_seed_pairs"] == 6
+
+
+def test_extract_run_uses_requested_inherited_sprint_tag_for_family():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "sprint": "6",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "encoder": {"d_model": 64, "n_layers": 2},
+            "training": {"freeze_encoder": False},
+            "task": {"task_name": "mortality_24h"},
+            "label_fraction": 0.1,
+        },
+        tags=["sprint:6", "sprint:7p", "phase:finetune"],
+        name="s6_inherited_capacity_baseline",
+    )
+
+    default_row = mod.extract_run(run, [])
+    requested_row = mod.extract_run(run, [], requested_sprints=["7p"])
+
+    assert default_row["experiment_type"] == "label_efficiency"
+    assert requested_row["experiment_type"] == "capacity_pilot"
+    assert requested_row["sprint"] == "7p"
+    assert requested_row["config_sprint"] == "6"
 
 
 def test_build_statistical_tests_df_adds_classical_context_rows():
@@ -89,6 +130,102 @@ def test_build_statistical_tests_df_adds_classical_context_rows():
     assert ("gru_d", "mae") in pairs
     assert ("gru_d", "xgboost") not in pairs
     assert ("mae", "supervised") not in pairs
+
+
+def test_build_statistical_tests_df_reports_incomplete_pair_coverage():
+    mod = importlib.import_module("scripts.export_results")
+
+    rows = []
+    for paradigm, seeds in [("mae", [42, 123]), ("supervised", [42])]:
+        for seed in seeds:
+            rows.append(
+                {
+                    "experiment_type": "core",
+                    "sprint": "1",
+                    "paradigm": paradigm,
+                    "dataset": "miiv",
+                    "task": "mortality_24h",
+                    "seed": seed,
+                    "protocol": "B",
+                    "label_fraction": 1.0,
+                    "model_size": "default",
+                    "source_dataset": None,
+                    "phase": "finetune",
+                    "test/auprc": 0.3 + (0.1 if paradigm == "mae" else 0.0),
+                }
+            )
+
+    stats_df = mod.build_statistical_tests_df(pd.DataFrame(rows))
+    row = stats_df.iloc[0]
+
+    assert row["n_pairs"] == 1
+    assert row["n_task_seed_pairs_a"] == 2
+    assert row["n_task_seed_pairs_b"] == 1
+    assert row["n_shared_task_seed_pairs"] == 1
+    assert row["n_union_task_seed_pairs"] == 2
+    assert '"seed": 123' in row["missing_task_seed_pairs_b"]
+
+
+def test_build_ts2vec_vs_core_contrastive_df_compares_across_experiment_types():
+    mod = importlib.import_module("scripts.export_results")
+
+    rows = []
+    for experiment_type, paradigm, offset in [
+        ("temporal_contrastive", "ts2vec", 0.04),
+        ("core", "contrastive", 0.0),
+    ]:
+        for seed in [42, 123]:
+            for task, base in [("mortality_24h", 0.30), ("aki_kdigo", 0.25)]:
+                rows.append(
+                    {
+                        "experiment_type": experiment_type,
+                        "sprint": "13" if paradigm == "ts2vec" else "1",
+                        "paradigm": paradigm,
+                        "dataset": "miiv",
+                        "task": task,
+                        "seed": seed,
+                        "protocol": "B",
+                        "label_fraction": 1.0,
+                        "model_size": "default",
+                        "source_dataset": None,
+                        "phase": "finetune",
+                        "test/auprc": base + offset + (seed / 100000.0),
+                    }
+                )
+
+    comparison_df = mod.build_ts2vec_vs_core_contrastive_df(pd.DataFrame(rows))
+
+    assert len(comparison_df) == 1
+    row = comparison_df.iloc[0]
+    assert row["comparison_type"] == "ts2vec_vs_core_contrastive"
+    assert row["paradigm_a"] == "ts2vec"
+    assert row["paradigm_b"] == "contrastive"
+    assert row["n_pairs"] == 4
+    assert row["better_paradigm"] == "ts2vec"
+
+
+def test_validate_flags_wrong_fixed_seed_set_with_correct_count():
+    mod = importlib.import_module("scripts.export_results")
+
+    aggregated_df = pd.DataFrame(
+        [
+            {
+                "experiment_type": "core",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "protocol": "B",
+                "n_seeds": 5,
+                "seed_list": "[1, 2, 3, 4, 5]",
+            }
+        ]
+    )
+    per_seed_df = pd.DataFrame([{"test/auprc": 0.5}])
+
+    warnings = mod.validate(per_seed_df, aggregated_df)
+
+    assert any("expected seed set" in warning for warning in warnings)
+    assert any("unexpected=[1, 2, 3, 4, 5]" in warning for warning in warnings)
 
 
 def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):

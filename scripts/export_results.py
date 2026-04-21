@@ -3,13 +3,15 @@
 Canonical results export pipeline for SLICES.
 
 Pulls all experiment runs from W&B, extracts config + test metrics, and produces
-three structured parquet files:
+structured parquet files:
 
   - results/per_seed_results.parquet   — one row per W&B run (~3000 rows)
   - results/aggregated_results.parquet — one row per unique config (~600 rows),
                                          with mean/std/min/max across seeds
   - results/statistical_tests.parquet  — pairwise Wilcoxon + Bonferroni +
                                          Cohen's d significance table
+  - results/ts2vec_vs_core_contrastive.parquet — direct TS2Vec vs core
+                                                 contrastive comparisons
 
 Both files include wandb run IDs for traceability back to W&B.
 
@@ -18,7 +20,7 @@ Usage:
         --project slices-thesis --revision thesis-v1 --entity <entity>
     uv run python scripts/export_results.py \
         --project slices-thesis --revision thesis-v1 --entity <entity> \
-        --sprint 1 --validate-seeds 3
+        --sprint 1 --expected-seeds 42 123 456
     uv run python scripts/export_results.py \
         --project slices-thesis --revision thesis-v1 --entity <entity> \
         --paradigm mae jepa --dataset miiv
@@ -40,6 +42,7 @@ from pathlib import Path
 
 import pandas as pd
 import wandb
+
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
@@ -87,6 +90,7 @@ FIXED_SEED_EXPERIMENT_TYPES = {
     "smart_reference",
     "temporal_contrastive",
 }
+EXPECTED_FIXED_SEEDS = {42, 123, 456, 789, 1011}
 
 # For core runs: the sprint tag is not part of the config identity.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
@@ -381,6 +385,36 @@ def _recover_source_dataset(run_name: str, config: dict) -> str | None:
     return None
 
 
+def _sprint_tags(tags: list[str]) -> list[str]:
+    """Return sprint values present in W&B tags, preserving tag order."""
+    return [tag.split(":", 1)[1] for tag in tags if tag.startswith("sprint:")]
+
+
+def _select_export_sprint(
+    config_sprint: str,
+    tags: list[str],
+    requested_sprints: list[str] | None = None,
+) -> str:
+    """Choose the sprint family used for export classification.
+
+    Historical inherited baselines keep their original `config.sprint`, but the
+    runner adds target sprint tags. When the export is scoped to target sprint
+    tags, classify the run in that requested target family.
+    """
+    if not requested_sprints:
+        return config_sprint
+
+    tagged_sprints = set(_sprint_tags(tags))
+    requested_matches = [
+        str(sprint) for sprint in requested_sprints if str(sprint) in tagged_sprints
+    ]
+    if not requested_matches:
+        return config_sprint
+    if config_sprint in requested_matches:
+        return config_sprint
+    return requested_matches[0]
+
+
 def _recover_pretrain_metadata(
     run_name: str, config: dict
 ) -> tuple[float | None, float | None, str | None]:
@@ -441,7 +475,11 @@ def _infer_model_size(config: dict) -> str:
     return f"d{d_model}_L{n_layers}"
 
 
-def extract_run(run, metric_keys: list[str]) -> dict:
+def extract_run(
+    run,
+    metric_keys: list[str],
+    requested_sprints: list[str] | None = None,
+) -> dict:
     """Extract config + metrics from a W&B run in a single retry-protected call."""
     config, summary, run_id, run_url, run_name, tags, group, created_at = _retry(
         lambda: _load_run_data(run)
@@ -489,7 +527,8 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         else:
             metrics[key] = float("nan")
 
-    sprint_str = str(config.get("sprint", ""))
+    config_sprint = str(config.get("sprint", ""))
+    sprint_str = _select_export_sprint(config_sprint, tags, requested_sprints)
     experiment_type = EXPERIMENT_TYPES.get(sprint_str, "unknown")
 
     # Historical group 10 contains both core (label_fraction=1.0) and
@@ -521,6 +560,8 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "created_at": created_at,
         "experiment_type": experiment_type,
         "sprint": sprint_str,
+        "config_sprint": config_sprint,
+        "sprint_tags": json.dumps(_sprint_tags(tags)),
         "paradigm": config.get("paradigm", None),
         "dataset": config.get("dataset", None),
         "task": _get_nested(config, "task.task_name", default=None),
@@ -617,7 +658,10 @@ def _assert_no_ambiguous_fingerprint_collisions(df: pd.DataFrame) -> None:
         )
 
 
-def build_per_seed_df(runs: list) -> pd.DataFrame:
+def build_per_seed_df(
+    runs: list,
+    requested_sprints: list[str] | None = None,
+) -> pd.DataFrame:
     """Build the per-seed DataFrame from raw W&B runs.
 
     One row per run with config columns + metric columns + wandb IDs.
@@ -628,7 +672,7 @@ def build_per_seed_df(runs: list) -> pd.DataFrame:
         if (i + 1) % 100 == 0:
             print(f"  Processing run {i + 1}/{len(runs)}...", file=sys.stderr)
         try:
-            row = extract_run(run, ALL_METRICS)
+            row = extract_run(run, ALL_METRICS, requested_sprints=requested_sprints)
             rows.append(row)
         except Exception as e:
             run_id = getattr(run, "id", "unknown")
@@ -806,6 +850,109 @@ def _primary_metric_for_task(task_name: str | None) -> str | None:
     return "test/auprc"
 
 
+def _format_task_seed_pairs(keys: set[tuple[str, int]]) -> str:
+    """Serialize task/seed coverage gaps for audit columns."""
+    formatted = [{"task": task, "seed": int(seed)} for task, seed in sorted(keys)]
+    return json.dumps(formatted)
+
+
+def _metric_pairs_for_paradigm(
+    scope_group: pd.DataFrame,
+    paradigm: str,
+    value_col: str = "primary_metric_value",
+) -> pd.DataFrame:
+    """Return finite task/seed metric rows for one paradigm."""
+    pairs = scope_group[scope_group["paradigm"] == paradigm][["task", "seed", value_col]].rename(
+        columns={value_col: "value"}
+    )
+    pairs = pairs.dropna(subset=["task", "seed", "value"]).copy()
+    if not pairs.empty:
+        pairs["seed"] = pairs["seed"].astype(int)
+        pairs["value"] = pairs["value"].astype(float)
+    return pairs
+
+
+def _paired_metric_frame(
+    scope_group: pd.DataFrame,
+    paradigm_a: str,
+    paradigm_b: str,
+    value_col: str = "primary_metric_value",
+) -> tuple[pd.DataFrame, dict[str, int | str]]:
+    """Build paired metric frame and task/seed coverage summary."""
+    pairs_a = _metric_pairs_for_paradigm(scope_group, paradigm_a, value_col=value_col)
+    pairs_b = _metric_pairs_for_paradigm(scope_group, paradigm_b, value_col=value_col)
+
+    keys_a = set(zip(pairs_a["task"], pairs_a["seed"], strict=True))
+    keys_b = set(zip(pairs_b["task"], pairs_b["seed"], strict=True))
+    shared_keys = keys_a & keys_b
+    union_keys = keys_a | keys_b
+
+    paired = pairs_a.rename(columns={"value": "value_a"}).merge(
+        pairs_b.rename(columns={"value": "value_b"}),
+        on=["task", "seed"],
+        how="inner",
+    )
+
+    coverage = {
+        "n_task_seed_pairs_a": len(keys_a),
+        "n_task_seed_pairs_b": len(keys_b),
+        "n_shared_task_seed_pairs": len(shared_keys),
+        "n_union_task_seed_pairs": len(union_keys),
+        "missing_task_seed_pairs_a": _format_task_seed_pairs(keys_b - keys_a),
+        "missing_task_seed_pairs_b": _format_task_seed_pairs(keys_a - keys_b),
+    }
+    return paired, coverage
+
+
+def _paired_stat_row(
+    scope: dict,
+    paired: pd.DataFrame,
+    coverage: dict[str, int | str],
+    paradigm_a: str,
+    paradigm_b: str,
+    higher_is_better: bool,
+) -> dict:
+    """Compute paired Wilcoxon/effect-size row for a comparison."""
+    values_a = paired["value_a"].astype(float).tolist()
+    values_b = paired["value_b"].astype(float).tolist()
+    if higher_is_better:
+        improvement = [a - b for a, b in zip(values_a, values_b, strict=True)]
+    else:
+        improvement = [b - a for a, b in zip(values_a, values_b, strict=True)]
+
+    wilcoxon = paired_wilcoxon_signed_rank(improvement, [0.0] * len(improvement))
+    effect_size = cohens_d(improvement, [0.0] * len(improvement), paired=True)
+    mean_improvement = sum(improvement) / len(improvement)
+    median_improvement = float(pd.Series(improvement).median())
+    better_paradigm = (
+        paradigm_a if mean_improvement > 0 else paradigm_b if mean_improvement < 0 else None
+    )
+
+    return {
+        **scope,
+        "paradigm_a": paradigm_a,
+        "paradigm_b": paradigm_b,
+        "n_pairs": int(len(paired)),
+        "n_tasks": int(paired["task"].nunique()),
+        "task_list": json.dumps(sorted(paired["task"].unique().tolist())),
+        "seed_list": json.dumps(sorted(paired["seed"].dropna().astype(int).unique().tolist())),
+        **coverage,
+        "score_a_mean": float(sum(values_a) / len(values_a)),
+        "score_b_mean": float(sum(values_b) / len(values_b)),
+        "mean_improvement": float(mean_improvement),
+        "median_improvement": median_improvement,
+        "better_paradigm": better_paradigm,
+        "wilcoxon_statistic": wilcoxon["statistic"],
+        "wilcoxon_z": wilcoxon["z_score"],
+        "p_value": wilcoxon["p_value"],
+        "n_nonzero_pairs": int(wilcoxon["n_nonzero_pairs"]),
+        "cohens_d": float(effect_size),
+        "significant_at_005": bool(
+            not math.isnan(wilcoxon["p_value"]) and wilcoxon["p_value"] < 0.05
+        ),
+    }
+
+
 def _add_contextual_classical_stat_rows(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     """Add synthetic statistic scopes for classical-vs-neural comparisons."""
     required = {"experiment_type", "protocol", "label_fraction", "paradigm"}
@@ -913,59 +1060,18 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
                     if a_classical == b_classical:
                         continue
 
-                pairs_a = scope_group[scope_group["paradigm"] == paradigm_a][
-                    ["task", "seed", "primary_metric_value"]
-                ].rename(columns={"primary_metric_value": "value_a"})
-                pairs_b = scope_group[scope_group["paradigm"] == paradigm_b][
-                    ["task", "seed", "primary_metric_value"]
-                ].rename(columns={"primary_metric_value": "value_b"})
-
-                paired = pairs_a.merge(pairs_b, on=["task", "seed"], how="inner")
-                paired = paired.dropna(subset=["value_a", "value_b"])
+                paired, coverage = _paired_metric_frame(scope_group, paradigm_a, paradigm_b)
                 if paired.empty:
                     continue
 
-                values_a = paired["value_a"].astype(float).tolist()
-                values_b = paired["value_b"].astype(float).tolist()
-                if higher_is_better:
-                    improvement = [a - b for a, b in zip(values_a, values_b, strict=True)]
-                else:
-                    improvement = [b - a for a, b in zip(values_a, values_b, strict=True)]
-
-                wilcoxon = paired_wilcoxon_signed_rank(improvement, [0.0] * len(improvement))
-                effect_size = cohens_d(improvement, [0.0] * len(improvement), paired=True)
-                mean_improvement = sum(improvement) / len(improvement)
-                median_improvement = float(pd.Series(improvement).median())
-                better_paradigm = (
-                    paradigm_a
-                    if mean_improvement > 0
-                    else paradigm_b if mean_improvement < 0 else None
+                row = _paired_stat_row(
+                    scope=scope,
+                    paired=paired,
+                    coverage=coverage,
+                    paradigm_a=paradigm_a,
+                    paradigm_b=paradigm_b,
+                    higher_is_better=higher_is_better,
                 )
-
-                row = {
-                    **scope,
-                    "paradigm_a": paradigm_a,
-                    "paradigm_b": paradigm_b,
-                    "n_pairs": int(len(paired)),
-                    "n_tasks": int(paired["task"].nunique()),
-                    "task_list": json.dumps(sorted(paired["task"].unique().tolist())),
-                    "seed_list": json.dumps(
-                        sorted(paired["seed"].dropna().astype(int).unique().tolist())
-                    ),
-                    "score_a_mean": float(sum(values_a) / len(values_a)),
-                    "score_b_mean": float(sum(values_b) / len(values_b)),
-                    "mean_improvement": float(mean_improvement),
-                    "median_improvement": median_improvement,
-                    "better_paradigm": better_paradigm,
-                    "wilcoxon_statistic": wilcoxon["statistic"],
-                    "wilcoxon_z": wilcoxon["z_score"],
-                    "p_value": wilcoxon["p_value"],
-                    "n_nonzero_pairs": int(wilcoxon["n_nonzero_pairs"]),
-                    "cohens_d": float(effect_size),
-                    "significant_at_005": bool(
-                        not math.isnan(wilcoxon["p_value"]) and wilcoxon["p_value"] < 0.05
-                    ),
-                }
                 family_rows.append(row)
 
             if not family_rows:
@@ -1002,6 +1108,105 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     return stats_df
 
 
+def build_ts2vec_vs_core_contrastive_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Compare Sprint-13 TS2Vec directly against core contrastive runs."""
+    required = {"experiment_type", "paradigm", "task", "seed"}
+    if per_seed_df.empty or not required.issubset(per_seed_df.columns):
+        return pd.DataFrame()
+
+    subset = per_seed_df[
+        (
+            (per_seed_df["experiment_type"] == "temporal_contrastive")
+            & (per_seed_df["paradigm"] == "ts2vec")
+        )
+        | ((per_seed_df["experiment_type"] == "core") & (per_seed_df["paradigm"] == "contrastive"))
+    ].copy()
+    if subset.empty:
+        return pd.DataFrame()
+
+    subset["primary_metric_name"] = subset["task"].map(_primary_metric_for_task)
+    subset["primary_metric_value"] = [
+        row.get(metric_name, float("nan")) if metric_name is not None else float("nan")
+        for row, metric_name in zip(
+            subset.to_dict("records"),
+            subset["primary_metric_name"],
+            strict=True,
+        )
+    ]
+
+    scope_cols = [
+        col
+        for col in [
+            "dataset",
+            "protocol",
+            "label_fraction",
+            "model_size",
+            "source_dataset",
+            "primary_metric_name",
+        ]
+        if col in subset.columns
+    ]
+    work = _fillna_for_grouping(subset, scope_cols)
+    rows = []
+
+    for scope_key, scope_group in work.groupby(scope_cols, dropna=False):
+        if not isinstance(scope_key, tuple):
+            scope_key = (scope_key,)
+
+        scope = dict(zip(scope_cols, scope_key))
+        for col, value in list(scope.items()):
+            if value == "__none__":
+                scope[col] = None
+
+        paradigms = set(scope_group["paradigm"].dropna())
+        if not {"contrastive", "ts2vec"}.issubset(paradigms):
+            continue
+
+        paired, coverage = _paired_metric_frame(scope_group, "ts2vec", "contrastive")
+        if paired.empty:
+            continue
+
+        higher_is_better = scope.get("primary_metric_name") not in LOWER_IS_BETTER_METRICS
+        row = _paired_stat_row(
+            scope={
+                **scope,
+                "comparison_type": "ts2vec_vs_core_contrastive",
+                "experiment_type_a": "temporal_contrastive",
+                "experiment_type_b": "core",
+            },
+            paired=paired,
+            coverage=coverage,
+            paradigm_a="ts2vec",
+            paradigm_b="contrastive",
+            higher_is_better=higher_is_better,
+        )
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    corrected = bonferroni_correction([row["p_value"] for row in rows])
+    for row, corrected_p in zip(rows, corrected, strict=True):
+        row["p_value_bonferroni"] = corrected_p
+        row["significant_bonferroni_005"] = bool(not math.isnan(corrected_p) and corrected_p < 0.05)
+
+    result = pd.DataFrame(rows)
+    sort_cols = [
+        col
+        for col in [
+            "dataset",
+            "protocol",
+            "label_fraction",
+            "model_size",
+            "primary_metric_name",
+        ]
+        if col in result.columns
+    ]
+    if sort_cols:
+        result = result.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -1010,36 +1215,75 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
 def validate(
     per_seed_df: pd.DataFrame,
     aggregated_df: pd.DataFrame,
-    expected_core_seeds: int = 5,
+    statistical_df: pd.DataFrame | None = None,
+    expected_seeds: set[int] | None = None,
 ) -> list[str]:
     """Validate results and return warning strings.
 
-    Warns when fixed-seed experiment families have fewer seeds than expected.
+    Warns when fixed-seed experiment families do not have the exact expected
+    seed set, and when statistical comparisons have incomplete task/seed pairing.
     """
     warnings = []
+    expected_seeds = set(EXPECTED_FIXED_SEEDS if expected_seeds is None else expected_seeds)
 
-    # Check fixed-seed experiment families for expected seed count
+    # Check fixed-seed experiment families for exact expected seed set.
     if "experiment_type" in aggregated_df.columns:
         fixed_seed = aggregated_df[
             aggregated_df["experiment_type"].isin(FIXED_SEED_EXPERIMENT_TYPES)
         ]
-        low_seed = fixed_seed[fixed_seed["n_seeds"] < expected_core_seeds]
-        if len(low_seed) > 0:
+        bad_seed_rows = []
+        for _, row in fixed_seed.iterrows():
+            seeds = set(json.loads(row["seed_list"])) if pd.notna(row.get("seed_list")) else set()
+            if seeds != expected_seeds:
+                bad_seed_rows.append((row, seeds))
+
+        if bad_seed_rows:
             warnings.append(
-                f"WARNING: {len(low_seed)}/{len(fixed_seed)} fixed-seed configs have fewer "
-                f"than {expected_core_seeds} seeds:"
+                f"WARNING: {len(bad_seed_rows)}/{len(fixed_seed)} fixed-seed configs do not "
+                f"have the expected seed set {sorted(expected_seeds)}:"
             )
-            for _, row in low_seed.iterrows():
+            for row, seeds in bad_seed_rows:
                 desc = ", ".join(
                     f"{c}={row[c]}"
                     for c in ["paradigm", "dataset", "task", "protocol"]
                     if c in row and row[c] is not None
                 )
-                seeds = json.loads(row["seed_list"]) if pd.notna(row.get("seed_list")) else []
                 warnings.append(
                     f"  experiment_type={row['experiment_type']}, {desc} — "
-                    f"n_seeds={row['n_seeds']}, seeds={seeds}"
+                    f"seeds={sorted(seeds)}, missing={sorted(expected_seeds - seeds)}, "
+                    f"unexpected={sorted(seeds - expected_seeds)}"
                 )
+
+    if statistical_df is not None and not statistical_df.empty:
+        coverage_cols = {"n_shared_task_seed_pairs", "n_union_task_seed_pairs"}
+        if coverage_cols.issubset(statistical_df.columns):
+            incomplete = statistical_df[
+                statistical_df["n_shared_task_seed_pairs"]
+                < statistical_df["n_union_task_seed_pairs"]
+            ]
+            if len(incomplete) > 0:
+                warnings.append(
+                    f"WARNING: {len(incomplete)}/{len(statistical_df)} statistical comparisons "
+                    "have incomplete paired task/seed coverage:"
+                )
+                for _, row in incomplete.head(10).iterrows():
+                    scope = ", ".join(
+                        f"{c}={row[c]}"
+                        for c in [
+                            "experiment_type",
+                            "dataset",
+                            "protocol",
+                            "label_fraction",
+                            "primary_metric_name",
+                            "paradigm_a",
+                            "paradigm_b",
+                        ]
+                        if c in row and row[c] is not None
+                    )
+                    warnings.append(
+                        f"  {scope} — shared={row['n_shared_task_seed_pairs']}, "
+                        f"union={row['n_union_task_seed_pairs']}"
+                    )
 
     # Check for runs with no test metrics at all
     test_cols = [c for c in TEST_METRICS if c in per_seed_df.columns]
@@ -1125,10 +1369,14 @@ def parse_args() -> argparse.Namespace:
         help="Output directory (default: results/)",
     )
     parser.add_argument(
-        "--expected-core-seeds",
+        "--expected-seeds",
+        nargs="+",
         type=int,
-        default=5,
-        help="Expected seed count for core configs (default: 5)",
+        default=sorted(EXPECTED_FIXED_SEEDS),
+        help=(
+            "Expected exact seed set for fixed-seed configs "
+            f"(default: {sorted(EXPECTED_FIXED_SEEDS)})"
+        ),
     )
     parser.add_argument(
         "--allow-incomplete",
@@ -1173,7 +1421,7 @@ def main():
 
     # Build DataFrames
     print(f"\nBuilding per-seed DataFrame from {len(runs)} runs...", file=sys.stderr)
-    per_seed_df = build_per_seed_df(runs)
+    per_seed_df = build_per_seed_df(runs, requested_sprints=args.sprint)
     print(f"  Shape: {per_seed_df.shape}", file=sys.stderr)
 
     print("\nBuilding aggregated DataFrame...", file=sys.stderr)
@@ -1184,8 +1432,21 @@ def main():
     statistical_df = build_statistical_tests_df(per_seed_df)
     print(f"  Shape: {statistical_df.shape}", file=sys.stderr)
 
+    print("\nBuilding TS2Vec vs core contrastive table...", file=sys.stderr)
+    ts2vec_contrastive_df = build_ts2vec_vs_core_contrastive_df(per_seed_df)
+    print(f"  Shape: {ts2vec_contrastive_df.shape}", file=sys.stderr)
+
     # Validate
-    warnings = validate(per_seed_df, aggregated_df, expected_core_seeds=args.expected_core_seeds)
+    coverage_parts = [df for df in [statistical_df, ts2vec_contrastive_df] if not df.empty]
+    statistical_coverage_df = (
+        pd.concat(coverage_parts, ignore_index=True) if coverage_parts else pd.DataFrame()
+    )
+    warnings = validate(
+        per_seed_df,
+        aggregated_df,
+        statistical_df=statistical_coverage_df,
+        expected_seeds=set(args.expected_seeds),
+    )
     for w in warnings:
         print(w, file=sys.stderr)
 
@@ -1193,21 +1454,25 @@ def main():
     per_seed_path = output_dir / "per_seed_results.parquet"
     aggregated_path = output_dir / "aggregated_results.parquet"
     statistical_path = output_dir / "statistical_tests.parquet"
+    ts2vec_contrastive_path = output_dir / "ts2vec_vs_core_contrastive.parquet"
 
     per_seed_df.to_parquet(per_seed_path, index=False)
     aggregated_df.to_parquet(aggregated_path, index=False)
     statistical_df.to_parquet(statistical_path, index=False)
+    ts2vec_contrastive_df.to_parquet(ts2vec_contrastive_path, index=False)
 
     print("\nSaved:", file=sys.stderr)
     print(f"  {per_seed_path} ({len(per_seed_df)} rows)", file=sys.stderr)
     print(f"  {aggregated_path} ({len(aggregated_df)} rows)", file=sys.stderr)
     print(f"  {statistical_path} ({len(statistical_df)} rows)", file=sys.stderr)
+    print(f"  {ts2vec_contrastive_path} ({len(ts2vec_contrastive_df)} rows)", file=sys.stderr)
 
     # Print quick summary to stdout for piping
     print("\n--- Quick Summary ---")
     print(
         f"Runs: {len(per_seed_df)}, Configs: {len(aggregated_df)}, "
-        f"StatTests: {len(statistical_df)}"
+        f"StatTests: {len(statistical_df)}, "
+        f"TS2VecContrastiveTests: {len(ts2vec_contrastive_df)}"
     )
     if "experiment_type" in aggregated_df.columns:
         for etype, group in aggregated_df.groupby("experiment_type"):

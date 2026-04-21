@@ -165,12 +165,10 @@ def paired_wilcoxon_signed_rank(
     values_b: Sequence[float],
     correction: bool = True,
 ) -> Dict[str, float]:
-    """Paired Wilcoxon signed-rank test with tie correction.
+    """Paired Wilcoxon signed-rank test.
 
-    This implementation uses the standard large-sample normal approximation
-    with tie correction. It is sufficient for the benchmark export pipeline where
-    comparisons pool multiple tasks x seeds and are primarily used for
-    significance tables rather than exact small-sample inference.
+    Delegates to SciPy's implementation so small-sample exact handling and
+    tied absolute differences match the statistical reference implementation.
 
     Args:
         values_a: First paired sample.
@@ -204,32 +202,30 @@ def paired_wilcoxon_signed_rank(
             "n_nonzero_pairs": 0.0,
         }
 
-    abs_diffs = [abs(diff) for diff in nonzero_diffs]
-    ranks, tie_counts = _average_ranks(abs_diffs)
+    try:
+        from scipy.stats import wilcoxon
+    except ImportError as exc:
+        raise RuntimeError(
+            "SciPy is required for Wilcoxon signed-rank tests. "
+            "Install the project dependencies with `uv sync`."
+        ) from exc
 
-    w_plus = sum(rank for rank, diff in zip(ranks, nonzero_diffs) if diff > 0.0)
-    w_minus = sum(rank for rank, diff in zip(ranks, nonzero_diffs) if diff < 0.0)
-    statistic = min(w_plus, w_minus)
-
-    expected = n_nonzero * (n_nonzero + 1) / 4.0
-    variance = n_nonzero * (n_nonzero + 1) * (2 * n_nonzero + 1) / 24.0
-    tie_correction = sum(t * (t + 1) * (2 * t + 1) for t in tie_counts) / 48.0
-    variance -= tie_correction
-
-    if variance <= 0.0:
-        z_score = 0.0
-        p_value = 1.0
-    else:
-        numerator = abs(w_plus - expected)
-        if correction:
-            numerator = max(numerator - 0.5, 0.0)
-        z_score = numerator / math.sqrt(variance)
-        p_value = min(2.0 * _normal_sf(z_score), 1.0)
+    # Exact enumeration is cheap for the benchmark's usual 5-seed comparisons
+    # and avoids anti-conservative normal approximations when all ranks tie.
+    method = "exact" if n_nonzero <= 50 else "auto"
+    result = wilcoxon(
+        nonzero_diffs,
+        zero_method="wilcox",
+        correction=correction,
+        alternative="two-sided",
+        method=method,
+    )
+    z_score = getattr(result, "zstatistic", float("nan"))
 
     return {
-        "statistic": float(statistic),
+        "statistic": float(result.statistic),
         "z_score": float(z_score),
-        "p_value": float(p_value),
+        "p_value": float(result.pvalue),
         "n_pairs": float(n_pairs),
         "n_nonzero_pairs": float(n_nonzero),
     }
@@ -322,32 +318,6 @@ def _finite_pairs(
     return pairs
 
 
-def _average_ranks(values: Sequence[float]) -> tuple[list[float], list[int]]:
-    indexed = sorted(enumerate(values), key=lambda item: item[1])
-    ranks = [0.0] * len(values)
-    tie_counts: list[int] = []
-
-    i = 0
-    while i < len(indexed):
-        j = i + 1
-        while j < len(indexed) and indexed[j][1] == indexed[i][1]:
-            j += 1
-
-        start_rank = i + 1
-        end_rank = j
-        average_rank = (start_rank + end_rank) / 2.0
-        for k in range(i, j):
-            original_index = indexed[k][0]
-            ranks[original_index] = average_rank
-
-        tie_size = j - i
-        if tie_size > 1:
-            tie_counts.append(tie_size)
-        i = j
-
-    return ranks, tie_counts
-
-
 def _sample_variance(values: Sequence[float]) -> float:
     if len(values) < 2:
         return float("nan")
@@ -366,10 +336,6 @@ def _cohens_d_from_differences(differences: Sequence[float]) -> float:
             return 0.0
         return math.copysign(float("inf"), mean_diff)
     return mean_diff / std_diff
-
-
-def _normal_sf(z_score: float) -> float:
-    return 0.5 * math.erfc(z_score / math.sqrt(2.0))
 
 
 def _is_nan(value: float) -> bool:
