@@ -26,7 +26,12 @@ import torch.nn.functional as F
 from slices.models.common import build_sinusoidal_pe
 
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_block_timestep_mask, create_timestep_mask, extract_visible_timesteps
+from .masking import (
+    create_block_timestep_mask,
+    create_timestep_mask,
+    extract_visible_timesteps,
+    scatter_visible_timesteps,
+)
 
 
 @dataclass
@@ -118,26 +123,29 @@ class JEPAPredictor(nn.Module):
         Returns:
             (B, T, d_encoder) predicted representations per timestep.
         """
-        B = encoded_visible.shape[0]
-        d_pred = self.config.predictor_d_model
-
         vis_proj = self.encoder_proj(encoded_visible)  # (B, n_vis, d_pred)
 
-        full_tokens = self.mask_token.expand(B, n_timesteps, d_pred).clone()
+        valid_timestep_mask = token_info.get("valid_timestep_mask")
+        if valid_timestep_mask is None:
+            visible_mask = ssl_mask
+        else:
+            visible_mask = ssl_mask & valid_timestep_mask.to(
+                device=ssl_mask.device,
+                dtype=torch.bool,
+            )
 
-        # Scatter visible tokens to original positions
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        n_vis = vis_proj.shape[1]
-        scatter_idx = vis_indices[:, :n_vis]
-        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_pred)
-        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
+        full_tokens = scatter_visible_timesteps(
+            vis_proj,
+            visible_mask,
+            n_timesteps,
+            fill_value=self.mask_token,
+        )
 
         # Add time PE
         timestep_idx = token_info["timestep_idx"]
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        valid_timestep_mask = token_info.get("valid_timestep_mask")
         predictor_padding_mask = None
         if valid_timestep_mask is not None:
             predictor_padding_mask = ~valid_timestep_mask.to(

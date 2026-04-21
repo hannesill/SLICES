@@ -45,3 +45,25 @@ def test_empty_timesteps_are_excluded_from_ts2vec_masks(encoder):
     assert metrics["ts2vec_n_visible_view1"].item() <= 3
     assert metrics["ts2vec_n_visible_view2"].item() <= 3
     assert metrics["ts2vec_n_overlap_per_sample"].item() <= 3
+
+
+def test_ts2vec_scatter_to_full_ignores_padded_visible_tokens():
+    """Uneven visible counts should not scatter padded tokens into masked slots."""
+    encoded = torch.tensor(
+        [
+            [[10.0], [11.0]],
+            [[20.0], [99.0]],
+        ]
+    )
+    ssl_mask = torch.tensor(
+        [
+            [True, True, False],
+            [True, False, False],
+        ]
+    )
+
+    full = TS2VecObjective._scatter_to_full(encoded, ssl_mask, n_timesteps=3)
+
+    assert torch.allclose(full[1, 0], torch.tensor([20.0]))
+    assert torch.allclose(full[1, 1], torch.tensor([0.0]))
+    assert torch.allclose(full[1, 2], torch.tensor([0.0]))

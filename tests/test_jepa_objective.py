@@ -81,6 +81,46 @@ class TestJEPAPredictor:
         pred = predictor(encoded_visible, ssl_mask, token_info, T)
         assert pred.shape[-1] == d_encoder
 
+    def test_predictor_ignores_padded_visible_tokens(self):
+        """Padded visible-token rows must not overwrite predictor mask tokens."""
+        from slices.models.pretraining.jepa import JEPAPredictor
+
+        class KwargIdentity(torch.nn.Module):
+            def forward(self, x, **kwargs):
+                return x
+
+        config = JEPAConfig(predictor_d_model=2, predictor_n_layers=1, predictor_n_heads=1)
+        predictor = JEPAPredictor(d_encoder=2, max_seq_length=3, config=config)
+        predictor.encoder_proj = torch.nn.Identity()
+        predictor.predictor = KwargIdentity()
+        predictor.embed_dropout = torch.nn.Identity()
+        predictor.output_proj = torch.nn.Identity()
+        predictor.time_pe.zero_()
+        with torch.no_grad():
+            predictor.mask_token.fill_(-1.0)
+
+        encoded_visible = torch.tensor(
+            [
+                [[10.0, 10.0], [11.0, 11.0]],
+                [[20.0, 20.0], [99.0, 99.0]],
+            ]
+        )
+        ssl_mask = torch.tensor(
+            [
+                [True, True, False],
+                [True, False, False],
+            ]
+        )
+        token_info = {
+            "timestep_idx": torch.arange(3).unsqueeze(0).expand(2, -1),
+        }
+
+        pred = predictor(encoded_visible, ssl_mask, token_info, n_timesteps=3)
+
+        assert torch.allclose(pred[1, 0], torch.tensor([20.0, 20.0]))
+        assert torch.allclose(pred[1, 1], torch.tensor([-1.0, -1.0]))
+        assert torch.allclose(pred[1, 2], torch.tensor([-1.0, -1.0]))
+
 
 # =============================================================================
 # Init validation tests

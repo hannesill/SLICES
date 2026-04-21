@@ -42,6 +42,7 @@ from .masking import (
     create_complementary_timestep_masks,
     create_timestep_mask,
     extract_visible_timesteps,
+    scatter_visible_timesteps,
 )
 
 
@@ -266,9 +267,8 @@ class ContrastiveObjective(BaseSSLObjective):
     ) -> torch.Tensor:
         """Scatter visible encoded tokens back to full (B, T, d) tensor.
 
-        Uses the same argsort-scatter pattern as the MAE decoder and JEPA
-        predictor to place encoded visible tokens at their original temporal
-        positions, with zeros at masked positions.
+        Places encoded visible tokens at their original temporal positions,
+        with zeros at masked positions.
 
         Args:
             encoded: (B, n_vis, d_enc) encoded visible tokens.
@@ -278,16 +278,7 @@ class ContrastiveObjective(BaseSSLObjective):
         Returns:
             (B, T, d_enc) with encoded tokens at visible positions, zeros elsewhere.
         """
-        B, n_vis, d_enc = encoded.shape
-        device = encoded.device
-
-        full = torch.zeros(B, n_timesteps, d_enc, device=device, dtype=encoded.dtype)
-
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        scatter_idx = vis_indices[:, :n_vis].unsqueeze(-1).expand(-1, -1, d_enc)
-        full.scatter_(1, scatter_idx, encoded)
-
-        return full
+        return scatter_visible_timesteps(encoded, ssl_mask, n_timesteps)
 
     def _temporal_nt_xent_loss(
         self,
