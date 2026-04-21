@@ -23,20 +23,27 @@ def load_cached_splits(
     train_ratio: float,
     val_ratio: float,
     test_ratio: float,
+    cohort_stay_ids: Optional[List[int]] = None,
 ) -> Optional[Tuple[List[int], List[int], List[int]]]:
     """Load cached splits from splits.yaml if valid.
 
     Validates that cached splits match current parameters (seed, ratios) and
-    that the patient lists are consistent with the current task-filtered cohort.
+    that the patient lists are consistent with the full cohort. The returned
+    indices are always mapped over ``stay_ids``, which may be task-filtered.
 
     Args:
         processed_dir: Path to processed data directory containing splits.yaml.
         static_df: Static dataframe with stay_id -> patient_id mapping.
-        stay_ids: List of stay_ids in order from timeseries parquet.
+        stay_ids: List of stay_ids to map into split indices. For supervised
+            tasks this may already be label-filtered.
         seed: Random seed for split computation.
         train_ratio: Fraction of patients for training.
         val_ratio: Fraction of patients for validation.
         test_ratio: Fraction of patients for testing.
+        cohort_stay_ids: Optional full-cohort stay_ids used to validate that
+            cached patient lists are global rather than task-filtered. When not
+            provided, ``stay_ids`` is treated as the full cohort for backward
+            compatibility.
 
     Returns:
         Tuple of (train_indices, val_indices, test_indices) if cache is valid,
@@ -83,10 +90,31 @@ def load_cached_splits(
             zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list())
         )
 
-        # Validate cached patient lists against the current cohort represented by
-        # stay_ids. For supervised tasks this may be a label-filtered subset, so
-        # validating against the full static table would incorrectly reuse
-        # full-cohort cached splits for a smaller task-specific cohort.
+        # Validate cached patient lists against the full cohort, not the
+        # possibly task-filtered stay_ids. Supervised runs should reuse the
+        # global patient assignment and then filter inside those sets.
+        full_stay_ids = cohort_stay_ids if cohort_stay_ids is not None else stay_ids
+        full_patients = set()
+        for stay_id in full_stay_ids:
+            patient_id = stay_to_patient.get(stay_id)
+            if patient_id is None:
+                logger.debug(
+                    f"Stay {stay_id} missing from static stay->patient mapping, recomputing"
+                )
+                return None
+            full_patients.add(patient_id)
+        cached_patients = train_patients | val_patients | test_patients
+
+        if full_patients != cached_patients:
+            logger.debug(
+                f"Cached splits have different full-cohort patients "
+                f"(cached: {len(cached_patients)}, full cohort: {len(full_patients)}), "
+                f"recomputing"
+            )
+            return None
+
+        # The current mapped cohort may be task-filtered, but every remaining
+        # patient must come from the cached full-cohort split.
         current_patients = set()
         for stay_id in stay_ids:
             patient_id = stay_to_patient.get(stay_id)
@@ -96,11 +124,9 @@ def load_cached_splits(
                 )
                 return None
             current_patients.add(patient_id)
-        cached_patients = train_patients | val_patients | test_patients
-
-        if current_patients != cached_patients:
+        if not current_patients.issubset(cached_patients):
             logger.debug(
-                f"Cached splits have different patients "
+                f"Cached splits do not cover current patients "
                 f"(cached: {len(cached_patients)}, current: {len(current_patients)}), "
                 f"recomputing"
             )
@@ -141,8 +167,9 @@ def filter_stays_with_missing_labels(
 ) -> Tuple[List[int], Set[int]]:
     """Filter out stays with missing labels for the configured task.
 
-    This MUST be called BEFORE computing splits to ensure indices remain consistent
-    between DataModule and Dataset.
+    This is applied after the global patient split is defined. Split indices are
+    then mapped onto the filtered stay list so DataModule and Dataset stay
+    index-consistent without changing patient assignment per task.
 
     Args:
         stay_ids: List of all stay_ids from timeseries.
@@ -190,6 +217,126 @@ def filter_stays_with_missing_labels(
     return filtered_stay_ids, excluded_stay_ids
 
 
+def _split_patient_sets(
+    patient_ids: Set[int],
+    seed: int,
+    train_ratio: float,
+    val_ratio: float,
+) -> Tuple[Set[int], Set[int], Set[int]]:
+    """Split patient IDs deterministically into train/val/test sets."""
+    unique_patients = sorted(patient_ids)
+    n_patients = len(unique_patients)
+
+    rng = np.random.RandomState(seed)
+    patient_indices = np.arange(n_patients)
+    rng.shuffle(patient_indices)
+    shuffled_patients = [unique_patients[i] for i in patient_indices]
+
+    n_train = int(n_patients * train_ratio)
+    n_val = int(n_patients * val_ratio)
+
+    train_patients = set(shuffled_patients[:n_train])
+    val_patients = set(shuffled_patients[n_train : n_train + n_val])
+    test_patients = set(shuffled_patients[n_train + n_val :])
+
+    return train_patients, val_patients, test_patients
+
+
+def _indices_from_patient_sets(
+    stay_ids: List[int],
+    stay_to_patient: dict[int, int],
+    train_patients: Set[int],
+    val_patients: Set[int],
+    test_patients: Set[int],
+) -> Tuple[List[int], List[int], List[int]]:
+    """Map stay IDs to split indices according to precomputed patient sets."""
+    train_indices = []
+    val_indices = []
+    test_indices = []
+
+    for idx, stay_id in enumerate(stay_ids):
+        patient_id = stay_to_patient.get(stay_id)
+        if patient_id is None:
+            raise ValueError(
+                f"Stay {stay_id} has no patient_id mapping. "
+                "Patient IDs are required for patient-level splits."
+            )
+        if patient_id in train_patients:
+            train_indices.append(idx)
+        elif patient_id in val_patients:
+            val_indices.append(idx)
+        elif patient_id in test_patients:
+            test_indices.append(idx)
+        else:
+            raise ValueError(
+                f"Stay {stay_id} has patient_id {patient_id} which is not "
+                "in any split. This indicates a bug in split computation."
+            )
+
+    return train_indices, val_indices, test_indices
+
+
+def save_global_split_info(
+    processed_dir: Path,
+    static_df: pl.DataFrame,
+    stay_ids: List[int],
+    seed: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    dataset: Optional[Any] = None,
+    train_subset_indices: Optional[List[int]] = None,
+    label_fraction: float = 1.0,
+) -> None:
+    """Save canonical full-cohort patient split information."""
+    stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
+    full_patient_ids = {stay_to_patient[sid] for sid in stay_ids if sid in stay_to_patient}
+    train_patients, val_patients, test_patients = _split_patient_sets(
+        full_patient_ids,
+        seed,
+        train_ratio,
+        val_ratio,
+    )
+    train_indices, val_indices, test_indices = _indices_from_patient_sets(
+        stay_ids,
+        stay_to_patient,
+        train_patients,
+        val_patients,
+        test_patients,
+    )
+
+    split_info = {
+        "seed": seed,
+        "train_ratio": train_ratio,
+        "val_ratio": val_ratio,
+        "test_ratio": test_ratio,
+        "label_fraction": label_fraction,
+        "train_patients": sorted(train_patients),
+        "val_patients": sorted(val_patients),
+        "test_patients": sorted(test_patients),
+        "train_stays": len(train_indices),
+        "val_stays": len(val_indices),
+        "test_stays": len(test_indices),
+    }
+
+    if dataset is not None and train_subset_indices is not None:
+        train_subset_stay_ids = [dataset.stay_ids[i] for i in train_subset_indices]
+        train_subset_patients = sorted(
+            {stay_to_patient[dataset.stay_ids[i]] for i in train_subset_indices}
+        )
+        split_info.update(
+            {
+                "train_subset_patients": train_subset_patients,
+                "train_subset_stays": len(train_subset_indices),
+                "train_subset_stay_ids": train_subset_stay_ids,
+            }
+        )
+
+    split_path = processed_dir / "splits.yaml"
+    with open(split_path, "w") as f:
+        yaml.dump(split_info, f, default_flow_style=False)
+
+
 def compute_patient_level_splits(
     processed_dir: Path,
     task_name: Optional[str],
@@ -202,15 +349,17 @@ def compute_patient_level_splits(
 ]:
     """Compute patient-level train/val/test splits from parquet files.
 
-    First checks for cached splits in splits.yaml. If found and parameters match,
-    loads splits from cache. Otherwise, computes splits from scratch.
+    First checks for cached full-cohort splits in splits.yaml. If found and
+    parameters match, loads the global patient assignments from cache. Otherwise,
+    computes global patient assignments from scratch.
 
     Loads static and timeseries data directly without requiring the full dataset
     to be initialized. This is called BEFORE dataset creation to ensure
     normalization statistics use only training data (prevents data leakage).
 
-    IMPORTANT: Filters out stays with missing labels BEFORE computing splits
-    to ensure indices remain consistent with the Dataset after it loads.
+    IMPORTANT: Patient assignment is computed on the full cohort first. Stays
+    with missing task labels are filtered only after that assignment, so SSL
+    pretraining and downstream task splits share one global patient partition.
 
     Uses deterministic shuffling of patient_id to assign patients to splits.
     All stays from a patient go to the same split.
@@ -245,8 +394,9 @@ def compute_patient_level_splits(
     logger.debug(f"Loading labels from {labels_path.name}")
     labels_df = pl.read_parquet(labels_path)
 
-    # CRITICAL: Filter stays with missing labels BEFORE computing splits
-    # This ensures indices computed here match the filtered Dataset
+    # Filter task labels before mapping indices, but do not let this change the
+    # patient assignment. SSL and every downstream task must share the same
+    # full-cohort patient split.
     stay_ids, excluded_stay_ids = filter_stays_with_missing_labels(
         all_stay_ids, labels_df, task_name
     )
@@ -254,7 +404,14 @@ def compute_patient_level_splits(
     # Try to load cached splits first
     logger.debug("Checking for cached splits")
     cached_splits = load_cached_splits(
-        processed_dir, static_df, stay_ids, seed, train_ratio, val_ratio, test_ratio
+        processed_dir,
+        static_df,
+        stay_ids,
+        seed,
+        train_ratio,
+        val_ratio,
+        test_ratio,
+        cohort_stay_ids=all_stay_ids,
     )
     if cached_splits is not None:
         train_indices, val_indices, test_indices = cached_splits
@@ -269,44 +426,39 @@ def compute_patient_level_splits(
             excluded_stay_ids,
         )
 
-    logger.info("Computing patient-level splits...")
+    logger.info("Computing full-cohort patient-level splits...")
 
-    # Get stay_id -> patient_id mapping (only for filtered stays)
+    # Get stay_id -> patient_id mapping
     logger.debug("Building stay-to-patient mapping")
     stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
 
-    # Get unique patients (sorted for deterministic ordering across Python runs)
-    filtered_patient_ids = {stay_to_patient[sid] for sid in stay_ids if sid in stay_to_patient}
-    unique_patients = sorted(filtered_patient_ids)
+    # Get unique full-cohort patients (sorted for deterministic ordering across
+    # Python runs). Task filtering is applied later when mapping stay indices.
+    full_patient_ids = {stay_to_patient[sid] for sid in all_stay_ids if sid in stay_to_patient}
+    unique_patients = sorted(full_patient_ids)
     n_patients = len(unique_patients)
     logger.debug(f"Found {n_patients:,} unique patients")
 
     # Warn if patient_id == stay_id for all stays (e.g. HiRID, SICdb)
     # This means the dataset lacks true patient-level IDs, so multiple ICU
     # stays from the same real patient may leak across splits.
-    if n_patients == len(stay_ids) and n_patients > 0:
-        filtered_stay_set = set(stay_ids)
-        if filtered_patient_ids == filtered_stay_set:
+    if n_patients == len(all_stay_ids) and n_patients > 0:
+        full_stay_set = set(all_stay_ids)
+        if full_patient_ids == full_stay_set:
             logger.warning(
                 "patient_id == stay_id for all stays. This dataset likely lacks "
                 "true patient-level identifiers (e.g. HiRID, SICdb). "
                 "Patient-level split cannot prevent leakage from repeat ICU admissions."
             )
 
-    # Shuffle patients deterministically using seed
+    # Shuffle full-cohort patients deterministically using seed
     logger.debug(f"Shuffling patients (seed={seed})")
-    rng = np.random.RandomState(seed)
-    patient_indices = np.arange(n_patients)
-    rng.shuffle(patient_indices)
-    shuffled_patients = [unique_patients[i] for i in patient_indices]
-
-    # Split patients
-    n_train = int(n_patients * train_ratio)
-    n_val = int(n_patients * val_ratio)
-
-    train_patients = set(shuffled_patients[:n_train])
-    val_patients = set(shuffled_patients[n_train : n_train + n_val])
-    test_patients = set(shuffled_patients[n_train + n_val :])
+    train_patients, val_patients, test_patients = _split_patient_sets(
+        full_patient_ids,
+        seed,
+        train_ratio,
+        val_ratio,
+    )
     logger.debug(
         f"Split: {len(train_patients):,} train, "
         f"{len(val_patients):,} val, {len(test_patients):,} test patients"
@@ -338,30 +490,17 @@ def compute_patient_level_splits(
         f"in splits but not in data. First 5: {list(extra_patients)[:5]}"
     )
 
-    # Map back to stay indices
-    logger.debug("Mapping patients to stay indices")
-    train_indices = []
-    val_indices = []
-    test_indices = []
-
-    for idx, stay_id in enumerate(stay_ids):
-        patient_id = stay_to_patient.get(stay_id)
-        if patient_id is None:
-            raise ValueError(
-                f"Stay {stay_id} has no patient_id mapping. "
-                "Patient IDs are required for patient-level splits."
-            )
-        if patient_id in train_patients:
-            train_indices.append(idx)
-        elif patient_id in val_patients:
-            val_indices.append(idx)
-        elif patient_id in test_patients:
-            test_indices.append(idx)
-        else:
-            raise ValueError(
-                f"Stay {stay_id} has patient_id {patient_id} which is not "
-                "in any split. This indicates a bug in split computation."
-            )
+    # Map global patient assignments back to the current stay list. For
+    # supervised tasks, stay_ids has already been label-filtered, so this
+    # applies task filtering inside the global train/val/test patient sets.
+    logger.debug("Mapping global patient split to current stay indices")
+    train_indices, val_indices, test_indices = _indices_from_patient_sets(
+        stay_ids,
+        stay_to_patient,
+        train_patients,
+        val_patients,
+        test_patients,
+    )
 
     # Final validation: all stays should be accounted for
     total_assigned = len(train_indices) + len(val_indices) + len(test_indices)

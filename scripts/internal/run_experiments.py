@@ -7,18 +7,25 @@ and executes them in parallel with crash recovery and state persistence.
 
 Usage:
     uv run python scripts/internal/run_experiments.py warmup --sprint 1
-    uv run python scripts/internal/run_experiments.py run --sprint 1 --parallel 4
-    uv run python scripts/internal/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
-    uv run python scripts/internal/run_experiments.py run --sprint 1 --revision v2 --reason "fix LR"
+    uv run python scripts/internal/run_experiments.py run --sprint 1 --parallel 4 \\
+        --project slices-thesis --revision thesis-v1 --entity <entity>
+    uv run python scripts/internal/run_experiments.py run --sprint 1 2 3 --parallel 6 \\
+        --dry-run --project slices-thesis --revision thesis-v1 --entity <entity>
+    uv run python scripts/internal/run_experiments.py run --sprint 1 \\
+        --project slices-thesis --revision thesis-v1 --entity <entity> --reason "fix LR"
     uv run python scripts/internal/run_experiments.py run --sprint 1 2 \\
-        --project slices-thesis --entity myteam
+        --project slices-thesis --revision thesis-v1 --entity <entity>
     uv run python scripts/internal/run_experiments.py status
     uv run python scripts/internal/run_experiments.py status --sprint 1
-    uv run python scripts/internal/run_experiments.py retry --failed --parallel 4
-    uv run python scripts/internal/run_experiments.py retry --failed \
-        --sprint 1 --revision v2 --parallel 4
-    uv run python scripts/internal/run_experiments.py tag --sprint 2 --dry-run
-    uv run python scripts/internal/run_experiments.py tag --sprint 2 3 5
+    uv run python scripts/internal/run_experiments.py retry --failed --parallel 4 \\
+        --project slices-thesis --revision thesis-v1 --entity <entity>
+    uv run python scripts/internal/run_experiments.py retry --failed \\
+        --sprint 1 --revision thesis-v1 --parallel 4 \\
+        --project slices-thesis --entity <entity>
+    uv run python scripts/internal/run_experiments.py tag --sprint 2 --dry-run \\
+        --project slices-thesis --entity <entity>
+    uv run python scripts/internal/run_experiments.py tag --sprint 2 3 5 \\
+        --project slices-thesis --entity <entity>
 """
 from __future__ import annotations
 
@@ -1083,7 +1090,7 @@ def _select_ready_runs(
 # ---------------------------------------------------------------------------
 # Scheduler
 # ---------------------------------------------------------------------------
-def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
+def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) -> int:
     if parallel < 1:
         raise ValueError(f"--parallel must be >= 1, got {parallel}")
 
@@ -1124,7 +1131,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
 
     if dry_run:
         _print_dry_run(runs, runs_by_id)
-        return
+        return 0
 
     print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}")
@@ -1218,6 +1225,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool):
     # Print summary
     print()
     _print_summary(runs, state)
+    return _scheduler_exit_code(runs, state)
 
 
 def _format_elapsed(state: dict, run_id: str, now_iso: str) -> str:
@@ -1367,6 +1375,21 @@ def _print_summary(runs: list[Run], state: dict):
     )
 
 
+def _scheduler_exit_code(runs: list[Run], state: dict) -> int:
+    """Return nonzero when the requested run set did not complete cleanly."""
+    failed = [r.id for r in runs if get_run_status(state, r.id) == "failed"]
+    skipped = [r.id for r in runs if get_run_status(state, r.id) == "skipped"]
+
+    if failed or skipped:
+        print(
+            "Scheduler incomplete: "
+            f"{len(failed)} failed, {len(skipped)} skipped due to dependency failure"
+        )
+        return 1
+
+    return 0
+
+
 def _sprint_sort_key(s: str) -> tuple[int, str]:
     """Sort sprints: 1, 1b, 2, 3, ..."""
     num = ""
@@ -1407,7 +1430,7 @@ def cmd_run(args):
 
     if not runs:
         print(f"No runs found for sprint(s): {', '.join(sprints)}")
-        return
+        return 0
 
     # Apply revision transform if requested
     if args.revision:
@@ -1420,7 +1443,7 @@ def cmd_run(args):
     if args.project or args.entity:
         target = f"{args.entity}/{args.project}" if args.entity else args.project
         print(f"W&B target: {target}")
-    run_scheduler(runs, state, args.parallel, args.dry_run)
+    return run_scheduler(runs, state, args.parallel, args.dry_run)
 
 
 def cmd_status(args):
@@ -1469,7 +1492,7 @@ def cmd_retry(args):
 
     if not runs_to_retry:
         print("No runs to retry.")
-        return
+        return 0
 
     # Include their dependencies that are completed (already fine) or pending
     all_by_id = {r.id: r for r in all_runs}
@@ -1487,7 +1510,7 @@ def cmd_retry(args):
     if args.project or args.entity:
         target = f"{args.entity}/{args.project}" if args.entity else args.project
         print(f"W&B target: {target}")
-    run_scheduler(runs_to_retry, state, args.parallel, dry_run=False)
+    return run_scheduler(runs_to_retry, state, args.parallel, dry_run=False)
 
 
 def cmd_warmup(args):
@@ -1569,10 +1592,12 @@ def cmd_tag(args):
     W&B API. Idempotent — already-tagged runs are skipped.
 
     Usage:
-        uv run python scripts/internal/run_experiments.py tag --sprint 2
-        uv run python scripts/internal/run_experiments.py tag --sprint 2 3 --dry-run
-        uv run python scripts/internal/run_experiments.py tag --sprint 2 \
-            --project slices --entity myteam
+        uv run python scripts/internal/run_experiments.py tag --sprint 2 \\
+            --project slices-thesis --entity <entity>
+        uv run python scripts/internal/run_experiments.py tag --sprint 2 3 --dry-run \\
+            --project slices-thesis --entity <entity>
+        uv run python scripts/internal/run_experiments.py tag --sprint 2 \\
+            --project slices-thesis --entity <entity>
     """
     try:
         import wandb  # noqa: F811
@@ -1737,15 +1762,19 @@ def main():
         parser.error("--revision requires --sprint to scope which sprints to revise")
 
     if args.command == "run":
-        cmd_run(args)
+        exit_code = cmd_run(args)
     elif args.command == "status":
-        cmd_status(args)
+        exit_code = cmd_status(args)
     elif args.command == "retry":
-        cmd_retry(args)
+        exit_code = cmd_retry(args)
     elif args.command == "warmup":
-        cmd_warmup(args)
+        exit_code = cmd_warmup(args)
     elif args.command == "tag":
-        cmd_tag(args)
+        exit_code = cmd_tag(args)
+    else:
+        exit_code = 0
+
+    sys.exit(exit_code or 0)
 
 
 if __name__ == "__main__":

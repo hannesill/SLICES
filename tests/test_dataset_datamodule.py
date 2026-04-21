@@ -10,7 +10,70 @@ import torch
 import yaml
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.data.dataset import ICUDataset
-from slices.data.splits import load_cached_splits
+from slices.data.splits import compute_patient_level_splits, load_cached_splits
+
+
+def _patients_for_indices(
+    static_df: pl.DataFrame,
+    stay_ids: list[int],
+    indices: list[int],
+) -> set[int]:
+    stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
+    return {stay_to_patient[stay_ids[i]] for i in indices}
+
+
+def _write_split_matrix_fixture(data_dir, task_names: list[str]) -> None:
+    """Create a small processed dataset with task-specific label missingness."""
+    data_dir.mkdir(parents=True)
+
+    n_stays = 30
+    stay_ids = list(range(1, n_stays + 1))
+    patient_ids = [stay_id + 1000 for stay_id in stay_ids]
+
+    with open(data_dir / "metadata.yaml", "w") as f:
+        yaml.dump(
+            {
+                "dataset": data_dir.name,
+                "feature_set": "core",
+                "feature_names": ["heart_rate"],
+                "n_features": 1,
+                "seq_length_hours": 2,
+                "min_stay_hours": 1,
+                "task_names": task_names,
+                "n_stays": n_stays,
+            },
+            f,
+        )
+
+    pl.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "patient_id": patient_ids,
+            "age": [60] * n_stays,
+            "gender": ["F" if i % 2 else "M" for i in stay_ids],
+        }
+    ).write_parquet(data_dir / "static.parquet")
+
+    pl.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "timeseries": [[[float(i)], [float(i + 1)]] for i in stay_ids],
+            "mask": [[[True], [True]] for _ in stay_ids],
+        }
+    ).write_parquet(data_dir / "timeseries.parquet")
+
+    labels = {"stay_id": stay_ids}
+    for task_idx, task_name in enumerate(task_names):
+        values = []
+        for stay_id in stay_ids:
+            if (stay_id + task_idx) % 5 == 0:
+                values.append(None)
+            elif task_name == "los_remaining":
+                values.append(float((stay_id % 7) + 1))
+            else:
+                values.append(stay_id % 2)
+        labels[task_name] = values
+    pl.DataFrame(labels).write_parquet(data_dir / "labels.parquet")
 
 
 @pytest.fixture
@@ -978,13 +1041,11 @@ class TestICUDataModule:
         assert dm1.val_indices == dm2.val_indices, "Val indices should match after reload"
         assert dm1.test_indices == dm2.test_indices, "Test indices should match after reload"
 
-    def test_cached_splits_are_invalidated_when_task_filter_removes_patients(
-        self, mock_extracted_data
-    ):
-        """Task-filtered cohorts must not reuse a full-cohort cached split."""
+    def test_cached_full_cohort_splits_are_filtered_within_patient_sets(self, mock_extracted_data):
+        """Task-filtered cohorts should reuse the full-cohort patient assignment."""
         dm = ICUDataModule(
             processed_dir=mock_extracted_data,
-            task_name="mortality_24h",
+            task_name=None,
             seed=42,
         )
         dm.setup()
@@ -1010,6 +1071,10 @@ class TestICUDataModule:
             mock_extracted_data / "static.parquet",
             columns=["stay_id", "patient_id"],
         )
+        all_stay_ids = pl.read_parquet(
+            mock_extracted_data / "timeseries.parquet",
+            columns=["stay_id"],
+        )["stay_id"].to_list()
         filtered_stay_ids = labels_df.filter(pl.col("aki_kdigo").is_not_null())["stay_id"].to_list()
 
         cached = load_cached_splits(
@@ -1020,9 +1085,95 @@ class TestICUDataModule:
             train_ratio=0.7,
             val_ratio=0.15,
             test_ratio=0.15,
+            cohort_stay_ids=all_stay_ids,
         )
 
-        assert cached is None
+        assert cached is not None
+        train_indices, val_indices, test_indices = cached
+
+        with open(mock_extracted_data / "splits.yaml") as f:
+            cached_yaml = yaml.safe_load(f)
+
+        ssl_train_patients = set(cached_yaml["train_patients"])
+        downstream_train_patients = _patients_for_indices(
+            static_df, filtered_stay_ids, train_indices
+        )
+        downstream_val_patients = _patients_for_indices(static_df, filtered_stay_ids, val_indices)
+        downstream_test_patients = _patients_for_indices(static_df, filtered_stay_ids, test_indices)
+
+        assert downstream_train_patients.issubset(ssl_train_patients)
+        assert downstream_val_patients.issubset(set(cached_yaml["val_patients"]))
+        assert downstream_test_patients.issubset(set(cached_yaml["test_patients"]))
+        assert ssl_train_patients.isdisjoint(downstream_val_patients)
+        assert ssl_train_patients.isdisjoint(downstream_test_patients)
+
+    def test_ssl_train_disjoint_from_task_filtered_eval_splits_for_runner_matrix(self, tmp_path):
+        """Every thesis dataset/task/seed should share the global patient split."""
+        from scripts.internal.run_experiments import DATASETS, SEEDS_EXTENDED, TASKS
+
+        for dataset_name in DATASETS:
+            data_dir = tmp_path / dataset_name
+            _write_split_matrix_fixture(data_dir, TASKS)
+
+            for seed in SEEDS_EXTENDED:
+                (
+                    ssl_train_indices,
+                    _,
+                    _,
+                    ssl_static_df,
+                    _,
+                    ssl_stay_ids,
+                    _,
+                    _,
+                ) = compute_patient_level_splits(
+                    data_dir,
+                    task_name=None,
+                    seed=seed,
+                    train_ratio=0.7,
+                    val_ratio=0.15,
+                    test_ratio=0.15,
+                )
+                ssl_train_patients = _patients_for_indices(
+                    ssl_static_df,
+                    ssl_stay_ids,
+                    ssl_train_indices,
+                )
+
+                for task_name in TASKS:
+                    (
+                        _,
+                        downstream_val_indices,
+                        downstream_test_indices,
+                        downstream_static_df,
+                        _,
+                        _,
+                        downstream_stay_ids,
+                        _,
+                    ) = compute_patient_level_splits(
+                        data_dir,
+                        task_name=task_name,
+                        seed=seed,
+                        train_ratio=0.7,
+                        val_ratio=0.15,
+                        test_ratio=0.15,
+                    )
+                    downstream_val_patients = _patients_for_indices(
+                        downstream_static_df,
+                        downstream_stay_ids,
+                        downstream_val_indices,
+                    )
+                    downstream_test_patients = _patients_for_indices(
+                        downstream_static_df,
+                        downstream_stay_ids,
+                        downstream_test_indices,
+                    )
+
+                    assert ssl_train_patients.isdisjoint(
+                        downstream_val_patients
+                    ), f"{dataset_name}/{task_name}/seed{seed}: SSL train overlaps val"
+                    assert ssl_train_patients.isdisjoint(
+                        downstream_test_patients
+                    ), f"{dataset_name}/{task_name}/seed{seed}: SSL train overlaps test"
 
     def test_label_efficiency_splits_preserve_full_split_provenance(self, mock_extracted_data):
         """splits.yaml should keep the full split and record the train subset separately."""

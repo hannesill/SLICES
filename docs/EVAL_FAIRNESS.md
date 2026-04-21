@@ -115,13 +115,19 @@ summary metrics.
 1. Run the fairness sweep for a specific revision:
 
 ```bash
-uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1
+uv run python scripts/eval/evaluate_fairness.py \
+  --project slices-thesis \
+  --revision thesis-v1 \
+  --entity <entity>
 ```
 
 2. Re-export the result tables:
 
 ```bash
-uv run python scripts/export_results.py --revision benchmark-v1
+uv run python scripts/export_results.py \
+  --project slices-thesis \
+  --revision thesis-v1 \
+  --entity <entity>
 ```
 
 ## Source Of Truth
