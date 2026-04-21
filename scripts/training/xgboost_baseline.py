@@ -13,11 +13,13 @@ Example usage:
 from pathlib import Path
 
 import hydra
+import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    brier_score_loss,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
@@ -31,6 +33,28 @@ from xgboost import XGBClassifier, XGBRegressor
 def _xgboost_eval_metric(task_type: str) -> str:
     """Return the eval metric aligned with the benchmark primary metric."""
     return "mae" if task_type == "regression" else "aucpr"
+
+
+def _binary_ece(y_true, y_pred_proba, n_bins: int = 15) -> float:
+    """Compute L1 expected calibration error with uniform probability bins."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred_proba = np.asarray(y_pred_proba, dtype=float)
+    if y_true.size == 0:
+        return float("nan")
+
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_ids = np.digitize(y_pred_proba, bin_edges[1:-1], right=False)
+
+    ece = 0.0
+    for bin_idx in range(n_bins):
+        in_bin = bin_ids == bin_idx
+        if not np.any(in_bin):
+            continue
+        bin_weight = in_bin.mean()
+        confidence = y_pred_proba[in_bin].mean()
+        accuracy = y_true[in_bin].mean()
+        ece += bin_weight * abs(confidence - accuracy)
+    return float(ece)
 
 
 def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
@@ -191,6 +215,8 @@ def main(cfg: DictConfig) -> None:
         metrics["test/auroc"] = roc_auc_score(y_test, y_pred_proba)
         metrics["test/auprc"] = average_precision_score(y_test, y_pred_proba)
         metrics["test/accuracy"] = accuracy_score(y_test, y_pred_class)
+        metrics["test/brier_score"] = brier_score_loss(y_test, y_pred_proba)
+        metrics["test/ece"] = _binary_ece(y_test, y_pred_proba)
 
     print("\n  Test Results:")
     for key, value in metrics.items():

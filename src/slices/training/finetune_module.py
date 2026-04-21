@@ -19,7 +19,7 @@ import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 
 from slices.eval import MetricConfig, build_metrics
-from slices.models.encoders import build_encoder
+from slices.models.encoders import TransformerEncoder, build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
 from slices.training.checkpoint_loading import (
     load_encoder_weights,
@@ -266,7 +266,12 @@ class FineTuneModule(pl.LightningModule):
             Dictionary with 'logits' and 'probs'.
         """
         # Encoder forward (produces pooled representation)
-        encoder_out = self.encoder(timeseries, mask=mask)  # (B, d_model)
+        padding_mask = self._downstream_padding_mask(mask)
+        encoder_out = self.encoder(
+            timeseries,
+            mask=mask,
+            padding_mask=padding_mask,
+        )  # (B, d_model)
 
         # Optional projection to shared dimensionality
         if self.projection is not None:
@@ -274,6 +279,14 @@ class FineTuneModule(pl.LightningModule):
 
         # Task head forward
         return self.task_head(encoder_out)
+
+    def _downstream_padding_mask(self, mask: torch.Tensor) -> Optional[torch.Tensor]:
+        """Exclude fully unobserved timesteps for obs-aware Transformer pooling."""
+        if isinstance(self.encoder, TransformerEncoder) and getattr(
+            self.encoder.config, "obs_aware", False
+        ):
+            return mask.any(dim=-1)
+        return None
 
     def _validate_labels(self, labels: torch.Tensor) -> None:
         """One-time check that labels are compatible with the task type.
