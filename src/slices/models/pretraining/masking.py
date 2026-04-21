@@ -307,3 +307,54 @@ def extract_visible_timesteps(
     vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
 
     return visible_tokens, vis_padding
+
+
+def scatter_visible_timesteps(
+    visible_tokens: torch.Tensor,
+    visible_mask: torch.Tensor,
+    n_timesteps: int,
+    fill_value: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Place variable-count visible tokens back on a full timestep grid.
+
+    `extract_visible_timesteps` pads each batch row to the maximum visible-token
+    count. This helper scatters only the real visible tokens for each sample, so
+    padded tokens cannot overwrite masked timestep positions.
+
+    Args:
+        visible_tokens: (B, max_vis, d_model) tokens returned by an encoder.
+        visible_mask: (B, T) True at the original visible timestep positions.
+        n_timesteps: Total number of timesteps T.
+        fill_value: Optional (1, 1, d_model) or broadcastable fill tensor. When
+            omitted, masked positions are filled with zeros.
+
+    Returns:
+        (B, T, d_model) tensor with visible tokens restored to their original
+        timestep positions.
+    """
+    B, max_vis, d_model = visible_tokens.shape
+    device = visible_tokens.device
+    visible_mask = visible_mask.to(device=device, dtype=torch.bool)
+
+    if visible_mask.shape != (B, n_timesteps):
+        raise ValueError(
+            f"visible_mask must have shape ({B}, {n_timesteps}), "
+            f"got {tuple(visible_mask.shape)}"
+        )
+
+    if fill_value is None:
+        full = visible_tokens.new_zeros((B, n_timesteps, d_model))
+    else:
+        fill = fill_value.to(device=device, dtype=visible_tokens.dtype)
+        full = fill.expand(B, n_timesteps, d_model).clone()
+
+    visible_indices = visible_mask.float().argsort(dim=1, descending=True, stable=True)
+    visible_counts = visible_mask.sum(dim=1).clamp(max=max_vis)
+
+    for b in range(B):
+        n_visible = int(visible_counts[b].item())
+        if n_visible == 0:
+            continue
+        full[b, visible_indices[b, :n_visible]] = visible_tokens[b, :n_visible].to(full.dtype)
+
+    return full

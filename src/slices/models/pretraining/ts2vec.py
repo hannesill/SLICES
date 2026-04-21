@@ -37,7 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseSSLObjective, SSLConfig
-from .masking import create_timestep_mask, extract_visible_timesteps
+from .masking import create_timestep_mask, extract_visible_timesteps, scatter_visible_timesteps
 
 
 @dataclass
@@ -276,15 +276,7 @@ class TS2VecObjective(BaseSSLObjective):
         Returns:
             (B, T, d_enc) with encoded tokens at visible positions, zeros elsewhere.
         """
-        B, n_vis, d_enc = encoded.shape
-        device = encoded.device
-
-        full = torch.zeros(B, n_timesteps, d_enc, device=device, dtype=encoded.dtype)
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        scatter_idx = vis_indices[:, :n_vis].unsqueeze(-1).expand(-1, -1, d_enc)
-        full.scatter_(1, scatter_idx, encoded)
-
-        return full
+        return scatter_visible_timesteps(encoded, ssl_mask, n_timesteps)
 
     @staticmethod
     def _masked_max_pool1d(

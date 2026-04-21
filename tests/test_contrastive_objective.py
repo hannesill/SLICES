@@ -531,6 +531,29 @@ class TestTemporalContrastive:
         # Visible positions should be non-zero (with high probability)
         assert full[:, :4, :].abs().sum() > 0
 
+    def test_scatter_to_full_ignores_padded_visible_tokens(self, encoder, temporal_config):
+        """Uneven visible counts should not scatter padded tokens into masked slots."""
+        from slices.models.pretraining.contrastive import ContrastiveObjective
+
+        encoded = torch.tensor(
+            [
+                [[10.0], [11.0]],
+                [[20.0], [99.0]],
+            ]
+        )
+        ssl_mask = torch.tensor(
+            [
+                [True, True, False],
+                [True, False, False],
+            ]
+        )
+
+        full = ContrastiveObjective._scatter_to_full(encoded, ssl_mask, n_timesteps=3)
+
+        assert torch.allclose(full[1, 0], torch.tensor([20.0]))
+        assert torch.allclose(full[1, 1], torch.tensor([0.0]))
+        assert torch.allclose(full[1, 2], torch.tensor([0.0]))
+
     def test_scatter_to_full_gradient_flow(self):
         """Gradients flow through scatter into torch.zeros back to the source tensor."""
         from slices.models.pretraining.contrastive import ContrastiveObjective
