@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 import torch
 import yaml
+
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.data.dataset import ICUDataset
 from slices.data.splits import compute_patient_level_splits, load_cached_splits
@@ -846,6 +847,14 @@ class TestICUDataModule:
                 train_ratio=0.5,
                 val_ratio=0.3,
                 test_ratio=0.3,  # Sum = 1.1
+            )
+
+        with pytest.raises(ValueError, match="train_ratio must be in \\[0, 1\\]"):
+            ICUDataModule(
+                processed_dir=".",
+                train_ratio=1.2,
+                val_ratio=-0.1,
+                test_ratio=-0.1,
             )
 
     def test_train_dataloader_before_setup_raises_error(self, mock_extracted_data):

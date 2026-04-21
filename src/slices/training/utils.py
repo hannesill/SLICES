@@ -286,6 +286,9 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         if len(tag) > 64:
             tag = tag[:61] + "..."
         tags.append(tag)
+    model_size = cfg.get("model_size")
+    if model_size is not None:
+        tags.append(f"model_size:{model_size}")
 
     # Add protocol tag for finetune runs (Protocol A = frozen, Protocol B = unfrozen)
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
@@ -309,6 +312,8 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     run_name = cfg.logging.get("run_name", None)
     if run_name and freeze_encoder is True:
         run_name = run_name.replace("_finetune_", "_probe_", 1)
+    if run_name and model_size is not None:
+        run_name += f"_{model_size}"
 
     # Adjust group to include protocol and label_fraction so that W&B "Group" view
     # aggregates exactly the runs that differ only by seed.
@@ -316,6 +321,8 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if group:
         if freeze_encoder is True:
             group = group.replace("finetune_", "probe_", 1)
+        if model_size is not None:
+            group += f"_{model_size}"
         if label_fraction is not None and label_fraction < 1.0:
             frac_str = str(label_fraction).replace(".", "")
             group += f"_frac{frac_str}"

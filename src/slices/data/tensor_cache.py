@@ -420,7 +420,7 @@ def save_cached_tensors(
     seq_length: int,
     n_features: int,
 ) -> None:
-    """Save raw tensors to cache file.
+    """Save raw tensors to cache file atomically.
 
     Stores raw (unnormalized) tensors for the full dataset. Normalization
     and stay filtering are applied at runtime after loading.
@@ -434,7 +434,7 @@ def save_cached_tensors(
     """
     cache_path = get_tensor_cache_path(data_dir, seq_length, n_features)
     cache_dir = cache_path.parent
-    cache_dir.mkdir(exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     cache_data = {
         "timeseries_tensor": timeseries_tensor,
@@ -447,7 +447,17 @@ def save_cached_tensors(
 
     try:
         logger.debug(f"Saving raw tensors to cache: {cache_path.name}")
-        torch.save(cache_data, cache_path)
+        fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".pt.tmp")
+        os.close(fd)
+        try:
+            torch.save(cache_data, tmp_path)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         logger.warning(f"Failed to save tensor cache to {cache_path}: {e}")
 

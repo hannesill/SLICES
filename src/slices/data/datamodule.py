@@ -163,6 +163,15 @@ class ICUDataModule(L.LightningDataModule):
         self.window_stride = window_stride
 
         # Validate ratios
+        ratios = {
+            "train_ratio": train_ratio,
+            "val_ratio": val_ratio,
+            "test_ratio": test_ratio,
+        }
+        for name, ratio in ratios.items():
+            if ratio < 0.0 or ratio > 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {ratio}")
+
         total_ratio = train_ratio + val_ratio + test_ratio
         if not np.isclose(total_ratio, 1.0):
             raise ValueError(f"Split ratios must sum to 1.0, got {total_ratio}")

@@ -46,6 +46,7 @@ xgboost:
   min_child_weight: 1
   early_stopping_rounds: 20
   scale_pos_weight: null  # set to "balanced" to auto-compute from label distribution
+  n_jobs: 4  # cap per-process CPU use when Sprint 11 runs many baselines in parallel
 
 # Data loading
 training:

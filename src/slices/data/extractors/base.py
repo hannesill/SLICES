@@ -157,6 +157,12 @@ class BaseExtractor(ABC):
             manifest[task_config.task_name] = {
                 "builder_version": builder.SEMANTIC_VERSION,
                 "config_hash": LabelBuilder.config_hash(task_config),
+                "label_sources": sorted(task_config.label_sources),
+                "supported_datasets": (
+                    sorted(task_config.supported_datasets)
+                    if task_config.supported_datasets is not None
+                    else None
+                ),
             }
         return manifest
 
