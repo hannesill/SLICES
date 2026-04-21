@@ -912,8 +912,10 @@ class TestRicuExtractorRun:
             updated_metadata["label_manifest"]["mortality_hospital"]["builder_version"] == "9.9.9"
         )
 
-    def test_run_fails_closed_on_invalid_los(self, ricu_output_dir: Path, tmp_path: Path) -> None:
-        """Abort when stay metadata is incomplete instead of emitting a partial dataset."""
+    def test_run_excludes_invalid_los_before_validation(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Exclude invalid LOS rows before validating the benchmark cohort."""
         output_dir = tmp_path / "processed"
 
         stays_path = ricu_output_dir / "ricu_stays.parquet"
@@ -933,8 +935,10 @@ class TestRicuExtractorRun:
             tasks=[],
         )
 
-        with pytest.raises(ValueError, match="invalid LOS"):
-            RicuExtractor(config).run()
+        RicuExtractor(config).run()
+
+        static = pl.read_parquet(output_dir / "static.parquet")
+        assert static["stay_id"].to_list() == [100, 300]
 
     def test_run_fails_closed_on_missing_timeseries_coverage(
         self, ricu_output_dir: Path, tmp_path: Path

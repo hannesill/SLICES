@@ -355,11 +355,23 @@ class RicuExtractor(BaseExtractor):
             stays = self.extract_stays()
             progress.update(task, completed=True)
 
-        self._validate_stays(stays)
+        # Filter by valid/minimum stay length. RICU exports can include source
+        # records with missing or negative discharge-derived LOS; those rows
+        # cannot enter the benchmark cohort, so exclude them before validating
+        # the extracted stay universe.
+        invalid_los = stays.filter((pl.col("los_days").is_null()) | (pl.col("los_days") < 0))
+        if len(invalid_los) > 0:
+            console.print(
+                f"[yellow]Warning: Excluding {len(invalid_los)} stays with invalid LOS "
+                "before benchmark cohort filtering.[/yellow]"
+            )
+        stays_with_valid_los = stays.filter(
+            pl.col("los_days").is_not_null() & (pl.col("los_days") >= 0)
+        )
 
         # Filter by minimum stay length
         min_los_days = self.config.min_stay_hours / 24.0
-        stays_filtered = stays.filter(pl.col("los_days") >= min_los_days)
+        stays_filtered = stays_with_valid_los.filter(pl.col("los_days") >= min_los_days)
 
         console.print(f"Found {len(stays)} ICU stays")
         console.print(
@@ -385,6 +397,7 @@ class RicuExtractor(BaseExtractor):
                 console.print("[red]Error: No stays remaining after filtering![/red]")
                 return
 
+        self._validate_stays(stays_filtered)
         self._stays_cache = stays_filtered
 
         # -----------------------------------------------------------------
