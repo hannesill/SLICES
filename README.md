@@ -230,6 +230,10 @@ Extracted ICU stays are stored as Parquet files:
 - `labels.parquet` — Configured task labels (for example `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining`, and optional `mortality`)
 - `metadata.yaml` — Feature names, sequence length, task definitions
 
+For task-specific supervised evaluation, stays with missing task labels are
+excluded. This matters most for `aki_kdigo`, which requires creatinine in both
+the 0-24h baseline window and the 24-48h prediction window.
+
 `ICUDataset` returns batches with:
 - `timeseries`: `FloatTensor (B, T, D)` — hourly-binned feature values
 - `mask`: `BoolTensor (B, T, D)` — True = observed, False = missing
