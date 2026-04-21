@@ -7,12 +7,12 @@ Example usage:
     # Evaluate MAE checkpoint with all strategies
     uv run python scripts/eval/evaluate_imputation.py \
         checkpoint=outputs/pretrain/encoder.pt \
-        data.processed_dir=data/processed/mimic-iv
+        data.processed_dir=data/processed/miiv
 
     # Evaluate a full pretrain checkpoint (reuses the encoder, trains a probe decoder)
     uv run python scripts/eval/evaluate_imputation.py \
         pretrain_checkpoint=outputs/pretrain/ssl-last.ckpt \
-        data.processed_dir=data/processed/mimic-iv
+        data.processed_dir=data/processed/miiv
 
     # Single strategy
     uv run python scripts/eval/evaluate_imputation.py \

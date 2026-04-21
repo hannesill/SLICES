@@ -35,7 +35,7 @@ These constraints are enforced in the objective constructors and by
 
 ## Benchmark Design
 
-The controlled thesis objectives share the same timestep-level obs-aware
+The controlled benchmark objectives share the same timestep-level obs-aware
 transformer encoder and differ only in the SSL objective and masking logic.
 
 Highlights:

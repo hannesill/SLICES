@@ -5,7 +5,7 @@ downstream finetuning, and baseline experiments.
 
 ## Canonical Benchmark Encoder
 
-The main thesis benchmark uses `TransformerEncoder` from `transformer.py`.
+The main benchmark uses `TransformerEncoder` from `transformer.py`.
 
 Current canonical config:
 
@@ -95,7 +95,7 @@ ssl_config = TransformerConfig(
 
 - `ObservationTransformerEncoder` in `observation.py`
   - observation-level tokenization
-  - kept as an alternate architecture, not the canonical thesis encoder
+  - kept as an alternate architecture, not the canonical benchmark encoder
 - `SMARTEncoder` in `smart.py`
   - MART-style architecture required by the appendix SMART objective
 - `GRUDEncoder` in `gru_d.py`

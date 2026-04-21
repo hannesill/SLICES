@@ -18,7 +18,7 @@ Usage:
     uv run python scripts/export_results.py --sprint 1 --validate-seeds 3
     uv run python scripts/export_results.py --paradigm mae jepa --dataset miiv
     uv run python scripts/export_results.py --output-dir results/sprint1 --sprint 1
-    uv run python scripts/export_results.py --project slices-thesis --revision thesis-v1
+    uv run python scripts/export_results.py --project slices-benchmark --revision benchmark-v1
 """
 from __future__ import annotations
 
@@ -45,10 +45,10 @@ import wandb
 # Constants
 # ---------------------------------------------------------------------------
 
-# Sprint → experiment type mapping.
-# Core sprints share the same config and only add seeds; they merge across sprints.
-# Non-core sprints have ablation-specific pretrain configs that aren't visible
-# in the finetune W&B config, so sprint must remain a grouping key.
+# Historical sprint tag to benchmark experiment type mapping.
+# Core groups share the same config and only add seeds; they merge across groups.
+# Non-core groups have ablation-specific pretrain configs that are not visible
+# in the finetune W&B config, so the sprint tag remains a grouping key.
 EXPERIMENT_TYPES = {
     "1": "core",
     "2": "core",
@@ -79,7 +79,7 @@ FIXED_SEED_EXPERIMENT_TYPES = {
     "temporal_contrastive",
 }
 
-# For core runs: sprint is noise — same config across sprints, different seeds.
+# For core runs: the sprint tag is not part of the config identity.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
 # only in the pretrain config (NaN for finetune runs).
 CORE_FINGERPRINT = [
@@ -94,7 +94,7 @@ CORE_FINGERPRINT = [
     "phase",
 ]
 
-# HP ablations merge across sprints, but must preserve the upstream pretrain
+# HP ablations merge across groups, but must preserve the upstream pretrain
 # config and subtype so LR and mask-ratio families cannot collapse together.
 HP_ABLATION_FINGERPRINT = CORE_FINGERPRINT + [
     "experiment_subtype",
@@ -102,7 +102,7 @@ HP_ABLATION_FINGERPRINT = CORE_FINGERPRINT + [
     "upstream_pretrain_mask_ratio",
 ]
 
-# For per-sprint experiment families, sprint remains part of the identity.
+# For per-group experiment families, the sprint tag remains part of the identity.
 ABLATION_FINGERPRINT = HP_ABLATION_FINGERPRINT + [
     "sprint",
 ]
@@ -175,7 +175,7 @@ VAL_METRICS = [
 
 ALL_METRICS = TEST_METRICS + VAL_METRICS
 
-# Canonical model variants used in the thesis matrix.
+# Canonical model variants used in the benchmark matrix.
 MODEL_VARIANTS = {
     (64, 2): "default",
     (128, 4): "medium",
@@ -483,9 +483,8 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     sprint_str = str(config.get("sprint", ""))
     experiment_type = EXPERIMENT_TYPES.get(sprint_str, "unknown")
 
-    # Sprint 10 contains both core (label_fraction=1.0) and label_efficiency
-    # (label_fraction<1.0) runs. Reclassify the sub-1.0 runs so they merge
-    # with Sprint 6 label_efficiency during aggregation.
+    # Historical group 10 contains both core (label_fraction=1.0) and
+    # label-efficiency runs that merge with group 6 during aggregation.
     label_frac = config.get("label_fraction", 1.0)
     if experiment_type == "core" and label_frac is not None and float(label_frac) < 1.0:
         experiment_type = "label_efficiency"
@@ -501,7 +500,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     if experiment_type == "core" and experiment_subtype in ("lr_ablation", "mask_ablation"):
         experiment_type = "hp_ablation"
 
-    # Sprint 10 also adds transfer seeds for Sprint 7 scope.
+    # Historical group 10 also adds transfer seeds for group 7 scope.
     if experiment_type == "core" and source_dataset is not None:
         experiment_type = "transfer"
 
@@ -688,7 +687,7 @@ def _aggregate_group(df: pd.DataFrame, fingerprint_cols: list[str]) -> pd.DataFr
     """Aggregate a subset of runs by the given fingerprint columns.
 
     Returns a DataFrame with one row per unique fingerprint, containing
-    mean/std/min/max of metrics and lists of run IDs/seeds/sprints.
+    mean/std/min/max of metrics and lists of run IDs/seeds/groups.
     """
     metric_cols = [c for c in ALL_METRICS if c in df.columns]
 
@@ -740,9 +739,9 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     """Group by fingerprint, compute mean/std/min/max across seeds.
 
     Uses conditional grouping:
-    - Core / label-efficiency / transfer runs: group WITHOUT sprint
-    - HP ablations: group WITHOUT sprint, but include subtype + upstream pretrain config
-    - Other experiment families: group WITH sprint
+    - Core / label-efficiency / transfer runs: group without the sprint tag
+    - HP ablations: group without the sprint tag, but include subtype + upstream pretrain config
+    - Other experiment families: group with the sprint tag
     """
     parts = []
     cross_sprint = per_seed_df[per_seed_df["experiment_type"].isin(CROSS_SPRINT_TYPES)]
@@ -788,7 +787,7 @@ def build_aggregated_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _primary_metric_for_task(task_name: str | None) -> str | None:
-    """Return the thesis-primary test metric for a downstream task."""
+    """Return the benchmark-primary test metric for a downstream task."""
     if task_name is None:
         return None
     if task_name in PRIMARY_TEST_METRIC_BY_TASK:
@@ -803,8 +802,8 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
 
     Comparisons are scoped by the canonical experiment fingerprint with
     `paradigm` and `task` removed, then pooled across matched `(task, seed)`
-    pairs for tasks that share the same primary metric. This matches the thesis
-    plan's "paired across seeds and tasks" intent without mixing incompatible
+    pairs for tasks that share the same primary metric. This matches the benchmark
+    plan's paired-across-seeds-and-tasks intent without mixing incompatible
     scales such as AUPRC and MAE in the same test.
     """
     if per_seed_df.empty or "experiment_type" not in per_seed_df.columns:
@@ -1038,7 +1037,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sprint",
         nargs="+",
-        help="Filter to specific sprint(s), e.g. --sprint 1 1b 2",
+        help="Filter to specific experiment group(s), e.g. --sprint 1 1b 2",
     )
     parser.add_argument(
         "--paradigm",
@@ -1059,7 +1058,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--revision",
         nargs="+",
-        help="Filter to specific revision tag(s), e.g. --revision thesis-v1",
+        help="Filter to specific revision tag(s), e.g. --revision benchmark-v1",
     )
     parser.add_argument(
         "--state",

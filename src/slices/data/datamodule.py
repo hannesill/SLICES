@@ -83,7 +83,7 @@ class ICUDataModule(L.LightningDataModule):
 
     Example:
         >>> dm = ICUDataModule(
-        ...     processed_dir="data/processed/mimic-iv-demo",
+        ...     processed_dir="data/processed/miiv",
         ...     task_name="mortality_24h",
         ...     batch_size=32,
         ... )

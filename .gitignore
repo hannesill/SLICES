@@ -210,7 +210,7 @@ __marimo__/
 
 # Notes
 notes/
-docs/
+docs/internal/
 
 # SLICES-specific
 /data/
@@ -219,6 +219,7 @@ outputs/
 !/results/.gitkeep
 wandb/
 .tensor_cache/
+logs/
 
 # PyTorch Lightning
 lightning_logs/

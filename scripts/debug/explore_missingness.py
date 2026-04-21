@@ -10,7 +10,7 @@ This script analyzes:
 
 Example usage:
     uv run python scripts/debug/explore_missingness.py \\
-        --processed-dir data/processed/mimic-iv-demo \\
+        --processed-dir data/processed/miiv \\
         --top-n 10
 """
 
@@ -334,7 +334,7 @@ def main():
     parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=Path("data/processed/mimic-iv-demo"),
+        default=Path("data/processed/miiv"),
         help="Path to processed data directory (with static.parquet, "
         "timeseries.parquet, metadata.yaml)",
     )

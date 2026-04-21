@@ -52,7 +52,7 @@ There are two layers:
 2. `FairnessEvaluator` in `fairness_evaluator.py` builds full subgroup reports
    from predictions, labels, stay IDs, and `static.parquet` demographics.
 
-Current evaluator behavior matches the thesis pipeline:
+Current evaluator behavior matches the benchmark pipeline:
 
 - sex and age-group analysis for all supported datasets when columns exist
 - race/ethnicity fairness only on MIMIC-IV rows
@@ -77,7 +77,7 @@ report = evaluator.evaluate(predictions, labels, stay_ids)
 flat_report = flatten_fairness_report(report)
 ```
 
-For batch thesis sweeps, the repository uses
+For batch benchmark sweeps, the repository uses
 `scripts/eval/evaluate_fairness.py`, which reruns inference from the recorded
 evaluation checkpoint and writes `fairness/*` keys back to W&B.
 
@@ -103,7 +103,7 @@ export code can consume.
 
 `ImputationEvaluator` measures how well an SSL encoder reconstructs masked
 values under controlled masking schemes. This is separate from downstream task
-metrics and is intended for representation diagnostics rather than thesis
+metrics and is intended for representation diagnostics rather than benchmark
 headline results.
 
 ## Integration Points

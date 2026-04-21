@@ -6,30 +6,31 @@ artifact used for each run, runs inference on the test set, computes fairness
 metrics via FairnessEvaluator, and writes results back to the same W&B run's
 summary.
 
-Designed for batch evaluation of the thesis fairness corpus across finetune,
+Designed for batch evaluation of the benchmark fairness corpus across finetune,
 supervised, and classical baseline runs. Supports resumability via
 --skip-existing (default) and scoping via --sprint/--paradigm/--dataset filters.
 
 Usage:
-    # Evaluate the thesis fairness corpus for one explicit revision
-    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1
+    # Evaluate the benchmark fairness corpus for one explicit revision
+    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1
 
     # Scope to specific sprint/dataset
-    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --sprint 1 --dataset miiv
+    uv run python scripts/eval/evaluate_fairness.py \
+        --revision benchmark-v1 --sprint 1 --dataset miiv
 
     # Preview which runs would be evaluated
-    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --dry-run
+    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --dry-run
 
     # Override paths (e.g., different machine than training)
     uv run python scripts/eval/evaluate_fairness.py \
-        --revision thesis-v1 \
+        --revision benchmark-v1 \
         --outputs-root /mnt/data/outputs --data-root /mnt/data
 
     # Recompute fairness for runs that already have metrics
-    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --force
+    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --force
 
     # Debug with a single run
-    uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1 --max-runs 1
+    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --max-runs 1
 """
 from __future__ import annotations
 
@@ -525,7 +526,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sprint",
         nargs="+",
-        help="Filter to sprint(s). Default: thesis fairness sprints",
+        help="Filter to experiment group(s). Default: benchmark fairness groups",
     )
     parser.add_argument("--paradigm", nargs="+", help="Filter to paradigm(s)")
     parser.add_argument("--dataset", nargs="+", help="Filter to dataset(s)")
@@ -605,9 +606,9 @@ def main() -> None:
     device = _resolve_device(args.device)
     log.info("Device: %s", device)
 
-    # Default to the thesis fairness sprint set if not specified
+    # Default to the benchmark fairness groups if not specified.
     sprints = args.sprint or CORE_SPRINTS
-    log.info("Sprints: %s", sprints)
+    log.info("Experiment groups: %s", sprints)
 
     # Fetch runs from W&B
     runs = _retry(

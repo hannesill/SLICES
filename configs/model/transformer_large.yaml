@@ -1,7 +1,7 @@
 # @package encoder
 # Transformer Encoder — Large (256-dim, 4-layer)
 #
-# Scaled-up variant for capacity ablation (Sprint 7 pilot).
+# Scaled-up variant for the capacity ablation pilot.
 # ~3.2M params vs ~112K for the base transformer.
 # All other settings identical to transformer.yaml.
 

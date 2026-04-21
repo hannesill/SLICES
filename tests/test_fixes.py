@@ -543,7 +543,7 @@ class TestCombinedSetupPath:
         """The default setup path should build the combined dataset as part of readiness prep."""
         repo_root = Path(__file__).resolve().parents[1]
         temp_repo = tmp_path / "repo"
-        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo_root / "scripts" / "setup_and_extract.sh", temp_repo / "scripts")
 
         for raw_dir in ("data/raw/mimiciv", "data/raw/eicu-crd"):
@@ -786,8 +786,11 @@ class TestFairnessRevisionScoping:
         """The thesis launcher should thread revision tags through the fairness sweep."""
         repo_root = Path(__file__).resolve().parents[1]
         temp_repo = tmp_path / "repo"
-        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            repo_root / "scripts" / "internal" / "launch_thesis_tmux.sh",
+            temp_repo / "scripts" / "internal",
+        )
 
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -811,7 +814,7 @@ class TestFairnessRevisionScoping:
         env["RUN_EXPORT"] = "0"
 
         result = subprocess.run(
-            ["bash", "scripts/launch_thesis_tmux.sh"],
+            ["bash", "scripts/internal/launch_thesis_tmux.sh"],
             cwd=temp_repo,
             env=env,
             capture_output=True,
@@ -830,8 +833,11 @@ class TestFairnessRevisionScoping:
         """The fairness sweep should include the canonical baseline sprint by default."""
         repo_root = Path(__file__).resolve().parents[1]
         temp_repo = tmp_path / "repo"
-        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            repo_root / "scripts" / "internal" / "launch_thesis_tmux.sh",
+            temp_repo / "scripts" / "internal",
+        )
 
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -854,7 +860,7 @@ class TestFairnessRevisionScoping:
         env["RUN_EXPORT"] = "0"
 
         result = subprocess.run(
-            ["bash", "scripts/launch_thesis_tmux.sh"],
+            ["bash", "scripts/internal/launch_thesis_tmux.sh"],
             cwd=temp_repo,
             env=env,
             capture_output=True,
@@ -872,8 +878,11 @@ class TestFairnessRevisionScoping:
         """The status pane should use uv-managed Python."""
         repo_root = Path(__file__).resolve().parents[1]
         temp_repo = tmp_path / "repo"
-        (temp_repo / "scripts").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(repo_root / "scripts" / "launch_thesis_tmux.sh", temp_repo / "scripts")
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            repo_root / "scripts" / "internal" / "launch_thesis_tmux.sh",
+            temp_repo / "scripts" / "internal",
+        )
 
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -896,7 +905,7 @@ class TestFairnessRevisionScoping:
         env["RUN_EXPORT"] = "0"
 
         result = subprocess.run(
-            ["bash", "scripts/launch_thesis_tmux.sh"],
+            ["bash", "scripts/internal/launch_thesis_tmux.sh"],
             cwd=temp_repo,
             env=env,
             capture_output=True,
@@ -904,7 +913,10 @@ class TestFairnessRevisionScoping:
         )
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "uv\\ run\\ python\\ scripts/run_experiments.py\\ status" in tmux_log.read_text()
+        assert (
+            "uv\\ run\\ python\\ scripts/internal/run_experiments.py\\ status"
+            in tmux_log.read_text()
+        )
 
 
 # ============================================================================
@@ -1466,7 +1478,7 @@ class TestExperimentRunnerWandbOverrides:
     """Tests for clean project/entity overrides in the experiment runner."""
 
     def test_apply_wandb_target_injects_project_and_entity(self):
-        from scripts.run_experiments import Run, apply_wandb_target
+        from scripts.internal.run_experiments import Run, apply_wandb_target
 
         run = Run(
             id="s1_supervised_mortality_24h_miiv_seed42",
@@ -1484,7 +1496,7 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
 
     def test_transfer_finetune_command_propagates_source_dataset(self):
-        from scripts.run_experiments import Run
+        from scripts.internal.run_experiments import Run
 
         pretrain = Run(
             id="pretrain_mae_miiv_seed42",
@@ -1517,7 +1529,7 @@ class TestExperimentRunnerRetry:
     """Tests for retry scoping and dependency preservation."""
 
     def test_cmd_retry_respects_sprint_filter_but_keeps_dependencies(self, monkeypatch):
-        import scripts.run_experiments as runner
+        import scripts.internal.run_experiments as runner
 
         dependency = runner.Run(
             id="dep_pretrain",
@@ -1589,7 +1601,7 @@ class TestExperimentRunnerRetry:
         assert other.id not in scheduled_ids
 
     def test_select_ready_runs_prioritizes_pretrains_with_slot_budget(self):
-        import scripts.run_experiments as runner
+        import scripts.internal.run_experiments as runner
 
         pretrain = runner.Run(
             id="pretrain",
@@ -1621,7 +1633,7 @@ class TestExperimentRunnerRetry:
         assert [run.id for run in selected] == [pretrain.id]
 
     def test_select_ready_runs_does_not_mix_pretrain_with_active_gpu_work(self):
-        import scripts.run_experiments as runner
+        import scripts.internal.run_experiments as runner
 
         pretrain = runner.Run(
             id="pretrain",
@@ -2144,7 +2156,7 @@ class TestExperimentRunnerMatrix:
     def test_classical_baselines_are_canonicalized_to_sprint11(self):
         from collections import Counter
 
-        from scripts.run_experiments import generate_all_runs
+        from scripts.internal.run_experiments import generate_all_runs
 
         runs = generate_all_runs()
         by_sprint = Counter(run.sprint for run in runs)
@@ -2163,7 +2175,7 @@ class TestExperimentRunnerMatrix:
         assert non_s11_classical == []
 
     def test_sprint7p_expanded_to_five_seeds(self):
-        from scripts.run_experiments import BASELINE_SPRINTS, SEEDS_EXTENDED, MatrixBuilder
+        from scripts.internal.run_experiments import BASELINE_SPRINTS, SEEDS_EXTENDED, MatrixBuilder
 
         builder = MatrixBuilder()
         builder.build_sprint7p()
@@ -2173,7 +2185,7 @@ class TestExperimentRunnerMatrix:
         assert BASELINE_SPRINTS["7p"] == ["6", "10"]
 
     def test_sprint13_includes_both_protocols(self):
-        from scripts.run_experiments import MatrixBuilder
+        from scripts.internal.run_experiments import MatrixBuilder
 
         builder = MatrixBuilder()
         builder.build_sprint13()

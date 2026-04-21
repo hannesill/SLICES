@@ -3,7 +3,7 @@
 Computes per-group AUROC, worst-group AUROC, demographic parity, and
 equalized odds across protected attributes (gender, age group, race).
 
-Race handling follows the thesis plan:
+Race handling follows the benchmark protocol:
 - race/ethnicity is evaluated only on MIMIC-IV rows
 - raw race strings are mapped into the canonical five-bin schema
   (White, Black, Hispanic, Asian, Other)
@@ -290,7 +290,7 @@ class FairnessEvaluator:
             # Get unique valid groups (exclude -1 = unknown)
             unique_groups = [g for g in group_ids.unique().tolist() if g >= 0]
 
-            # Filter groups below the patient-count threshold from the thesis plan
+            # Filter groups below the benchmark patient-count threshold.
             valid_groups = []
             group_sizes = {}
             group_sample_sizes = {}

@@ -557,7 +557,7 @@ def validate_data_prerequisites(
     label_config_fields = {field.name for field in fields(LabelConfig)}
 
     def coerce_label_config(
-        task_config: Union[LabelConfig, DictConfig, Dict[str, Any]]
+        task_config: Union[LabelConfig, DictConfig, Dict[str, Any]],
     ) -> LabelConfig:
         if isinstance(task_config, LabelConfig):
             return task_config

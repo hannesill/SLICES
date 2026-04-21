@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Auto-shutdown: powers off the VM if no training has run for 30 minutes.
+# Auto-shutdown: powers off the VM after the configured idle threshold.
 # Install as a cron job on the GCP VM (see bottom of script).
 # =============================================================================
 set -euo pipefail
@@ -9,7 +9,7 @@ IDLE_THRESHOLD_MIN=59
 STAMP_FILE="/tmp/slices_last_training_activity"
 
 # Check if any training process or Claude Code session is running
-if pgrep -f "scripts/(training/(pretrain|finetune|supervised)|run_experiments|preprocessing/prepare_dataset)\.py" > /dev/null 2>&1 \
+if pgrep -f "scripts/(training/(pretrain|finetune|supervised)|internal/run_experiments|preprocessing/prepare_dataset)\.py" > /dev/null 2>&1 \
    || pgrep -f "claude" > /dev/null 2>&1; then
     # Activity detected — update timestamp and exit
     date +%s > "$STAMP_FILE"

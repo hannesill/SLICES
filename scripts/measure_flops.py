@@ -17,6 +17,7 @@ from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
+from slices.constants import SEQ_LENGTH_HOURS
 from slices.models.encoders.factory import build_encoder
 from slices.models.pretraining.factory import build_ssl_objective, get_ssl_config_class
 from torch.utils.flop_counter import FlopCounterMode
@@ -28,7 +29,7 @@ from torch.utils.flop_counter import FlopCounterMode
 ENCODER_CONFIG = {
     "d_input": 35,
     "d_model": 64,
-    "max_seq_length": 168,
+    "max_seq_length": SEQ_LENGTH_HOURS,
     "n_layers": 2,
     "n_heads": 4,
     "d_ff": 256,
@@ -191,7 +192,9 @@ def main():
     parser.add_argument(
         "--n-features", type=int, default=35, help="Number of input features (d_input)"
     )
-    parser.add_argument("--seq-length", type=int, default=48, help="Sequence length (T)")
+    parser.add_argument(
+        "--seq-length", type=int, default=SEQ_LENGTH_HOURS, help="Sequence length (T)"
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size for profiling")
     parser.add_argument(
         "--sparsity", type=float, default=0.7, help="Fraction of missing values (0-1)"
@@ -209,7 +212,11 @@ def main():
     args = parser.parse_args()
 
     # Build encoder config with CLI overrides
-    encoder_config = {**ENCODER_CONFIG, "d_input": args.n_features}
+    encoder_config = {
+        **ENCODER_CONFIG,
+        "d_input": args.n_features,
+        "max_seq_length": args.seq_length,
+    }
 
     # Create synthetic input with realistic sparsity
     B, T, D = args.batch_size, args.seq_length, args.n_features

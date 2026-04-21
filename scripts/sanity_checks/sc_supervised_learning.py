@@ -7,7 +7,7 @@ Prerequisites:
     Run prepare_dataset.py first to generate splits.yaml and normalization_stats.yaml
 
 Usage:
-    uv run python scripts/sanity_checks/sc_supervised_learning.py data/processed/mimic-iv-demo
+    uv run python scripts/sanity_checks/sc_supervised_learning.py data/processed/miiv
 """
 
 import sys
@@ -193,8 +193,14 @@ def run_sanity_check(processed_dir: str, max_epochs: int = 300, target_loss: flo
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: uv run python scripts/sanity_check.py <processed_dir>")
-        print("Example: uv run python scripts/sanity_check.py data/processed/mimic-iv-demo")
+        print(
+            "Usage: uv run python scripts/sanity_checks/sc_supervised_learning.py "
+            "<processed_dir>"
+        )
+        print(
+            "Example: uv run python scripts/sanity_checks/sc_supervised_learning.py "
+            "data/processed/miiv"
+        )
         sys.exit(1)
 
     success = run_sanity_check(sys.argv[1])
