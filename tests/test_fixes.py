@@ -592,6 +592,51 @@ class TestCombinedSetupPath:
         assert "scripts/preprocessing/create_combined_dataset.py" in log_text
         assert "--source data/processed/miiv data/processed/eicu" in log_text
 
+    def test_build_processed_data_commands_include_combined_flow(self):
+        """The lightweight wrapper should orchestrate the existing Python steps."""
+        mod = importlib.import_module("scripts.preprocessing.build_processed_data")
+
+        commands = mod.build_commands(
+            ["miiv", "eicu"],
+            build_combined=True,
+            seed=7,
+            python_executable="python",
+        )
+
+        assert commands == [
+            ["python", "scripts/preprocessing/extract_ricu.py", "dataset=miiv"],
+            ["python", "scripts/preprocessing/prepare_dataset.py", "dataset=miiv", "seed=7"],
+            ["python", "scripts/preprocessing/extract_ricu.py", "dataset=eicu"],
+            ["python", "scripts/preprocessing/prepare_dataset.py", "dataset=eicu", "seed=7"],
+            [
+                "python",
+                "scripts/preprocessing/create_combined_dataset.py",
+                "--source",
+                "data/processed/miiv",
+                "data/processed/eicu",
+                "--names",
+                "miiv",
+                "eicu",
+                "--output",
+                "data/processed/combined",
+                "--seed",
+                "7",
+            ],
+        ]
+
+    def test_build_processed_data_combined_adds_missing_source(self):
+        """Requesting combined should ensure both source datasets are processed."""
+        mod = importlib.import_module("scripts.preprocessing.build_processed_data")
+
+        commands = mod.build_commands(
+            ["miiv"],
+            build_combined=True,
+            seed=42,
+            python_executable="python",
+        )
+
+        assert ["python", "scripts/preprocessing/extract_ricu.py", "dataset=eicu"] in commands
+
 
 class TestFairnessRevisionScoping:
     """Regression tests for revision-scoped standalone fairness evaluation."""

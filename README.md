@@ -97,10 +97,19 @@ uv run python -c "from slices.models.pretraining import JEPAObjective, Contrasti
 # R extraction (once per dataset)
 Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
 
-# Python processing
+# Python processing + splits/normalization
+uv run python scripts/preprocessing/build_processed_data.py --datasets miiv
+
+# Full benchmark rebuild from existing RICU outputs
+uv run python scripts/preprocessing/build_processed_data.py --datasets miiv eicu --combined
+```
+
+The wrapper calls the lower-level scripts below. Use them directly when you need
+to rerun only one stage:
+
+```bash
 uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
 
-# Compute splits & normalization stats
 uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
 ```
 
