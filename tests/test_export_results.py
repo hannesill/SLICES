@@ -4,6 +4,7 @@ import importlib
 import sys
 
 import pandas as pd
+import pytest
 
 
 def test_build_statistical_tests_df_produces_pairwise_significance_rows():
@@ -100,6 +101,36 @@ def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
     args = mod.parse_args()
 
     assert args.revision == ["thesis-v1"]
+
+
+def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--allow-incomplete"],
+    )
+
+    args = mod.parse_args()
+
+    assert args.allow_incomplete is True
+
+
+def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--output-dir", str(tmp_path)],
+    )
+    monkeypatch.setattr(mod, "fetch_all_runs", lambda **_: [])
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.main()
+
+    assert excinfo.value.code == 1
 
 
 def test_parse_args_requires_revision_without_cli_or_env(monkeypatch):

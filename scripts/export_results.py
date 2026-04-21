@@ -1125,6 +1125,11 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Expected seed count for core configs (default: 5)",
     )
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Exit successfully even if no runs match or validation warnings are emitted.",
+    )
     args = parser.parse_args()
 
     if not args.revision:
@@ -1159,7 +1164,7 @@ def main():
 
     if not runs:
         print("No runs found matching filters. Exiting.", file=sys.stderr)
-        sys.exit(0)
+        sys.exit(0 if args.allow_incomplete else 1)
 
     # Build DataFrames
     print(f"\nBuilding per-seed DataFrame from {len(runs)} runs...", file=sys.stderr)
@@ -1203,6 +1208,9 @@ def main():
         for etype, group in aggregated_df.groupby("experiment_type"):
             seed_dist = dict(group["n_seeds"].value_counts().sort_index())
             print(f"  {etype}: {len(group)} configs, seeds: {seed_dist}")
+
+    if warnings and not args.allow_incomplete:
+        sys.exit(1)
     if "paradigm" in aggregated_df.columns:
         print(f"Paradigms: {sorted(aggregated_df['paradigm'].dropna().unique())}")
     if "dataset" in aggregated_df.columns:

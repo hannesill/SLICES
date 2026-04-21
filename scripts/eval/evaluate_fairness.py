@@ -567,6 +567,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="List runs without processing")
     parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Exit successfully even if no runs match, fairness groups are skipped, or runs fail.",
+    )
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         default=True,
@@ -625,7 +630,7 @@ def main() -> None:
 
     if not runs:
         print("No runs found matching filters.", file=sys.stderr)
-        sys.exit(0)
+        sys.exit(0 if args.allow_incomplete else 1)
 
     # Filter out runs that already have fairness metrics (unless --force)
     if args.skip_existing and not args.force:
@@ -634,6 +639,9 @@ def main() -> None:
         skipped = before - len(runs)
         if skipped:
             log.info("Skipped %d runs with existing fairness metrics.", skipped)
+        if not runs:
+            log.info("No pending runs after --skip-existing filtering.")
+            return
 
     if args.max_runs:
         runs = runs[: args.max_runs]
@@ -773,6 +781,9 @@ def main() -> None:
             run_id, run_name, err = entry
             print(f"    {run_name} ({run_id}): {err}")
     print("=" * 60)
+
+    if not args.allow_incomplete and (results["failed"] > 0 or results["skipped"] > 0):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
