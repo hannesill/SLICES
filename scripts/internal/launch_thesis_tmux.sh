@@ -29,6 +29,11 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   exit 1
 fi
 
+if [[ -z "$WANDB_ENTITY" ]]; then
+  echo "WANDB_ENTITY must be set for thesis runs." >&2
+  exit 1
+fi
+
 mkdir -p "$LOG_DIR"
 
 main_sprints=(1 1b 1c 2 3 4 5 6 7 8 10 11)
@@ -61,17 +66,10 @@ quote_cmd() {
   printf "%q " "$@"
 }
 
-run_args=(--project "$WANDB_PROJECT")
-export_args=(--project "$WANDB_PROJECT")
-fairness_args=(--project "$WANDB_PROJECT")
-tag_args=(--project "$WANDB_PROJECT")
-
-if [[ -n "$WANDB_ENTITY" ]]; then
-  run_args+=(--entity "$WANDB_ENTITY")
-  export_args+=(--entity "$WANDB_ENTITY")
-  fairness_args+=(--entity "$WANDB_ENTITY")
-  tag_args+=(--entity "$WANDB_ENTITY")
-fi
+run_args=(--project "$WANDB_PROJECT" --entity "$WANDB_ENTITY")
+export_args=(--project "$WANDB_PROJECT" --entity "$WANDB_ENTITY")
+fairness_args=(--project "$WANDB_PROJECT" --entity "$WANDB_ENTITY")
+tag_args=(--project "$WANDB_PROJECT" --entity "$WANDB_ENTITY")
 
 run_args+=(--revision "$REVISION" --reason "$REASON")
 export_args+=(--revision "$REVISION" --output-dir "$RESULTS_DIR")

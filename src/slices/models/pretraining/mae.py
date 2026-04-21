@@ -137,8 +137,18 @@ class MAEDecoder(nn.Module):
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        # Run decoder transformer over the full reconstruction grid.
-        decoded = self.decoder(full_tokens)
+        decoder_padding_mask = None
+        if valid_timestep_mask is not None:
+            decoder_padding_mask = ~valid_timestep_mask.to(
+                device=full_tokens.device,
+                dtype=torch.bool,
+            )
+
+        # Fully unobserved hours should not be available as decoder context.
+        if decoder_padding_mask is None:
+            decoded = self.decoder(full_tokens)
+        else:
+            decoded = self.decoder(full_tokens, src_key_padding_mask=decoder_padding_mask)
 
         # Predict D features per timestep
         predictions = self.output_proj(decoded)  # (B, T, D)

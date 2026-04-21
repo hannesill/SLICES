@@ -174,6 +174,40 @@ class TestMAEDecoder:
         assert torch.allclose(pred[1, 1], torch.tensor([-1.0, -1.0]))
         assert torch.allclose(pred[1, 2], torch.tensor([-1.0, -1.0]))
 
+    def test_decoder_masks_empty_timesteps_from_attention_context(self):
+        """Fully unobserved timesteps should not contribute decoder context."""
+        from slices.models.pretraining.mae import MAEDecoder
+
+        class ContextSumDecoder(torch.nn.Module):
+            def forward(self, src, src_key_padding_mask=None):
+                if src_key_padding_mask is not None:
+                    src = src.masked_fill(src_key_padding_mask.unsqueeze(-1), 0.0)
+                context = src.sum(dim=1, keepdim=True)
+                return context.expand_as(src)
+
+        config = MAEConfig(decoder_d_model=2, decoder_n_layers=1, decoder_n_heads=1)
+        decoder = MAEDecoder(d_encoder=2, n_features=2, max_seq_length=3, config=config)
+        decoder.encoder_proj = torch.nn.Identity()
+        decoder.decoder = ContextSumDecoder()
+        decoder.embed_dropout = torch.nn.Identity()
+        decoder.output_proj = torch.nn.Identity()
+        decoder.time_pe.zero_()
+        with torch.no_grad():
+            decoder.mask_token.fill_(100.0)
+
+        encoded_visible = torch.tensor([[[1.0, 0.0], [3.0, 0.0]]])
+        ssl_mask = torch.tensor([[True, False, True]])
+        token_info = {
+            "timestep_idx": torch.arange(3).unsqueeze(0),
+            "valid_timestep_mask": torch.tensor([[True, False, True]]),
+        }
+
+        pred = decoder(encoded_visible, ssl_mask, token_info, n_timesteps=3)
+
+        expected_context = torch.tensor([4.0, 0.0])
+        assert torch.allclose(pred[0, 0], expected_context)
+        assert torch.allclose(pred[0, 2], expected_context)
+
 
 # =============================================================================
 # MAE Objective tests

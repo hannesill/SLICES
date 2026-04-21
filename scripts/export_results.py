@@ -14,11 +14,17 @@ three structured parquet files:
 Both files include wandb run IDs for traceability back to W&B.
 
 Usage:
-    uv run python scripts/export_results.py
-    uv run python scripts/export_results.py --sprint 1 --validate-seeds 3
-    uv run python scripts/export_results.py --paradigm mae jepa --dataset miiv
-    uv run python scripts/export_results.py --output-dir results/sprint1 --sprint 1
-    uv run python scripts/export_results.py --project slices-benchmark --revision benchmark-v1
+    uv run python scripts/export_results.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity>
+    uv run python scripts/export_results.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --sprint 1 --validate-seeds 3
+    uv run python scripts/export_results.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --paradigm mae jepa --dataset miiv
+    uv run python scripts/export_results.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --output-dir results/sprint1 --sprint 1
 """
 from __future__ import annotations
 
@@ -33,13 +39,12 @@ from itertools import combinations
 from pathlib import Path
 
 import pandas as pd
+import wandb
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
     paired_wilcoxon_signed_rank,
 )
-
-import wandb
 
 # ---------------------------------------------------------------------------
 # Constants

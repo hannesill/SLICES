@@ -12,25 +12,30 @@ supervised, and classical baseline runs. Supports resumability via
 
 Usage:
     # Evaluate the benchmark fairness corpus for one explicit revision
-    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1
+    uv run python scripts/eval/evaluate_fairness.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity>
 
     # Scope to specific sprint/dataset
     uv run python scripts/eval/evaluate_fairness.py \
-        --revision benchmark-v1 --sprint 1 --dataset miiv
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --sprint 1 --dataset miiv
 
     # Preview which runs would be evaluated
-    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --dry-run
+    uv run python scripts/eval/evaluate_fairness.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> --dry-run
 
     # Override paths (e.g., different machine than training)
     uv run python scripts/eval/evaluate_fairness.py \
-        --revision benchmark-v1 \
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
         --outputs-root /mnt/data/outputs --data-root /mnt/data
 
     # Recompute fairness for runs that already have metrics
-    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --force
+    uv run python scripts/eval/evaluate_fairness.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> --force
 
     # Debug with a single run
-    uv run python scripts/eval/evaluate_fairness.py --revision benchmark-v1 --max-runs 1
+    uv run python scripts/eval/evaluate_fairness.py \
+        --project slices-thesis --revision thesis-v1 --entity <entity> --max-runs 1
 """
 from __future__ import annotations
 

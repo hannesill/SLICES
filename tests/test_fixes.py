@@ -857,6 +857,7 @@ class TestFairnessRevisionScoping:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["TMUX_LOG"] = str(tmux_log)
         env["SESSION_NAME"] = "test-session"
+        env["WANDB_ENTITY"] = "test-entity"
         env["REVISION"] = "thesis-v2"
         env["RUN_EXPORT"] = "0"
 
@@ -875,6 +876,8 @@ class TestFairnessRevisionScoping:
 
         assert "scripts/eval/evaluate_fairness.py" in runner_text
         assert "--revision thesis-v2" in runner_text
+        assert "--project slices-thesis" in runner_text
+        assert "--entity test-entity" in runner_text
 
     def test_tmux_launcher_includes_sprint11_in_fairness(self, tmp_path):
         """The fairness sweep should include the canonical baseline sprint by default."""
@@ -904,6 +907,7 @@ class TestFairnessRevisionScoping:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["TMUX_LOG"] = str(tmux_log)
         env["SESSION_NAME"] = "test-session"
+        env["WANDB_ENTITY"] = "test-entity"
         env["RUN_EXPORT"] = "0"
 
         result = subprocess.run(
@@ -949,6 +953,7 @@ class TestFairnessRevisionScoping:
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env["TMUX_LOG"] = str(tmux_log)
         env["SESSION_NAME"] = "test-session"
+        env["WANDB_ENTITY"] = "test-entity"
         env["RUN_EXPORT"] = "0"
 
         result = subprocess.run(
@@ -1859,6 +1864,45 @@ class TestExperimentRunnerRetry:
         )
 
         assert selected == []
+
+    def test_run_scheduler_returns_nonzero_for_failed_run(self, tmp_path, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        failed_run = runner.Run(
+            id="failed",
+            sprint="1",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/supervised_miiv_seed42",
+            task="mortality_24h",
+        )
+        state = {"version": 1, "runs": {failed_run.id: {"status": "failed"}}}
+
+        monkeypatch.setattr(runner, "LOG_DIR", tmp_path)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+
+        exit_code = runner.run_scheduler([failed_run], state, parallel=1, dry_run=False)
+
+        assert exit_code == 1
+
+    def test_scheduler_exit_code_nonzero_for_dependency_skips(self):
+        import scripts.internal.run_experiments as runner
+
+        skipped_run = runner.Run(
+            id="skipped",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            task="mortality_24h",
+        )
+        state = {"version": 1, "runs": {skipped_run.id: {"status": "skipped"}}}
+
+        assert runner._scheduler_exit_code([skipped_run], state) == 1
 
 
 class TestExportStatisticalScope:

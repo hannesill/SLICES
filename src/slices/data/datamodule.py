@@ -25,7 +25,7 @@ from slices.data.dataset import ICUDataset
 from slices.data.sliding_window import SlidingWindowDataset
 from slices.data.splits import (
     compute_patient_level_splits,
-    save_split_info,
+    save_global_split_info,
     subsample_train_indices,
 )
 
@@ -256,17 +256,16 @@ class ICUDataModule(L.LightningDataModule):
         logger.debug("[Step 3/3] Preserving canonical split information")
         splits_path = self.processed_dir / "splits.yaml"
         if not splits_path.exists():
-            save_split_info(
-                self.processed_dir,
-                self.dataset,
-                self.full_train_indices,
-                self.val_indices,
-                self.test_indices,
-                self.seed,
-                self.train_ratio,
-                self.val_ratio,
-                self.test_ratio,
-                train_subset_indices=self.train_indices,
+            save_global_split_info(
+                processed_dir=self.processed_dir,
+                static_df=self._static_df,
+                stay_ids=self._all_stay_ids,
+                seed=self.seed,
+                train_ratio=self.train_ratio,
+                val_ratio=self.val_ratio,
+                test_ratio=self.test_ratio,
+                dataset=self.dataset if self.label_fraction < 1.0 else None,
+                train_subset_indices=self.train_indices if self.label_fraction < 1.0 else None,
                 label_fraction=self.label_fraction,
             )
         else:
