@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -205,6 +206,9 @@ class Run:
                 f"training.max_epochs={PROTO_A['max_epochs']}",
                 f"training.early_stopping_patience={PROTO_A['patience']}",
                 f"optimizer.lr={PROTO_A['lr']}",
+                "task.head_type=linear",
+                "task.hidden_dims=[]",
+                "task.dropout=0.0",
             ]
         elif self.freeze_encoder is False:
             cmd += [
@@ -1254,7 +1258,7 @@ def _print_dry_run(runs: list[Run], runs_by_id: dict[str, Run]):
     print(f"DRY RUN: {len(runs)} runs\n")
     for r in runs:
         deps = ", ".join(r.depends_on) if r.depends_on else "(none)"
-        cmd = " ".join(r.build_command(runs_by_id))
+        cmd = shlex.join(r.build_command(runs_by_id))
         print(f"[{r.id}]")
         print(f"  sprint={r.sprint}  type={r.run_type}  deps={deps}")
         print(f"  dir={r.output_dir}")
@@ -1432,7 +1436,17 @@ def cmd_retry(args):
     if args.revision:
         if sprint_filter:
             revised = [r for r in all_runs if r.sprint in sprint_filter]
-            rest = [r for r in all_runs if r.sprint not in sprint_filter]
+            revised_ids = {r.id for r in revised}
+            all_by_id = {r.id: r for r in all_runs}
+            deps_needed = {
+                dep_id
+                for r in revised
+                for dep_id in r.depends_on
+                if dep_id not in revised_ids and dep_id in all_by_id
+            }
+            revised = [all_by_id[dep_id] for dep_id in deps_needed] + revised
+            revised_ids = {r.id for r in revised}
+            rest = [r for r in all_runs if r.id not in revised_ids]
             revised = apply_revision(revised, args.revision, args.reason)
             all_runs = rest + revised
         else:

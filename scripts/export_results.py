@@ -68,6 +68,10 @@ EXPERIMENT_TYPES = {
 }
 
 CROSS_SPRINT_TYPES = {"core", "label_efficiency", "transfer"}
+CONTEXTUAL_STAT_TYPES = {
+    "classical_context_full",
+    "classical_context_label_efficiency",
+}
 FIXED_SEED_EXPERIMENT_TYPES = {
     "core",
     "label_efficiency",
@@ -543,7 +547,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
 
 def _fingerprint_for_experiment_type(experiment_type: str) -> list[str]:
     """Return the canonical fingerprint for a given experiment family."""
-    if experiment_type in CROSS_SPRINT_TYPES:
+    if experiment_type in CROSS_SPRINT_TYPES or experiment_type in CONTEXTUAL_STAT_TYPES:
         return CORE_FINGERPRINT
     if experiment_type == "hp_ablation":
         return HP_ABLATION_FINGERPRINT
@@ -797,6 +801,44 @@ def _primary_metric_for_task(task_name: str | None) -> str | None:
     return "test/auprc"
 
 
+def _add_contextual_classical_stat_rows(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Add synthetic statistic scopes for classical-vs-neural comparisons."""
+    required = {"experiment_type", "protocol", "label_fraction", "paradigm"}
+    if per_seed_df.empty or not required.issubset(per_seed_df.columns):
+        return per_seed_df
+
+    work = per_seed_df.copy()
+    label_fraction = pd.to_numeric(work["label_fraction"], errors="coerce").fillna(1.0)
+    protocol_b = work["protocol"] == "B"
+    classical = work["experiment_type"] == "classical_baselines"
+
+    parts = [work]
+
+    full_context_mask = (
+        protocol_b & (label_fraction == 1.0) & ((work["experiment_type"] == "core") | classical)
+    )
+    label_efficiency_context_mask = (
+        protocol_b
+        & (label_fraction < 1.0)
+        & ((work["experiment_type"] == "label_efficiency") | classical)
+    )
+
+    for mask, experiment_type in [
+        (full_context_mask, "classical_context_full"),
+        (label_efficiency_context_mask, "classical_context_label_efficiency"),
+    ]:
+        context = work.loc[mask].copy()
+        if context.empty:
+            continue
+        paradigms = set(context["paradigm"].dropna())
+        if not (paradigms & {"xgboost", "gru_d"}) or paradigms <= {"xgboost", "gru_d"}:
+            continue
+        context["experiment_type"] = experiment_type
+        parts.append(context)
+
+    return pd.concat(parts, ignore_index=True) if len(parts) > 1 else per_seed_df
+
+
 def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     """Build pairwise paradigm significance tables from per-seed results.
 
@@ -809,6 +851,7 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     if per_seed_df.empty or "experiment_type" not in per_seed_df.columns:
         return pd.DataFrame()
 
+    per_seed_df = _add_contextual_classical_stat_rows(per_seed_df)
     rows = []
 
     for experiment_type in sorted(per_seed_df["experiment_type"].dropna().unique()):
@@ -859,6 +902,12 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
             family_rows = []
 
             for paradigm_a, paradigm_b in combinations(paradigms, 2):
+                if experiment_type in CONTEXTUAL_STAT_TYPES:
+                    a_classical = paradigm_a in {"gru_d", "xgboost"}
+                    b_classical = paradigm_b in {"gru_d", "xgboost"}
+                    if a_classical == b_classical:
+                        continue
+
                 pairs_a = scope_group[scope_group["paradigm"] == paradigm_a][
                     ["task", "seed", "primary_metric_value"]
                 ].rename(columns={"primary_metric_value": "value_a"})

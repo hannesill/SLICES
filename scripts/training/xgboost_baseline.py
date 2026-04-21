@@ -33,6 +33,23 @@ def _xgboost_eval_metric(task_type: str) -> str:
     return "mae" if task_type == "regression" else "aucpr"
 
 
+def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
+    """Build W&B tags in parity with neural training runs."""
+    tags = list(cfg.logging.get("wandb_tags", []))
+    if cfg.get("sprint") is not None:
+        tags.append(f"sprint:{cfg.sprint}")
+    if cfg.get("revision") is not None:
+        tags.append(f"revision:{cfg.revision}")
+    if cfg.get("rerun_reason") is not None:
+        tag = f"rerun-reason:{cfg.rerun_reason}"
+        if len(tag) > 64:
+            tag = tag[:61] + "..."
+        tags.append(tag)
+    if cfg.get("label_fraction", 1.0) < 1.0:
+        tags.append(f"label_fraction:{cfg.label_fraction}")
+    return tags or None
+
+
 @hydra.main(version_base=None, config_path="../../configs", config_name="xgboost")
 def main(cfg: DictConfig) -> None:
     """Train XGBoost baseline."""
@@ -219,18 +236,12 @@ def main(cfg: DictConfig) -> None:
     if cfg.logging.get("use_wandb", False):
         import wandb
 
-        tags = list(cfg.logging.get("wandb_tags", []))
-        if cfg.get("sprint"):
-            tags.append(f"sprint:{cfg.sprint}")
-        if cfg.get("label_fraction", 1.0) < 1.0:
-            tags.append(f"label_fraction:{cfg.label_fraction}")
-
         run = wandb.init(
             project=cfg.logging.wandb_project,
             entity=cfg.logging.get("wandb_entity", None),
             name=cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}"),
             group=cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}"),
-            tags=tags,
+            tags=_build_wandb_tags(cfg),
             config=OmegaConf.to_container(cfg, resolve=True),
         )
         run.summary.update(metrics)

@@ -16,6 +16,12 @@ def test_default_core_sprints_include_sprint11():
     assert "11" in mod.CORE_SPRINTS
 
 
+def test_default_core_sprints_include_ablation_and_transfer_sprints():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    assert {"6", "7", "8"}.issubset(set(mod.CORE_SPRINTS))
+
+
 def test_resolve_evaluation_artifact_supports_xgboost(tmp_path):
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
