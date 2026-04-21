@@ -22,10 +22,10 @@ project_name: slices
 # Dataset identifier — drives data paths via ricu.yaml interpolation
 dataset: miiv  # miiv | eicu | combined
 
-# Experiment sprint (for W&B filtering, e.g. sprint=1)
+# Experiment group (stored as a sprint tag for historical W&B compatibility)
 sprint: null
 
-# Revision tracking (for rerunning sprints with changed settings)
+# Revision tracking (for rerunning experiment groups with changed settings)
 revision: null
 rerun_reason: null
 
@@ -53,7 +53,7 @@ data:
 encoder:
   pooling: none  # Required for SSL - need per-token outputs (vs 'mean' for tasks)
 
-# Training configuration (same budget across thesis paradigms for fair comparison)
+# Training configuration (same budget across paradigms for fair comparison)
 training:
   max_epochs: 100
   batch_size: 256

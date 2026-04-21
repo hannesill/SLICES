@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SESSION_NAME="${SESSION_NAME:-slices-thesis}"
 WANDB_PROJECT="${WANDB_PROJECT:-slices-thesis}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
@@ -80,14 +80,14 @@ if [[ -n "$REVISION" ]]; then
 fi
 fairness_args+=(--sprint "${fairness_sprints[@]}" --batch-size "$BATCH_SIZE_FAIRNESS" --device "$DEVICE_FAIRNESS")
 
-warmup_cmd=(uv run python scripts/run_experiments.py warmup --sprint "${warmup_sprints[@]}")
-main_cmd=(uv run python scripts/run_experiments.py run --sprint "${main_sprints[@]}" --parallel "$PARALLEL_MAIN" "${run_args[@]}")
-tag_cmd=(uv run python scripts/run_experiments.py tag --sprint "${tag_sprints[@]}" "${tag_args[@]}")
+warmup_cmd=(uv run python scripts/internal/run_experiments.py warmup --sprint "${warmup_sprints[@]}")
+main_cmd=(uv run python scripts/internal/run_experiments.py run --sprint "${main_sprints[@]}" --parallel "$PARALLEL_MAIN" "${run_args[@]}")
+tag_cmd=(uv run python scripts/internal/run_experiments.py tag --sprint "${tag_sprints[@]}" "${tag_args[@]}")
 fairness_cmd=(uv run python scripts/eval/evaluate_fairness.py "${fairness_args[@]}")
 export_cmd=(uv run python scripts/export_results.py "${export_args[@]}")
 
 if ((${#appendix_sprints[@]} > 0)); then
-  appendix_cmd=(uv run python scripts/run_experiments.py run --sprint "${appendix_sprints[@]}" --parallel "$PARALLEL_APPENDIX" "${run_args[@]}")
+  appendix_cmd=(uv run python scripts/internal/run_experiments.py run --sprint "${appendix_sprints[@]}" --parallel "$PARALLEL_APPENDIX" "${run_args[@]}")
 else
   appendix_cmd=()
 fi
@@ -140,7 +140,7 @@ chmod +x "$runner_script"
 status_cmd=(
   bash
   -lc
-  "cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; uv run python scripts/run_experiments.py status; sleep $(printf "%q" "$STATUS_INTERVAL"); done"
+  "cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; uv run python scripts/internal/run_experiments.py status; sleep $(printf "%q" "$STATUS_INTERVAL"); done"
 )
 printf -v status_line "%q " "${status_cmd[@]}"
 

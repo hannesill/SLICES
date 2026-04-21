@@ -353,7 +353,7 @@ and the thesis W&B project summaries.
 
 **Breakdown**: 48 pretrain (~30 min each, the bottleneck) + 510 finetune/probe (~3–5 min each) + 72 supervised (~3–5 min each).
 
-**Execution**: `uv run python scripts/run_experiments.py run --sprint 10 --parallel 4` (limited by GPU-bound pretraining)
+**Execution**: `uv run python scripts/internal/run_experiments.py run --sprint 10 --parallel 4` (limited by GPU-bound pretraining)
 
 ### Upcoming: Sprint 7p — Focused Capacity Study (100 runs)
 
@@ -363,7 +363,7 @@ and the thesis W&B project summaries.
 
 **Comparison set**: Default-size baselines are inherited from Sprint `6` (seeds 42/123/456) and Sprint `10` (seeds 789/1011), so Sprint `7p` only launches the larger-capacity runs.
 
-**Execution**: `uv run python scripts/run_experiments.py run --sprint 7p --parallel 4`
+**Execution**: `uv run python scripts/internal/run_experiments.py run --sprint 7p --parallel 4`
 
 ### Upcoming: Sprint 11 — Classical Baselines (360 runs)
 
@@ -383,7 +383,7 @@ and the thesis W&B project summaries.
 3. XGBoost cannot transfer across datasets — highlights SSL's cross-dataset transfer capability (Sprint 7)
 4. XGBoost/GRU-D on label efficiency curves — direct comparison with SSL learning curves
 
-**Execution**: `uv run python scripts/run_experiments.py run --sprint 11 --parallel 12` (all runs independent, no pretraining dependency)
+**Execution**: `uv run python scripts/internal/run_experiments.py run --sprint 11 --parallel 12` (all runs independent, no pretraining dependency)
 
 ### Upcoming: Sprint 13 — TS2Vec Temporal Contrastive Extension (135 runs)
 
@@ -395,7 +395,7 @@ and the thesis W&B project summaries.
 
 **Interpretation**: Sprint `13` is a formal thesis extension, not a replacement for the controlled MAE/JEPA/Contrastive triangle. It tests whether a better-instantiated contrastive family changes the conclusion.
 
-**Execution**: `uv run python scripts/run_experiments.py run --sprint 13 --parallel 4`
+**Execution**: `uv run python scripts/internal/run_experiments.py run --sprint 13 --parallel 4`
 
 ### Upcoming: Sprint 12 — SMART External SSL Reference (135 runs)
 
@@ -405,7 +405,7 @@ and the thesis W&B project summaries.
 
 **Matrix**: 1 paradigm × 3 datasets × 4 tasks × 2 protocols × 5 seeds = 120 finetune + 15 pretrain = **135 runs**
 
-**Execution**: `uv run python scripts/run_experiments.py run --sprint 12 --parallel 4`
+**Execution**: `uv run python scripts/internal/run_experiments.py run --sprint 12 --parallel 4`
 
 ### Upcoming: Sprint 9 — Fairness Analysis (0 extra runs)
 
@@ -485,7 +485,7 @@ Later sprints reuse runs from earlier sprints as comparison baselines. To enable
 | **12** | — | Self-contained (SMART pretrains + finetune, 5 seeds) |
 | **9** | All | Evaluates test predictions from all training sprints (runs last) |
 
-**Usage**: `uv run python scripts/run_experiments.py tag --sprint N` (idempotent).
+**Usage**: `uv run python scripts/internal/run_experiments.py tag --sprint N` (idempotent).
 
 ---
 

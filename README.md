@@ -21,11 +21,9 @@
 
 How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
 
-The formal thesis corpus now also includes a contextual baseline family plus two targeted extensions:
-
-- `Sprint 11`: canonical GRU-D and XGBoost baselines, reported as contextual ICU references alongside the controlled benchmark
-- `Sprint 7p`: a focused capacity study that scales MAE and supervised encoders on MIIV `mortality_24h`
-- `Sprint 13`: a TS2Vec temporal-contrastive extension that tests whether a stronger contrastive-family instantiation changes the conclusion
+The benchmark includes controlled SSL objectives, supervised training from scratch,
+classical ICU baselines, and targeted extensions for temporal contrastive learning
+and model-capacity studies.
 
 ### The Comparison Triangle
 
@@ -43,7 +41,8 @@ Fair comparison of SSL objectives for clinical time series is currently impossib
 
 ## SSL Paradigms
 
-The controlled thesis objectives share the same timestep-level obs-aware Transformer encoder and differ only in the SSL objective and masking logic:
+The controlled SSL objectives share the same timestep-level obs-aware Transformer
+encoder and differ only in the SSL objective and masking logic:
 
 | Objective | Predicts | Target | Loss |
 |---|---|---|---|
@@ -51,7 +50,9 @@ The controlled thesis objectives share the same timestep-level obs-aware Transfo
 | **JEPA** | Latent representations at masked positions | EMA target encoder representations | MSE / Cosine |
 | **Contrastive** | Global embedding similarity across views | Positive pair agreement (NT-Xent) | Cross-entropy |
 
-**TS2Vec** is included as a formal temporal-contrastive thesis extension (Sprint `13`). **SMART** (NeurIPS 2024) remains an appendix-only external reference because it swaps in its own MART encoder and element-wise masking, so it is not part of the controlled thesis comparison.
+**TS2Vec** is included as a temporal-contrastive extension. **SMART** (NeurIPS
+2024) remains an external reference because it swaps in its own MART encoder and
+element-wise masking, so it is not part of the controlled comparison.
 
 ## Pipeline
 
@@ -105,7 +106,8 @@ uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
 
 ### 2. Pretrain
 
-Pick SSL paradigm with `ssl=`. Training budget is matched across thesis paradigms:
+Pick SSL paradigm with `ssl=`. Training budget is matched across controlled
+paradigms:
 
 ```bash
 # MAE (masked autoencoder — reconstruction baseline, default)
@@ -117,10 +119,10 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
 # Contrastive (SimCLR-style with two masked views)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
 
-# TS2Vec (formal thesis extension for the contrastive family)
+# TS2Vec (temporal contrastive extension)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=ts2vec
 
-# SMART (sanity check / extensibility demo — not part of thesis experiments)
+# SMART (external reference with a different encoder/tokenization contract)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
 ```
 
@@ -136,12 +138,10 @@ uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/.../e
 uv run python scripts/training/supervised.py dataset=miiv
 ```
 
-### 5. Thesis Reruns
+### 5. Validate
 
 ```bash
-WANDB_PROJECT=slices-thesis \
-WANDB_ENTITY=your-wandb-entity \
-bash scripts/launch_thesis_tmux.sh
+uv run pytest tests/ -q
 ```
 
 ## Project Structure

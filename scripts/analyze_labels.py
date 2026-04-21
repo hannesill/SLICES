@@ -10,16 +10,16 @@ This script provides comprehensive statistics about task labels including:
 
 Example usage:
     # Analyze labels in processed directory
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo
+    uv run python scripts/analyze_labels.py data/processed/miiv
 
     # Analyze specific task
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --task mortality_24h
+    uv run python scripts/analyze_labels.py data/processed/miiv --task mortality_24h
 
     # Show per-split statistics
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --splits
+    uv run python scripts/analyze_labels.py data/processed/miiv --splits
 
     # Export to JSON
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --output stats.json
+    uv run python scripts/analyze_labels.py data/processed/miiv --output stats.json
 """
 
 import argparse

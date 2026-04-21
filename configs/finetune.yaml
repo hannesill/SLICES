@@ -35,10 +35,10 @@ dataset: miiv  # miiv | eicu | combined
 # Paradigm — auto-detected from checkpoint in finetune.py; override with paradigm=jepa etc.
 paradigm: mae
 
-# Experiment sprint (for W&B filtering, e.g. sprint=1)
+# Experiment group (stored as a sprint tag for historical W&B compatibility)
 sprint: null
 
-# Revision tracking (for rerunning sprints with changed settings)
+# Revision tracking (for rerunning experiment groups with changed settings)
 revision: null
 rerun_reason: null
 

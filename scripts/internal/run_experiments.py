@@ -6,18 +6,19 @@ Generates all experiment configurations across sprints, resolves dependencies,
 and executes them in parallel with crash recovery and state persistence.
 
 Usage:
-    uv run python scripts/run_experiments.py warmup --sprint 1
-    uv run python scripts/run_experiments.py run --sprint 1 --parallel 4
-    uv run python scripts/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
-    uv run python scripts/run_experiments.py run --sprint 1 --revision v2 --reason "fix LR"
-    uv run python scripts/run_experiments.py run --sprint 1 2 \\
+    uv run python scripts/internal/run_experiments.py warmup --sprint 1
+    uv run python scripts/internal/run_experiments.py run --sprint 1 --parallel 4
+    uv run python scripts/internal/run_experiments.py run --sprint 1 2 3 --parallel 6 --dry-run
+    uv run python scripts/internal/run_experiments.py run --sprint 1 --revision v2 --reason "fix LR"
+    uv run python scripts/internal/run_experiments.py run --sprint 1 2 \\
         --project slices-thesis --entity myteam
-    uv run python scripts/run_experiments.py status
-    uv run python scripts/run_experiments.py status --sprint 1
-    uv run python scripts/run_experiments.py retry --failed --parallel 4
-    uv run python scripts/run_experiments.py retry --failed --sprint 1 --revision v2 --parallel 4
-    uv run python scripts/run_experiments.py tag --sprint 2 --dry-run
-    uv run python scripts/run_experiments.py tag --sprint 2 3 5
+    uv run python scripts/internal/run_experiments.py status
+    uv run python scripts/internal/run_experiments.py status --sprint 1
+    uv run python scripts/internal/run_experiments.py retry --failed --parallel 4
+    uv run python scripts/internal/run_experiments.py retry --failed \
+        --sprint 1 --revision v2 --parallel 4
+    uv run python scripts/internal/run_experiments.py tag --sprint 2 --dry-run
+    uv run python scripts/internal/run_experiments.py tag --sprint 2 3 5
 """
 from __future__ import annotations
 
@@ -98,7 +99,7 @@ MASK_RATIO_ABLATION = [0.3, 0.75]  # 0.5 reused from Phase 1
 TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
 
 # Baseline inheritance: which earlier sprints' runs should be tagged as baselines
-# for later sprints. See docs/EXPERIMENT_PLAN.md § "Baseline Inheritance Across Sprints".
+# for later sprints. See docs/internal/EXPERIMENT_PLAN.md § "Baseline Inheritance Across Sprints".
 # Intentionally coarse-grained: ALL runs from source sprints are tagged, even when
 # only a subset is relevant (e.g. 1b only needs mortality_24h from Sprint 1). Use
 # secondary W&B tags (task:, protocol:, phase:, etc.) to filter down when querying.
@@ -1554,9 +1555,10 @@ def cmd_tag(args):
     W&B API. Idempotent — already-tagged runs are skipped.
 
     Usage:
-        uv run python scripts/run_experiments.py tag --sprint 2
-        uv run python scripts/run_experiments.py tag --sprint 2 3 --dry-run
-        uv run python scripts/run_experiments.py tag --sprint 2 --project slices --entity myteam
+        uv run python scripts/internal/run_experiments.py tag --sprint 2
+        uv run python scripts/internal/run_experiments.py tag --sprint 2 3 --dry-run
+        uv run python scripts/internal/run_experiments.py tag --sprint 2 \
+            --project slices --entity myteam
     """
     try:
         import wandb  # noqa: F811

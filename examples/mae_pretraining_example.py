@@ -142,7 +142,7 @@ def main():
     """Main example demonstrating MAE pretraining."""
 
     # Configuration
-    data_dir = Path("data/processed/mimic-iv-demo")
+    data_dir = Path("data/processed/miiv")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("=" * 80)
@@ -152,7 +152,7 @@ def main():
     # Check if data exists
     if not data_dir.exists():
         print(f"\n❌ Data directory not found: {data_dir}")
-        print("Please run setup_mimic_iv.py first to extract data.")
+        print("Run ./scripts/setup_and_extract.sh miiv first to extract data.")
         return
 
     # Load dataset
@@ -397,7 +397,7 @@ def main():
     print("  - Easy to switch objectives via factory pattern")
     print("\n✓ Next steps:")
     print("  - Implement other SSL objectives (contrastive, JEPA, etc.)")
-    print("  - Add to scripts/pretrain.py for full training")
+    print("  - Add to scripts/training/pretrain.py for full training")
     print("  - Evaluate learned representations on downstream tasks")
     print("=" * 80)
 

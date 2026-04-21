@@ -168,7 +168,7 @@ def paired_wilcoxon_signed_rank(
     """Paired Wilcoxon signed-rank test with tie correction.
 
     This implementation uses the standard large-sample normal approximation
-    with tie correction. It is sufficient for the thesis export pipeline where
+    with tie correction. It is sufficient for the benchmark export pipeline where
     comparisons pool multiple tasks x seeds and are primarily used for
     significance tables rather than exact small-sample inference.
 

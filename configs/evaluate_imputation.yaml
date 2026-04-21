@@ -5,11 +5,13 @@
 # Example usage:
 #   uv run python scripts/eval/evaluate_imputation.py \
 #       checkpoint=outputs/encoder.pt \
-#       data.processed_dir=data/processed/mimic-iv
+#       data.processed_dir=data/processed/miiv
 
 defaults:
   - data: ricu
   - _self_
+
+dataset: miiv
 
 # Checkpoint path (one of these must be provided)
 checkpoint: null            # encoder.pt file

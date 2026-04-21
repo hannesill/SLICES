@@ -98,7 +98,7 @@ class ICUDataset(Dataset):
             metadata.yaml       # Feature names, task names, etc.
 
     Example:
-        >>> dataset = ICUDataset("data/processed/mimic-iv-demo")
+        >>> dataset = ICUDataset("data/processed/miiv")
         >>> sample = dataset[0]
         >>> sample["timeseries"].shape  # (seq_length, n_features)
         torch.Size([48, 9])
@@ -733,7 +733,7 @@ class ICUDataset(Dataset):
                 - 'mask': The observation mask (same for all stages)
 
         Example:
-            >>> dataset = ICUDataset("data/processed/mimic-iv-demo")
+            >>> dataset = ICUDataset("data/processed/miiv")
             >>> stages = dataset.get_preprocessing_stages(0)
             >>> stages['grid']['timeseries'].shape
             torch.Size([48, 9])

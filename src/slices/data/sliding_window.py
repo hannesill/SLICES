@@ -28,7 +28,7 @@ class SlidingWindowDataset(Dataset):
     learn better representations.
 
     Example:
-        >>> base_dataset = ICUDataset("data/processed/mimic-iv-168h")  # 168h sequences
+        >>> base_dataset = ICUDataset("data/processed/miiv-168h")  # 168h sequences
         >>> windowed = SlidingWindowDataset(
         ...     base_dataset,
         ...     window_size=24,  # 24h benchmark windows

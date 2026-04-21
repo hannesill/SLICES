@@ -22,7 +22,7 @@ dataset: miiv
 # Paradigm
 paradigm: xgboost
 
-# Experiment sprint
+# Experiment group (stored as a sprint tag for historical W&B compatibility)
 sprint: null
 revision: null
 rerun_reason: null

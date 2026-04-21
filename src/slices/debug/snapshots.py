@@ -45,6 +45,9 @@ class LegacyPipelineStage(str, Enum):
     FINAL = "final"
 
 
+SnapshotStage = Union[PipelineStage, LegacyPipelineStage]
+
+
 @dataclass
 class SnapshotConfig:
     """Configuration for pipeline snapshots.
@@ -59,7 +62,9 @@ class SnapshotConfig:
     """
 
     output_dir: Union[str, Path] = "debug_snapshots"
-    stages: List[PipelineStage] = field(default_factory=lambda: list(PipelineStage))
+    stages: List[SnapshotStage] = field(
+        default_factory=lambda: list(PipelineStage) + list(LegacyPipelineStage)
+    )
     stay_ids: Optional[List[int]] = None
     max_hours: int = SEQ_LENGTH_HOURS
     include_masks: bool = True
@@ -77,7 +82,7 @@ class PipelineSnapshot:
         timestamp: When snapshot was captured.
     """
 
-    stage: PipelineStage
+    stage: SnapshotStage
     data: pl.DataFrame
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: Optional[str] = None
@@ -111,7 +116,7 @@ def capture_stays_snapshot(
         df = df.filter(pl.col("stay_id").is_in(stay_ids))
 
     return PipelineSnapshot(
-        stage=PipelineStage.STAYS,
+        stage=LegacyPipelineStage.STAYS,
         data=df,
         metadata={
             "n_stays": len(df),
@@ -149,7 +154,7 @@ def capture_labels_snapshot(
             }
 
     return PipelineSnapshot(
-        stage=PipelineStage.LABELS,
+        stage=LegacyPipelineStage.LABELS,
         data=df,
         metadata={
             "n_stays": len(df),
@@ -184,7 +189,7 @@ def capture_dense_snapshot(
         df = flatten_dense_timeseries(df, feature_names)
 
     return PipelineSnapshot(
-        stage=PipelineStage.DENSE_TIMESERIES,
+        stage=LegacyPipelineStage.DENSE_TIMESERIES,
         data=df,
         metadata={
             "n_stays": (
@@ -395,9 +400,9 @@ def export_snapshot(
 
 
 def export_all_snapshots(
-    snapshots: Dict[PipelineStage, PipelineSnapshot],
+    snapshots: Dict[SnapshotStage, PipelineSnapshot],
     config: SnapshotConfig,
-) -> Dict[PipelineStage, Path]:
+) -> Dict[SnapshotStage, Path]:
     """Export all captured snapshots to CSV.
 
     Args:
@@ -526,7 +531,7 @@ class SnapshotMixin:
     """
 
     _snapshot_config: Optional[SnapshotConfig] = None
-    _snapshots: Dict[PipelineStage, PipelineSnapshot] = {}
+    _snapshots: Dict[SnapshotStage, PipelineSnapshot] = {}
 
     def enable_snapshots(self, config: SnapshotConfig) -> None:
         """Enable snapshot capture for this extractor run.
@@ -539,7 +544,7 @@ class SnapshotMixin:
 
     def capture_snapshot(
         self,
-        stage: PipelineStage,
+        stage: SnapshotStage,
         data: pl.DataFrame,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -568,7 +573,7 @@ class SnapshotMixin:
             metadata=metadata or {},
         )
 
-    def get_snapshots(self) -> Dict[PipelineStage, PipelineSnapshot]:
+    def get_snapshots(self) -> Dict[SnapshotStage, PipelineSnapshot]:
         """Get all captured snapshots.
 
         Returns:
@@ -576,7 +581,7 @@ class SnapshotMixin:
         """
         return self._snapshots.copy()
 
-    def export_snapshots(self) -> Dict[PipelineStage, Path]:
+    def export_snapshots(self) -> Dict[SnapshotStage, Path]:
         """Export all captured snapshots to disk.
 
         Returns:

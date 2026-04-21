@@ -12,8 +12,8 @@ from slices.models.encoders import TransformerConfig, TransformerEncoder
 
 
 def check_data_availability() -> bool:
-    """Check if extracted MIMIC-IV demo data is available."""
-    data_dir = Path("data/processed/mimic-iv-demo")
+    """Check if processed MIIV data is available."""
+    data_dir = Path("data/processed/miiv")
     return data_dir.exists() and (data_dir / "timeseries.parquet").exists()
 
 
@@ -22,8 +22,8 @@ def basic_integration():
     print("=== Basic Integration with ICUDataset ===")
 
     if not check_data_availability():
-        print("⚠️  MIMIC-IV demo data not found.")
-        print("   Run: uv run python scripts/setup_mimic_iv.py")
+        print("⚠️  Processed MIIV data not found.")
+        print("   Run: ./scripts/setup_and_extract.sh miiv")
         print("   This example requires extracted ICU data.\n")
         return False
 
@@ -31,7 +31,7 @@ def basic_integration():
 
     # Load dataset
     dataset = ICUDataset(
-        "data/processed/mimic-iv-demo",
+        "data/processed/miiv",
         task_name="mortality_24h",
         normalize=True,
     )
@@ -81,7 +81,7 @@ def batch_processing():
     print("=== Batch Processing ===")
 
     if not check_data_availability():
-        print("⚠️  MIMIC-IV demo data not found. Skipping.\n")
+        print("⚠️  Processed MIIV data not found. Skipping.\n")
         return False
 
     from slices.data import ICUDataset
@@ -89,7 +89,7 @@ def batch_processing():
 
     # Load dataset
     dataset = ICUDataset(
-        "data/processed/mimic-iv-demo",
+        "data/processed/miiv",
         task_name="mortality_24h",
         normalize=True,
     )
@@ -136,14 +136,14 @@ def with_datamodule():
     print("=== Integration with ICUDataModule ===")
 
     if not check_data_availability():
-        print("⚠️  MIMIC-IV demo data not found. Skipping.\n")
+        print("⚠️  Processed MIIV data not found. Skipping.\n")
         return False
 
     from slices.data import ICUDataModule
 
     # Create datamodule
     datamodule = ICUDataModule(
-        processed_dir="data/processed/mimic-iv-demo",
+        processed_dir="data/processed/miiv",
         task_name="mortality_24h",
         batch_size=32,
         num_workers=0,
@@ -208,14 +208,14 @@ def different_sequence_lengths():
     print("=== Variable-Length Sequences ===")
 
     if not check_data_availability():
-        print("⚠️  MIMIC-IV demo data not found. Skipping.\n")
+        print("⚠️  Processed MIIV data not found. Skipping.\n")
         return False
 
     from slices.data import ICUDataset
 
     # Load dataset with shorter sequences
     dataset = ICUDataset(
-        "data/processed/mimic-iv-demo",
+        "data/processed/miiv",
         seq_length=24,  # Use only first 24 hours
         normalize=True,
     )
@@ -270,10 +270,10 @@ def main():
     if any(success):
         print("✓ Examples completed successfully!")
     else:
-        print("⚠️  No examples ran (MIMIC-IV demo data not found)")
+        print("⚠️  No examples ran (processed MIIV data not found)")
         print("\nTo run these examples:")
-        print("1. Download MIMIC-IV demo dataset")
-        print("2. Run: uv run python scripts/setup_mimic_iv.py")
+        print("1. Prepare the MIIV source data")
+        print("2. Run: ./scripts/setup_and_extract.sh miiv")
 
     print("=" * 70)
 

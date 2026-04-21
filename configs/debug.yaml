@@ -5,7 +5,7 @@
 #   uv run python scripts/debug/export_snapshots.py
 #
 #   # Override data paths:
-#   uv run python scripts/debug/export_snapshots.py data.processed_dir=data/processed/mimic-iv
+#   uv run python scripts/debug/export_snapshots.py data.processed_dir=data/processed/miiv
 #
 #   # Override RICU data paths:
 #   uv run python scripts/debug/export_snapshots.py \
@@ -20,6 +20,8 @@
 defaults:
   - data: ricu
   - _self_
+
+dataset: miiv
 
 # Output directory for debug artifacts (defaults to processed_dir/debug_snapshots)
 debug_output_dir: null

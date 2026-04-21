@@ -7,7 +7,7 @@ Example usage:
     # Analyze embeddings from a checkpoint
     uv run python scripts/debug/inspect_embeddings.py \
         checkpoint=outputs/encoder.pt \
-        processed_dir=data/processed/mimic-iv-demo
+        processed_dir=data/processed/miiv
 
     # Load pre-computed embeddings
     uv run python scripts/debug/inspect_embeddings.py \
@@ -16,7 +16,7 @@ Example usage:
     # Generate visualizations
     uv run python scripts/debug/inspect_embeddings.py \
         checkpoint=outputs/encoder.pt \
-        processed_dir=data/processed/mimic-iv-demo \
+        processed_dir=data/processed/miiv \
         plots=true
 """
 
