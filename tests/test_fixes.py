@@ -773,12 +773,12 @@ class TestFairnessRevisionScoping:
         )
 
         assert captured["path"] == "entity/proj"
-        assert captured["filters"]["tags"]["$all"] == [
-            "experiment_class:core_ssl_benchmark",
-            "paradigm:mae",
-            "dataset:miiv",
-            "phase:finetune",
-            "revision:thesis-v1",
+        assert captured["filters"]["$and"] == [
+            {"tags": "experiment_class:core_ssl_benchmark"},
+            {"tags": "paradigm:mae"},
+            {"tags": "dataset:miiv"},
+            {"tags": "phase:finetune"},
+            {"tags": "revision:thesis-v1"},
         ]
 
     def test_fetch_eval_runs_multi_revision_filters_client_side(self, monkeypatch):
@@ -1398,14 +1398,15 @@ class TestExporterClassMetadata:
         """Mask-ratio sensitivity finetunes recover upstream mask ratio from output_dir."""
         from scripts.export_results import _recover_pretrain_metadata
 
-        config = {
-            "output_dir": (
-                "outputs/hp_robustness/" "finetune_jepa_mortality_24h_miiv_seed42_mask_ratio03"
-            )
-        }
-        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
-        assert up_mr == 0.3
-        assert subtype == "mask_ratio_sensitivity"
+        for suffix in ["mask_ratio03", "maskratio03"]:
+            config = {
+                "output_dir": (
+                    "outputs/hp_robustness/" f"finetune_jepa_mortality_24h_miiv_seed42_{suffix}"
+                )
+            }
+            up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
+            assert up_mr == 0.3
+            assert subtype == "mask_ratio_sensitivity"
 
     def test_new_runs_use_config_directly(self):
         """New runs with explicit upstream fields skip name parsing."""
@@ -1688,6 +1689,36 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
 
+    def test_launch_commit_mismatch_resets_stale_completed_state(self):
+        from scripts.internal.run_experiments import Run, reset_state_for_launch_commit_mismatch
+
+        run = Run(
+            id="core_ssl_benchmark_rev-thesis-v1_supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/core_ssl_benchmark/supervised_mortality_24h_miiv_seed42",
+            task="mortality_24h",
+            extra_overrides={"+launch_commit": "newcommit"},
+        )
+        state = {
+            "version": 1,
+            "runs": {
+                run.id: {
+                    "status": "completed",
+                    "launch_commit": "oldcommit",
+                    "command": "uv run python scripts/training/supervised.py",
+                }
+            },
+        }
+
+        reset_state_for_launch_commit_mismatch([run], state)
+
+        assert state["runs"][run.id]["status"] == "pending"
+        assert "launch_commit changed" in state["runs"][run.id]["reset_reason"]
+
     def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
@@ -1874,7 +1905,7 @@ class TestExperimentRunnerWandbOverrides:
 
         assert isinstance(logger, DummyWandbLogger)
         assert captured["kwargs"]["name"] == (
-            "capacity_study_finetune_miiv_mae_mortality_24h_seed42_medium"
+            "capacity_study_finetune_miiv_mae_mortality_24h_seed42_medium_frac01"
         )
         assert captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_medium_frac01"
         assert "experiment_class:capacity_study" in captured["kwargs"]["tags"]
@@ -1942,6 +1973,8 @@ class TestExperimentRunnerWandbOverrides:
         assert "task.head_type=linear" in cmd
         assert "task.hidden_dims=[]" in cmd
         assert "task.dropout=0.0" in cmd
+        assert "protocol=A" in cmd
+        assert "+protocol=A" not in cmd
 
     def test_protocol_b_finetune_command_keeps_task_mlp_head(self):
         from scripts.internal.run_experiments import Run
@@ -1972,6 +2005,27 @@ class TestExperimentRunnerWandbOverrides:
 
         assert "training.freeze_encoder=false" in cmd
         assert "task.head_type=linear" not in cmd
+        assert "protocol=B" in cmd
+        assert "+protocol=B" not in cmd
+
+    def test_xgboost_command_does_not_load_protocol_config_group(self):
+        from scripts.internal.run_experiments import Run
+
+        run = Run(
+            id="xgboost_miiv_seed42",
+            experiment_class="classical_baselines",
+            run_type="xgboost",
+            paradigm="xgboost",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/classical_baselines/xgboost_mortality_24h_miiv_seed42",
+            task="mortality_24h",
+        )
+
+        cmd = run.build_command({run.id: run})
+
+        assert "+protocol=B" not in cmd
+        assert "protocol=B" not in cmd
 
     def test_manual_finetune_protocol_configs_encode_safe_defaults(self):
         protocol_a = OmegaConf.load("configs/protocol/a.yaml")
@@ -2900,6 +2954,20 @@ class TestExperimentRunnerMatrix:
             and run.experiment_class != "classical_baselines"
         ]
         assert non_classical_baselines == []
+
+        contrastive_mask_sweep = [
+            run
+            for run in runs
+            if run.experiment_class == "hp_robustness"
+            and run.paradigm == "contrastive"
+            and run.experiment_subtype == "mask_ratio_sensitivity"
+            and run.run_type == "pretrain"
+        ]
+        assert contrastive_mask_sweep
+        assert all(
+            run.extra_overrides["ssl.complementary_masks"] is False
+            for run in contrastive_mask_sweep
+        )
 
     def test_capacity_study_expanded_to_five_seeds(self):
         from scripts.internal.run_experiments import SEEDS_EXTENDED, MatrixBuilder

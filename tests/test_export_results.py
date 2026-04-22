@@ -138,12 +138,12 @@ def test_fetch_all_runs_single_class_adds_server_side_filter(monkeypatch):
     )
 
     assert captured["path"] == "entity/proj"
-    assert captured["filters"]["tags"]["$all"] == [
-        "experiment_class:core_ssl_benchmark",
-        "paradigm:mae",
-        "dataset:miiv",
-        "phase:finetune",
-        "revision:thesis-v1",
+    assert captured["filters"]["$and"] == [
+        {"tags": "experiment_class:core_ssl_benchmark"},
+        {"tags": "paradigm:mae"},
+        {"tags": "dataset:miiv"},
+        {"tags": "phase:finetune"},
+        {"tags": "revision:thesis-v1"},
     ]
 
 
@@ -160,8 +160,7 @@ def test_build_per_seed_df_keeps_hp_robustness_rows_out_of_derived_views():
                 "paradigm": "mae",
                 "seed": 42,
                 "output_dir": (
-                    "outputs/hp_robustness/"
-                    f"finetune_mae_mortality_24h_miiv_seed42_lr{lr_code}"
+                    "outputs/hp_robustness/" f"finetune_mae_mortality_24h_miiv_seed42_lr{lr_code}"
                 ),
                 "encoder": {"d_model": 64, "n_layers": 2},
                 "training": {"freeze_encoder": False},
@@ -191,6 +190,53 @@ def test_build_per_seed_df_fails_closed_on_extraction_errors():
         mod.build_per_seed_df([object()])
 
     assert mod.build_per_seed_df([object()], allow_extraction_failures=True).empty
+
+
+def test_build_per_seed_df_fails_closed_on_exact_duplicate_fingerprints():
+    mod = importlib.import_module("scripts.export_results")
+
+    base_config = {
+        "experiment_class": "core_ssl_benchmark",
+        "dataset": "miiv",
+        "paradigm": "mae",
+        "seed": 42,
+        "encoder": {"d_model": 64, "n_layers": 2},
+        "training": {"freeze_encoder": False},
+        "optimizer": {"lr": 3e-4},
+        "task": {"task_name": "mortality_24h"},
+    }
+    run_a = DummyRun(base_config, ["phase:finetune"], name="run-a")
+    run_a.id = "run-a"
+    run_a.created_at = "2026-04-21T00:00:01"
+    run_b = DummyRun(base_config, ["phase:finetune"], name="run-b")
+    run_b.id = "run-b"
+    run_b.created_at = "2026-04-21T00:00:02"
+
+    with pytest.raises(RuntimeError, match="Duplicate exact export fingerprints"):
+        mod.build_per_seed_df([run_a, run_b])
+
+    deduped = mod.build_per_seed_df([run_a, run_b], allow_duplicate_fingerprints=True)
+    assert deduped["wandb_run_id"].tolist() == ["run-b"]
+
+
+def test_extract_run_uses_xgboost_learning_rate_for_lr_metadata():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "experiment_class": "classical_baselines",
+            "dataset": "miiv",
+            "paradigm": "xgboost",
+            "seed": 42,
+            "protocol": "B",
+            "optimizer": {"lr": 3e-4},
+            "xgboost": {"learning_rate": 0.1},
+            "task": {"task_name": "mortality_24h"},
+        },
+        tags=["phase:baseline"],
+    )
+
+    assert mod.extract_run(run, [])["lr"] == pytest.approx(0.1)
 
 
 def test_label_efficiency_view_adds_core_full_label_endpoint():
@@ -275,6 +321,27 @@ def test_validate_flags_wrong_fixed_seed_set_with_correct_count():
 
     assert any("expected seed set" in warning for warning in warnings)
     assert any("unexpected=[1, 2, 3, 4, 5]" in warning for warning in warnings)
+
+
+def test_validate_flags_absent_expected_matrix_rows():
+    mod = importlib.import_module("scripts.export_results")
+
+    expected = mod.build_expected_matrix_df(
+        experiment_class=["core_ssl_benchmark"],
+        paradigm=["mae"],
+        dataset=["miiv"],
+        phase=["finetune"],
+    )
+    present = expected[(expected["task"] == "mortality_24h") & (expected["protocol"] == "B")].copy()
+    present["wandb_run_id"] = [f"run-{seed}" for seed in present["seed"]]
+    present["test/auprc"] = 0.5
+    aggregated = mod.build_aggregated_df(present)
+
+    warnings = mod.validate(present, aggregated, expected_matrix_df=expected)
+    joined = "\n".join(warnings)
+
+    assert "expected matrix evaluation rows are absent" in joined
+    assert "missing experiment_class=core_ssl_benchmark" in joined
 
 
 def test_build_aggregated_df_records_per_metric_non_null_counts():
@@ -485,6 +552,18 @@ def test_parse_args_exposes_extraction_failure_escape_hatch(monkeypatch):
     assert mod.parse_args().allow_extraction_failures is True
 
 
+def test_parse_args_exposes_duplicate_fingerprint_escape_hatch(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--allow-duplicate-fingerprints"],
+    )
+
+    assert mod.parse_args().allow_duplicate_fingerprints is True
+
+
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):
     mod = importlib.import_module("scripts.export_results")
 
@@ -499,6 +578,35 @@ def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):
         mod.main()
 
     assert excinfo.value.code == 1
+
+
+def test_main_does_not_write_parquet_when_validation_fails(monkeypatch, tmp_path):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--output-dir", str(tmp_path)],
+    )
+    per_seed = pd.DataFrame([_row("core_ssl_benchmark", "mae", 42)])
+
+    monkeypatch.setattr(mod, "fetch_all_runs", lambda **_: [object()])
+    monkeypatch.setattr(mod, "build_per_seed_df", lambda *_, **__: per_seed)
+    monkeypatch.setattr(mod, "filter_thesis_tasks", lambda df, **_: df)
+    monkeypatch.setattr(mod, "build_aggregated_df", lambda _: pd.DataFrame([{"n_seeds": 1}]))
+    monkeypatch.setattr(mod, "build_label_efficiency_curve_df", lambda _: pd.DataFrame())
+    monkeypatch.setattr(mod, "build_capacity_study_comparison_df", lambda _: pd.DataFrame())
+    monkeypatch.setattr(mod, "build_classical_context_df", lambda _: pd.DataFrame())
+    monkeypatch.setattr(mod, "build_statistical_tests_df", lambda _: pd.DataFrame())
+    monkeypatch.setattr(mod, "build_ts2vec_vs_core_contrastive_df", lambda _: pd.DataFrame())
+    monkeypatch.setattr(mod, "build_expected_matrix_df", lambda **_: pd.DataFrame())
+    monkeypatch.setattr(mod, "validate", lambda *_, **__: ["WARNING: incomplete"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.main()
+
+    assert excinfo.value.code == 1
+    assert not list(tmp_path.glob("*.parquet"))
 
 
 def test_parse_args_requires_revision_without_cli_or_env(monkeypatch):

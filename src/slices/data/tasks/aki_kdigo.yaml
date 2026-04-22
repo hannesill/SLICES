@@ -13,7 +13,10 @@ label_params:
   relative_rise_threshold: 1.5
   relative_window_hours: 168  # 7 days per KDIGO 2012 specification
 quality_checks:
-  max_missing_percentage: 28.0  # Warn if 24h baseline pushes exclusions above prior range
+  # AKI is evaluated on the creatinine-observed filtered cohort. eICU has
+  # materially higher missingness than MIMIC, so warn only above the current
+  # expected cross-dataset envelope.
+  max_missing_percentage: 35.0
 primary_metric: auprc
 additional_metrics:
   - auroc

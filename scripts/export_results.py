@@ -211,7 +211,7 @@ def fetch_all_runs(
     if revision and len(revision) == 1:
         tag_filters.append(f"revision:{revision[0]}")
     if tag_filters:
-        filters["tags"] = {"$all": tag_filters}
+        filters["$and"] = [{"tags": tag} for tag in tag_filters]
 
     print(f"Fetching runs from {path}...", file=sys.stderr)
     print(f"  Server-side filters: {json.dumps(filters, default=str)}", file=sys.stderr)
@@ -343,7 +343,7 @@ def _recover_pretrain_metadata(
         if up_lr is not None:
             subtype = "lr_sensitivity"
 
-    mr_match = re.search(r"_mask_ratio([^_]+)", output_dir)
+    mr_match = re.search(r"_mask_?ratio([^_]+)", output_dir)
     if mr_match:
         up_mr = _MR_DECODE.get(mr_match.group(1))
         if up_mr is not None:
@@ -418,6 +418,9 @@ def extract_run(run, metric_keys: list[str]) -> dict:
             metrics[key] = _metric_value_or_nan(value)
 
     paradigm = config.get("paradigm") or _get_nested(config, "ssl.name")
+    lr = _get_nested(config, "optimizer.lr", default=None)
+    if paradigm == "xgboost":
+        lr = _get_nested(config, "xgboost.learning_rate", default=lr)
     row = {
         "wandb_run_id": run_id,
         "wandb_run_url": run_url,
@@ -433,7 +436,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "seed": config.get("seed", None),
         "protocol": protocol,
         "label_fraction": config.get("label_fraction", 1.0),
-        "lr": _get_nested(config, "optimizer.lr", default=None),
+        "lr": lr,
         "mask_ratio": _get_nested(config, "ssl.mask_ratio", default=None),
         "model_size": _infer_model_size(config),
         "source_dataset": source_dataset,
@@ -492,6 +495,7 @@ def _assert_no_ambiguous_fingerprint_collisions(df: pd.DataFrame) -> None:
 def build_per_seed_df(
     runs: list,
     allow_extraction_failures: bool = False,
+    allow_duplicate_fingerprints: bool = False,
 ) -> pd.DataFrame:
     rows = []
     failed = []
@@ -531,6 +535,18 @@ def build_per_seed_df(
     before = len(df)
     _assert_no_ambiguous_fingerprint_collisions(df)
     dedup_cols = [col for col in [*FINGERPRINT, "seed"] if col in df.columns]
+    duplicate_rows = df[df.duplicated(subset=dedup_cols, keep=False)]
+    if not duplicate_rows.empty and not allow_duplicate_fingerprints:
+        preview = []
+        for _, row in duplicate_rows.head(10).iterrows():
+            desc = ", ".join(f"{col}={row.get(col)}" for col in dedup_cols)
+            run_id = row.get("wandb_run_id", "unknown")
+            preview.append(f"{desc}, wandb_run_id={run_id}")
+        raise RuntimeError(
+            "Duplicate exact export fingerprints would be silently collapsed:\n  "
+            + "\n  ".join(preview)
+            + "\nPass --allow-duplicate-fingerprints only for exploratory cleanup exports."
+        )
     df = df.drop_duplicates(subset=dedup_cols, keep="first")
     after = len(df)
     if before != after:
@@ -1091,14 +1107,134 @@ def _checkpoint_provenance_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Se
     return issues
 
 
+def _expected_row_from_run(run) -> dict:
+    return {
+        "experiment_class": run.experiment_class,
+        "experiment_type": run.experiment_class,
+        "experiment_subtype": run.experiment_subtype,
+        "paradigm": run.paradigm,
+        "dataset": run.dataset,
+        "task": run.task,
+        "seed": run.seed,
+        "protocol": run.protocol,
+        "label_fraction": run.label_fraction,
+        "model_size": run.model_size or "default",
+        "source_dataset": run.source_dataset,
+        "phase": run.phase,
+        "upstream_pretrain_lr": run.upstream_pretrain_lr,
+        "upstream_pretrain_mask_ratio": run.upstream_pretrain_mask_ratio,
+    }
+
+
+def build_expected_matrix_df(
+    experiment_class: list[str] | None = None,
+    paradigm: list[str] | None = None,
+    dataset: list[str] | None = None,
+    phase: list[str] | None = None,
+) -> pd.DataFrame:
+    """Build the expected per-seed evaluation matrix for the selected export scope."""
+    from scripts.internal.run_experiments import generate_all_runs
+
+    experiment_class_set = set(experiment_class) if experiment_class else None
+    paradigm_set = set(paradigm) if paradigm else None
+    dataset_set = set(dataset) if dataset else None
+    phase_set = set(phase) if phase else set(EVAL_PHASES)
+
+    rows = []
+    for run in generate_all_runs():
+        if run.phase not in EVAL_PHASES:
+            continue
+        row = _expected_row_from_run(run)
+        if experiment_class_set and row["experiment_class"] not in experiment_class_set:
+            continue
+        if paradigm_set and row["paradigm"] not in paradigm_set:
+            continue
+        if dataset_set and row["dataset"] not in dataset_set:
+            continue
+        if phase_set and row["phase"] not in phase_set:
+            continue
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def _matrix_key_value(column: str, value):
+    if _is_missing_export_value(value):
+        return "__none__"
+    if column == "seed":
+        return int(value)
+    if column in {"label_fraction", "upstream_pretrain_lr", "upstream_pretrain_mask_ratio"}:
+        return round(float(value), 12)
+    return str(value)
+
+
+def _matrix_keys(df: pd.DataFrame, columns: list[str]) -> set[tuple]:
+    if df.empty:
+        return set()
+    keys = set()
+    for _, row in df.iterrows():
+        keys.add(tuple(_matrix_key_value(col, row.get(col)) for col in columns))
+    return keys
+
+
+def _format_matrix_key(key: tuple, columns: list[str]) -> str:
+    return ", ".join(f"{col}={value}" for col, value in zip(columns, key, strict=True))
+
+
+def _matrix_coverage_warnings(
+    per_seed_df: pd.DataFrame,
+    expected_matrix_df: pd.DataFrame | None,
+) -> list[str]:
+    if expected_matrix_df is None or expected_matrix_df.empty:
+        return []
+
+    key_columns = [*FINGERPRINT, "seed"]
+    missing_columns = [col for col in key_columns if col not in per_seed_df.columns]
+    if missing_columns:
+        return [
+            "WARNING: export is missing matrix key columns needed for coverage validation: "
+            + ", ".join(missing_columns)
+        ]
+
+    expected_keys = _matrix_keys(expected_matrix_df, key_columns)
+    observed_keys = _matrix_keys(per_seed_df, key_columns)
+    missing = sorted(expected_keys - observed_keys)
+    unexpected = sorted(observed_keys - expected_keys)
+
+    warnings = []
+    if missing:
+        warnings.append(
+            f"WARNING: {len(missing)}/{len(expected_keys)} expected matrix evaluation rows "
+            "are absent from export:"
+        )
+        for key in missing[:20]:
+            warnings.append(f"  missing {_format_matrix_key(key, key_columns)}")
+        if len(missing) > 20:
+            warnings.append(f"  ... {len(missing) - 20} more missing rows")
+
+    if unexpected:
+        warnings.append(
+            f"WARNING: {len(unexpected)} exported evaluation rows are outside the expected matrix:"
+        )
+        for key in unexpected[:20]:
+            warnings.append(f"  unexpected {_format_matrix_key(key, key_columns)}")
+        if len(unexpected) > 20:
+            warnings.append(f"  ... {len(unexpected) - 20} more unexpected rows")
+
+    return warnings
+
+
 def validate(
     per_seed_df: pd.DataFrame,
     aggregated_df: pd.DataFrame,
     statistical_df: pd.DataFrame | None = None,
     expected_seeds: set[int] | None = None,
+    expected_matrix_df: pd.DataFrame | None = None,
 ) -> list[str]:
     warnings = []
     expected_seeds = set(EXPECTED_FIXED_SEEDS if expected_seeds is None else expected_seeds)
+
+    warnings.extend(_matrix_coverage_warnings(per_seed_df, expected_matrix_df))
 
     if "experiment_class" in aggregated_df.columns:
         fixed_seed = aggregated_df[
@@ -1264,6 +1400,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--allow-duplicate-fingerprints",
+        action="store_true",
+        help=(
+            "Keep the newest duplicate exact scientific fingerprint. Use only for "
+            "exploratory cleanup exports; publication exports fail closed by default."
+        ),
+    )
+    parser.add_argument(
         "--include-extension-tasks",
         action="store_true",
         help=(
@@ -1309,6 +1453,7 @@ def main() -> None:
     per_seed_df = build_per_seed_df(
         runs,
         allow_extraction_failures=args.allow_extraction_failures,
+        allow_duplicate_fingerprints=args.allow_duplicate_fingerprints,
     )
     per_seed_df = filter_thesis_tasks(
         per_seed_df,
@@ -1337,6 +1482,13 @@ def main() -> None:
     ts2vec_contrastive_df = build_ts2vec_vs_core_contrastive_df(per_seed_df)
     print(f"  Shape: {ts2vec_contrastive_df.shape}", file=sys.stderr)
 
+    expected_matrix_df = build_expected_matrix_df(
+        experiment_class=args.experiment_class,
+        paradigm=args.paradigm,
+        dataset=args.dataset,
+        phase=args.phase,
+    )
+
     coverage_parts = [df for df in [statistical_df, ts2vec_contrastive_df] if not df.empty]
     statistical_coverage_df = (
         pd.concat(coverage_parts, ignore_index=True) if coverage_parts else pd.DataFrame()
@@ -1346,9 +1498,14 @@ def main() -> None:
         aggregated_df,
         statistical_df=statistical_coverage_df,
         expected_seeds=set(args.expected_seeds),
+        expected_matrix_df=expected_matrix_df,
     )
     for warning in warnings:
         print(warning, file=sys.stderr)
+
+    if warnings and not args.allow_incomplete:
+        print("Validation failed; no parquet outputs were written.", file=sys.stderr)
+        sys.exit(1)
 
     outputs = {
         "per_seed_results.parquet": per_seed_df,
@@ -1374,8 +1531,6 @@ def main() -> None:
         for experiment_class, group in aggregated_df.groupby("experiment_class"):
             seed_dist = dict(group["n_seeds"].value_counts().sort_index())
             print(f"  {experiment_class}: {len(group)} configs, seeds: {seed_dist}")
-    if warnings and not args.allow_incomplete:
-        sys.exit(1)
 
 
 if __name__ == "__main__":

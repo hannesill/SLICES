@@ -24,6 +24,7 @@ dataset: miiv
 
 # Paradigm
 paradigm: gru_d
+protocol: B
 
 # Final rerun corpus metadata
 experiment_class: null

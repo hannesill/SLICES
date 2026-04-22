@@ -342,6 +342,9 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         run_name = run_name.replace("_finetune_", "_probe_", 1)
     if run_name and model_size is not None:
         run_name += f"_{model_size}"
+    if run_name and label_fraction is not None and label_fraction < 1.0:
+        frac_str = str(label_fraction).replace(".", "")
+        run_name += f"_frac{frac_str}"
 
     # Adjust group to include protocol and label_fraction so that W&B "Group" view
     # aggregates exactly the runs that differ only by seed.
