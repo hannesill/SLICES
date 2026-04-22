@@ -166,7 +166,7 @@ def prepare_processed_dataset(
 
     if not processed_dir.exists():
         raise FileNotFoundError(
-            f"Processed directory not found: {processed_dir}\n" "Run extraction before preparation."
+            f"Processed directory not found: {processed_dir}\nRun extraction before preparation."
         )
 
     print("\n1. Loading metadata...")
@@ -225,6 +225,8 @@ def prepare_processed_dataset(
     )
     stats["normalize"] = True
     stats["split_hash"] = None
+    stats["normalization_index_space"] = "raw_full_cohort"
+    stats["train_indices_count"] = len(splits["train_indices"])
     stats["data_fingerprint"] = get_data_fingerprint(processed_dir)
     stats["preprocessing_fingerprint"] = get_preprocessing_fingerprint()
 

@@ -29,6 +29,7 @@ Usage:
     uv run python scripts/internal/run_experiments.py tag --sprint 2 3 5 \\
         --project slices-thesis --entity <entity>
 """
+
 from __future__ import annotations
 
 import argparse
@@ -975,7 +976,7 @@ def apply_revision(runs: list[Run], revision: str, reason: str | None = None) ->
         # Insert rev-<name> after the sprint prefix (e.g. s1_ → s1_rev-v2_)
         prefix = f"s{r.sprint}_"
         if old_id.startswith(prefix):
-            new_id = f"{prefix}rev-{revision}_{old_id[len(prefix):]}"
+            new_id = f"{prefix}rev-{revision}_{old_id[len(prefix) :]}"
         else:
             new_id = f"rev-{revision}_{old_id}"
         old_to_new[old_id] = new_id
@@ -1012,6 +1013,16 @@ def apply_wandb_target(
             run.extra_overrides["logging.wandb_project"] = project
         if entity is not None:
             run.extra_overrides["logging.wandb_entity"] = entity
+    return runs
+
+
+def apply_launch_commit(runs: list[Run], launch_commit: str | None = None) -> list[Run]:
+    """Inject the exact git commit used for launch into each Hydra config."""
+    if not launch_commit:
+        return runs
+
+    for run in runs:
+        run.extra_overrides["+launch_commit"] = launch_commit
     return runs
 
 
@@ -1218,7 +1229,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
                 if run.run_type == "pretrain":
                     encoder_path = Path(run.output_dir) / "encoder.pt"
                     if not encoder_path.exists():
-                        print(f"  FAILED {rid}: exit 0 but encoder.pt " f"missing {elapsed}")
+                        print(f"  FAILED {rid}: exit 0 but encoder.pt missing {elapsed}")
                         set_run_status(state, rid, "failed", finished_at=now, exit_code=exit_code)
                         _propagate_failure(rid, runs, state)
                         continue
@@ -1492,7 +1503,7 @@ def cmd_run(args):
         extra = [all_by_id[d] for d in deps_needed if d in all_by_id]
         runs = extra + runs
         if extra and not args.dry_run:
-            print(f"Including {len(extra)} dependency run(s) from earlier " f"sprints")
+            print(f"Including {len(extra)} dependency run(s) from earlier sprints")
 
     if not runs:
         print(f"No runs found for sprint(s): {', '.join(sprints)}")
@@ -1502,10 +1513,13 @@ def cmd_run(args):
     if args.revision:
         runs = apply_revision(runs, args.revision, args.reason)
     runs = apply_wandb_target(runs, args.project, args.entity)
+    runs = apply_launch_commit(runs, args.launch_commit)
 
     print(f"Sprint(s) {', '.join(sprints)}: {len(runs)} runs")
     if args.revision:
         print(f"Revision: {args.revision}" + (f" ({args.reason})" if args.reason else ""))
+    if args.launch_commit:
+        print(f"Launch commit: {args.launch_commit}")
     if args.project or args.entity:
         target = f"{args.entity}/{args.project}" if args.entity else args.project
         print(f"W&B target: {target}")
@@ -1564,6 +1578,8 @@ def _retry_command_suggestion(args, *, include_failed: bool, include_skipped: bo
         cmd.extend(["--project", str(args.project)])
     if args.entity:
         cmd.extend(["--entity", str(args.entity)])
+    if args.launch_commit:
+        cmd.extend(["--launch-commit", str(args.launch_commit)])
     cmd.extend(["--parallel", str(args.parallel)])
     return shlex.join(cmd)
 
@@ -1624,6 +1640,7 @@ def cmd_retry(args):
         else:
             all_runs = apply_revision(all_runs, args.revision, args.reason)
     all_runs = apply_wandb_target(all_runs, args.project, args.entity)
+    all_runs = apply_launch_commit(all_runs, args.launch_commit)
 
     state = load_state()
     recover_stale_running(state)
@@ -1679,6 +1696,8 @@ def cmd_retry(args):
     if args.project or args.entity:
         target = f"{args.entity}/{args.project}" if args.entity else args.project
         print(f"W&B target: {target}")
+    if args.launch_commit:
+        print(f"Launch commit: {args.launch_commit}")
     return run_scheduler(runs_to_retry, state, args.parallel, dry_run=False)
 
 
@@ -1859,6 +1878,12 @@ def main():
     p_run.add_argument("--revision", type=str, default=None, help="Revision name (e.g. v2)")
     p_run.add_argument("--reason", type=str, default=None, help="Reason for rerun")
     p_run.add_argument(
+        "--launch-commit",
+        type=str,
+        default=os.environ.get("SLICES_LAUNCH_COMMIT"),
+        help="Exact git commit hash for launch provenance (default: SLICES_LAUNCH_COMMIT)",
+    )
+    p_run.add_argument(
         "--project",
         type=str,
         default=os.environ.get("WANDB_PROJECT"),
@@ -1888,6 +1913,12 @@ def main():
     p_retry.add_argument("--sprint", nargs="+", default=None, help="Scope retry to sprint(s)")
     p_retry.add_argument("--revision", type=str, default=None, help="Revision name to retry")
     p_retry.add_argument("--reason", type=str, default=None, help="Reason for rerun")
+    p_retry.add_argument(
+        "--launch-commit",
+        type=str,
+        default=os.environ.get("SLICES_LAUNCH_COMMIT"),
+        help="Exact git commit hash for launch provenance (default: SLICES_LAUNCH_COMMIT)",
+    )
     p_retry.add_argument(
         "--project",
         type=str,

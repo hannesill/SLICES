@@ -10,6 +10,7 @@
 #   ./scripts/setup_and_extract.sh miiv eicu     # Multiple datasets
 #   ./scripts/setup_and_extract.sh combined      # Build combined + its source datasets
 #   ./scripts/setup_and_extract.sh --skip-deps miiv  # Skip dependency installation
+#   ./scripts/setup_and_extract.sh --force-processed miiv  # Regenerate processed artifacts
 
 set -euo pipefail
 
@@ -32,6 +33,8 @@ error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # Parse arguments
 # ---------------------------------------------------------------------------
 SKIP_DEPS=false
+FORCE_PROCESSED=false
+EXPECTED_FEATURES="${EXPECTED_FEATURES:-84}"
 REQUESTED_DATASETS=()
 BASE_DATASETS=()
 
@@ -50,9 +53,10 @@ append_base_dataset() {
 for arg in "$@"; do
     case "$arg" in
         --skip-deps) SKIP_DEPS=true ;;
+        --force-processed) FORCE_PROCESSED=true ;;
         miiv|eicu|combined) REQUESTED_DATASETS+=("$arg") ;;
         *)           error "Unknown argument: $arg"
-                     echo "Usage: $0 [--skip-deps] [miiv] [eicu] [combined]"
+                     echo "Usage: $0 [--skip-deps] [--force-processed] [miiv] [eicu] [combined]"
                      exit 1 ;;
     esac
 done
@@ -83,6 +87,71 @@ raw_dir_for() {
         miiv) echo "data/raw/mimiciv" ;;
         eicu) echo "data/raw/eicu-crd" ;;
     esac
+}
+
+processed_artifacts_exist() {
+    local processed_dir="$1"
+    [ -f "$processed_dir/timeseries.parquet" ] && \
+    [ -f "$processed_dir/static.parquet" ] && \
+    [ -f "$processed_dir/labels.parquet" ] && \
+    [ -f "$processed_dir/metadata.yaml" ]
+}
+
+processed_data_ready() {
+    local processed_dir="$1"
+    local dataset="$2"
+
+    uv run python - "$processed_dir" "$dataset" "$EXPECTED_FEATURES" <<'PY'
+from pathlib import Path
+import sys
+
+import polars as pl
+import yaml
+
+processed_dir = Path(sys.argv[1])
+dataset = sys.argv[2]
+expected_features = int(sys.argv[3])
+
+with open(processed_dir / "metadata.yaml") as f:
+    metadata = yaml.safe_load(f) or {}
+
+feature_names = metadata.get("feature_names") or []
+n_features = metadata.get("n_features", len(feature_names))
+if n_features != expected_features:
+    raise SystemExit(f"{dataset}: expected {expected_features} features, found {n_features}")
+
+n_stays = metadata.get("n_stays")
+for filename in ("static.parquet", "timeseries.parquet", "labels.parquet"):
+    height = pl.scan_parquet(processed_dir / filename).select(pl.len()).collect().item()
+    if n_stays is not None and height != n_stays:
+        raise SystemExit(f"{dataset}: {filename} has {height} rows, metadata has {n_stays}")
+
+if dataset != "combined" and not metadata.get("zero_observation_stays_excluded"):
+    raise SystemExit(f"{dataset}: metadata does not confirm zero-observation exclusion")
+
+print(f"{dataset}: {n_stays:,} stays, {n_features} features")
+PY
+}
+
+reset_processed_artifacts() {
+    local processed_dir="$1"
+
+    rm -f "$processed_dir/timeseries.parquet"
+    rm -f "$processed_dir/static.parquet"
+    rm -f "$processed_dir/labels.parquet"
+    rm -f "$processed_dir/metadata.yaml"
+    rm -f "$processed_dir/splits.yaml"
+    rm -f "$processed_dir/normalization_stats.yaml"
+    rm -f "$processed_dir"/normalization_stats_*.yaml
+    rm -f "$processed_dir/dataset_metadata.yaml"
+    rm -rf "$processed_dir/.tensor_cache"
+}
+
+clear_runtime_caches() {
+    local processed_dir="$1"
+
+    rm -f "$processed_dir"/normalization_stats_*.yaml
+    rm -rf "$processed_dir/.tensor_cache"
 }
 
 # ---------------------------------------------------------------------------
@@ -182,11 +251,20 @@ for ds in "${BASE_DATASETS[@]}"; do
     fi
 
     # --- Python extraction ---
-    if [ -f "$processed_dir/timeseries.parquet" ] && \
-       [ -f "$processed_dir/static.parquet" ] && \
-       [ -f "$processed_dir/labels.parquet" ] && \
-       [ -f "$processed_dir/metadata.yaml" ]; then
-        info "Processed data already exists: $processed_dir (skipping Python extraction)"
+    if processed_artifacts_exist "$processed_dir"; then
+        if processed_data_ready "$processed_dir" "$ds"; then
+            info "Processed data already exists and is ${EXPECTED_FEATURES}-feature ready: $processed_dir"
+        elif [ "$FORCE_PROCESSED" = true ]; then
+            warn "Processed data is stale; regenerating: $processed_dir"
+            reset_processed_artifacts "$processed_dir"
+            info "Running Python extraction for $ds..."
+            uv run python scripts/preprocessing/extract_ricu.py dataset="$ds"
+            info "Python extraction complete: $processed_dir"
+        else
+            error "Processed data exists but is not launch-ready: $processed_dir"
+            echo "  Re-run with --force-processed to regenerate from RICU output."
+            exit 1
+        fi
     else
         info "Running Python extraction for $ds..."
         uv run python scripts/preprocessing/extract_ricu.py dataset="$ds"
@@ -194,14 +272,10 @@ for ds in "${BASE_DATASETS[@]}"; do
     fi
 
     # --- Dataset preparation (splits + normalization) ---
-    if [ -f "$processed_dir/splits.yaml" ] && \
-       [ -f "$processed_dir/normalization_stats.yaml" ]; then
-        info "Splits & normalization already exist: $processed_dir (skipping preparation)"
-    else
-        info "Running dataset preparation for $ds..."
-        uv run python scripts/preprocessing/prepare_dataset.py dataset="$ds"
-        info "Dataset preparation complete"
-    fi
+    info "Running dataset preparation for $ds (refreshing split/normalization provenance)..."
+    uv run python scripts/preprocessing/prepare_dataset.py dataset="$ds"
+    clear_runtime_caches "$processed_dir"
+    info "Dataset preparation complete"
 
     info "Dataset $ds ready!"
 done
@@ -211,19 +285,36 @@ if [ "$BUILD_COMBINED" = true ]; then
 
     processed_dir="data/processed/combined"
 
-    if [ -f "$processed_dir/timeseries.parquet" ] && \
-       [ -f "$processed_dir/static.parquet" ] && \
-       [ -f "$processed_dir/labels.parquet" ] && \
-       [ -f "$processed_dir/metadata.yaml" ] && \
+    if processed_artifacts_exist "$processed_dir" && \
        [ -f "$processed_dir/splits.yaml" ] && \
        [ -f "$processed_dir/normalization_stats.yaml" ]; then
-        info "Combined dataset already exists and is prepared: $processed_dir (skipping)"
+        if processed_data_ready "$processed_dir" "combined"; then
+            info "Combined dataset already exists and is ${EXPECTED_FEATURES}-feature ready: $processed_dir"
+            info "Refreshing combined split/normalization provenance..."
+            uv run python scripts/preprocessing/prepare_dataset.py dataset="combined"
+            clear_runtime_caches "$processed_dir"
+        elif [ "$FORCE_PROCESSED" = true ]; then
+            warn "Combined data is stale; regenerating: $processed_dir"
+            reset_processed_artifacts "$processed_dir"
+            info "Creating and preparing combined dataset..."
+            uv run python scripts/preprocessing/create_combined_dataset.py \
+                --source data/processed/miiv data/processed/eicu \
+                --names miiv eicu \
+                --output "$processed_dir"
+            clear_runtime_caches "$processed_dir"
+            info "Combined dataset creation complete: $processed_dir"
+        else
+            error "Combined data exists but is not launch-ready: $processed_dir"
+            echo "  Re-run with --force-processed to regenerate from source processed datasets."
+            exit 1
+        fi
     else
         info "Creating and preparing combined dataset..."
         uv run python scripts/preprocessing/create_combined_dataset.py \
             --source data/processed/miiv data/processed/eicu \
             --names miiv eicu \
             --output "$processed_dir"
+        clear_runtime_caches "$processed_dir"
         info "Combined dataset creation complete: $processed_dir"
     fi
 

@@ -190,9 +190,7 @@ def filter_stays_with_missing_labels(
 
     # Get stays with valid labels for this task
     if not is_multilabel and task_name not in labels_df.columns:
-        raise ValueError(
-            f"Task '{task_name}' not found in labels. " f"Available: {labels_df.columns}"
-        )
+        raise ValueError(f"Task '{task_name}' not found in labels. Available: {labels_df.columns}")
 
     # Find stays with non-null labels
     if is_multilabel:
@@ -345,7 +343,15 @@ def compute_patient_level_splits(
     val_ratio: float,
     test_ratio: float,
 ) -> Tuple[
-    List[int], List[int], List[int], pl.DataFrame, pl.DataFrame, List[int], List[int], Set[int]
+    List[int],
+    List[int],
+    List[int],
+    pl.DataFrame,
+    pl.DataFrame,
+    List[int],
+    List[int],
+    Set[int],
+    List[int],
 ]:
     """Compute patient-level train/val/test splits from parquet files.
 
@@ -374,7 +380,12 @@ def compute_patient_level_splits(
 
     Returns:
         Tuple of (train_indices, val_indices, test_indices, static_df, labels_df,
-                  all_stay_ids, filtered_stay_ids, excluded_stay_ids).
+                  all_stay_ids, filtered_stay_ids, excluded_stay_ids,
+                  normalization_train_indices). The first three index lists are
+                  mapped over ``filtered_stay_ids`` for supervised tasks. The
+                  normalization index list is always mapped over ``all_stay_ids``
+                  so downstream tasks share the same dataset/seed normalizer as
+                  SSL pretraining.
     """
     logger.info("Loading data for split computation...")
 
@@ -401,6 +412,12 @@ def compute_patient_level_splits(
         all_stay_ids, labels_df, task_name
     )
 
+    # Build the full-cohort stay_id -> patient_id mapping once. Downstream
+    # optimization indices may be task-filtered, but normalization must remain
+    # anchored to this unfiltered index space.
+    logger.debug("Building stay-to-patient mapping")
+    stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
+
     # Try to load cached splits first
     logger.debug("Checking for cached splits")
     cached_splits = load_cached_splits(
@@ -415,6 +432,14 @@ def compute_patient_level_splits(
     )
     if cached_splits is not None:
         train_indices, val_indices, test_indices = cached_splits
+        with open(processed_dir / "splits.yaml") as f:
+            cached_split_info = yaml.safe_load(f) or {}
+        train_patients = set(cached_split_info.get("train_patients", []))
+        normalization_train_indices = [
+            idx
+            for idx, stay_id in enumerate(all_stay_ids)
+            if stay_to_patient[stay_id] in train_patients
+        ]
         return (
             train_indices,
             val_indices,
@@ -424,13 +449,10 @@ def compute_patient_level_splits(
             all_stay_ids,
             stay_ids,
             excluded_stay_ids,
+            normalization_train_indices,
         )
 
     logger.info("Computing full-cohort patient-level splits...")
-
-    # Get stay_id -> patient_id mapping
-    logger.debug("Building stay-to-patient mapping")
-    stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
 
     # Get unique full-cohort patients (sorted for deterministic ordering across
     # Python runs). Task filtering is applied later when mapping stay indices.
@@ -501,6 +523,13 @@ def compute_patient_level_splits(
         val_patients,
         test_patients,
     )
+    normalization_train_indices, _, _ = _indices_from_patient_sets(
+        all_stay_ids,
+        stay_to_patient,
+        train_patients,
+        val_patients,
+        test_patients,
+    )
 
     # Final validation: all stays should be accounted for
     total_assigned = len(train_indices) + len(val_indices) + len(test_indices)
@@ -523,6 +552,7 @@ def compute_patient_level_splits(
         all_stay_ids,
         stay_ids,
         excluded_stay_ids,
+        normalization_train_indices,
     )
 
 

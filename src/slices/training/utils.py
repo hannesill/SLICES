@@ -282,6 +282,8 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         if len(tag) > 64:
             tag = tag[:61] + "..."
         tags.append(tag)
+    if cfg.get("launch_commit") is not None:
+        tags.append(f"commit:{str(cfg.launch_commit)[:12]}")
     model_size = cfg.get("model_size")
     if model_size is not None:
         tags.append(f"model_size:{model_size}")
@@ -433,8 +435,7 @@ def report_and_validate_train_label_support(
 
     print("\n Train label support:")
     print(
-        "  - Dataset / task / seed / fraction: "
-        f"{dataset} / {task_name} / {seed} / {label_fraction}"
+        f"  - Dataset / task / seed / fraction: {dataset} / {task_name} / {seed} / {label_fraction}"
     )
     print(
         f"  - Full train split: {full_pos} positive, {full_neg} negative, "
