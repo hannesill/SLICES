@@ -175,3 +175,69 @@ def test_has_fairness_metrics_requires_regression_metric_family():
 
     assert mod.has_fairness_metrics(complete, ["gender", "age_group"]) is True
     assert mod.has_fairness_metrics(partial, ["gender", "age_group"]) is False
+
+
+def test_missing_fairness_report_requirements_flags_missing_requested_attribute():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "miiv", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "worst_group_auroc": 0.71,
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender", "race"])
+
+    assert "race: no valid fairness groups" in missing
+
+
+def test_missing_fairness_report_requirements_ignores_eicu_race():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "eicu", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "worst_group_auroc": 0.71,
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender", "race"])
+
+    assert missing == []
+
+
+def test_missing_fairness_report_requirements_rejects_nan_required_metric():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "miiv", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "worst_group_auroc": float("nan"),
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender"])
+
+    assert "gender: missing worst_group_auroc" in missing

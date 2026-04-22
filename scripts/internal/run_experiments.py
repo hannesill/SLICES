@@ -934,9 +934,39 @@ def _state_launch_commit(info: dict) -> str | None:
     return match.group(1) if match else None
 
 
+def _safe_path_component(value: str | None) -> str:
+    text = str(value or "unknown")
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", text)[:32] or "unknown"
+
+
+def _quarantine_stale_output_dir(
+    run: Run,
+    actual_commit: str | None,
+    expected_commit: str,
+) -> str | None:
+    output_dir = Path(run.output_dir)
+    if not output_dir.exists():
+        return None
+
+    parent = output_dir.parent
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    actual = _safe_path_component(actual_commit)
+    expected = _safe_path_component(expected_commit)
+    stem = f"{output_dir.name}.stale-{actual}-to-{expected}-{timestamp}"
+    candidate = parent / stem
+    suffix = 1
+    while candidate.exists():
+        suffix += 1
+        candidate = parent / f"{stem}-{suffix}"
+
+    output_dir.rename(candidate)
+    return str(candidate)
+
+
 def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None:
-    """Do not trust completed/skipped state from a different reviewed commit."""
+    """Do not trust state or artifacts from a different reviewed commit."""
     reset = 0
+    quarantined = 0
     for run in runs:
         expected_commit = _run_launch_commit(run)
         if expected_commit is None:
@@ -947,11 +977,10 @@ def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None
             continue
 
         status = info.get("status", "pending")
-        if status == "pending":
-            continue
-
         actual_commit = _state_launch_commit(info)
         if actual_commit == expected_commit:
+            continue
+        if status == "pending" and actual_commit is None and not Path(run.output_dir).exists():
             continue
 
         if status == "running":
@@ -961,16 +990,28 @@ def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None
             )
             continue
 
+        quarantined_output_dir = _quarantine_stale_output_dir(
+            run,
+            actual_commit,
+            expected_commit,
+        )
+        if quarantined_output_dir:
+            quarantined += 1
+
         state["runs"][run.id] = {
             "status": "pending",
             "reset_reason": (
                 f"launch_commit changed from {actual_commit or 'unknown'} " f"to {expected_commit}"
             ),
         }
+        if quarantined_output_dir:
+            state["runs"][run.id]["quarantined_output_dir"] = quarantined_output_dir
         reset += 1
 
     if reset:
         print(f"Reset {reset} stale run state entries for launch_commit mismatch.")
+    if quarantined:
+        print(f"Quarantined {quarantined} stale output directories before relaunch.")
 
 
 def is_pid_alive(pid: int) -> bool:
