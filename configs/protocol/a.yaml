@@ -1,0 +1,20 @@
+# @package _global_
+# Protocol A: strict linear probe for SSL representation quality.
+
+protocol: A
+
+training:
+  freeze_encoder: true
+  max_epochs: 50
+  early_stopping_patience: 10
+
+optimizer:
+  lr: 1.0e-4
+
+scheduler:
+  T_max: ${training.max_epochs}
+
+task:
+  head_type: linear
+  hidden_dims: []
+  dropout: 0.0

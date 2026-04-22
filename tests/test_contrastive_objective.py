@@ -188,7 +188,7 @@ class TestContrastiveForward:
         assert metrics["contrastive_n_visible_view2"] > 0
 
     def test_empty_timesteps_are_excluded_from_visible_counts(self, encoder, contrastive_config):
-        """Contrastive views should ignore hours with no observed variables."""
+        """Contrastive diagnostics should ignore hours with no observed variables."""
         obj = ContrastiveObjective(encoder, contrastive_config)
 
         B, T, D = 2, 8, 10
@@ -201,6 +201,12 @@ class TestContrastiveForward:
 
         assert metrics["contrastive_n_visible_view1"] <= 2
         assert metrics["contrastive_n_visible_view2"] <= 2
+        assert metrics["contrastive_n_visible_view1"] + metrics[
+            "contrastive_n_masked_view1"
+        ] == pytest.approx(2.0)
+        assert metrics["contrastive_n_visible_view2"] + metrics[
+            "contrastive_n_masked_view2"
+        ] == pytest.approx(2.0)
 
     def test_single_eligible_timestep_falls_back_to_shared_view(self, encoder):
         """Complementary masks should not create an all-padding view on sparse samples."""

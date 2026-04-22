@@ -1515,6 +1515,7 @@ class TestExporterHistoricalRecovery:
         assert "sprint:11" in tags
         assert "revision:thesis-v1" in tags
         assert "label_fraction:0.1" in tags
+        assert "ablation:label-efficiency" in tags
         assert any(tag.startswith("rerun-reason:") and len(tag) <= 64 for tag in tags)
 
     def test_build_per_seed_df_keeps_distinct_hp_ablation_configs(self):
@@ -1662,6 +1663,54 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["project_name"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
+
+    def test_cmd_run_respects_requested_sprint_order(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        sprint7p = runner.Run(
+            id="s7p_supervised_mortality_24h_miiv_seed42",
+            sprint="7p",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/sprint7p/supervised_mortality_24h_miiv_seed42",
+            task="mortality_24h",
+        )
+        sprint10 = runner.Run(
+            id="s10_supervised_mortality_24h_miiv_seed789",
+            sprint="10",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=789,
+            output_dir="outputs/sprint10/supervised_mortality_24h_miiv_seed789",
+            task="mortality_24h",
+        )
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [sprint7p, sprint10])
+        monkeypatch.setattr(runner, "load_state", lambda: {"version": 1, "runs": {}})
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            sprint=["10", "7p"],
+            revision=None,
+            reason=None,
+            project=None,
+            entity=None,
+            parallel=1,
+            dry_run=True,
+        )
+
+        runner.cmd_run(args)
+
+        assert [run.sprint for run in scheduled["runs"]] == ["10", "7p"]
 
     def test_pretrain_and_finetune_commands_resume_from_last_checkpoint(self, tmp_path):
         from scripts.internal.run_experiments import Run
@@ -1814,6 +1863,7 @@ class TestExperimentRunnerWandbOverrides:
                 "output_dir": "outputs/sprint7p/example",
                 "sprint": "7p",
                 "model_size": "medium",
+                "source_dataset": "eicu",
                 "label_fraction": 0.1,
                 "training": {"freeze_encoder": False},
                 "logging": {
@@ -1833,6 +1883,8 @@ class TestExperimentRunnerWandbOverrides:
         assert captured["kwargs"]["name"] == "s7p_finetune_miiv_mae_mortality_24h_seed42_medium"
         assert captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_medium_frac01"
         assert "model_size:medium" in captured["kwargs"]["tags"]
+        assert "ablation:label-efficiency" in captured["kwargs"]["tags"]
+        assert "ablation:transfer" in captured["kwargs"]["tags"]
 
     def test_transfer_finetune_command_propagates_source_dataset(self):
         from scripts.internal.run_experiments import Run
@@ -1924,6 +1976,28 @@ class TestExperimentRunnerWandbOverrides:
 
         assert "training.freeze_encoder=false" in cmd
         assert "task.head_type=linear" not in cmd
+
+    def test_manual_finetune_protocol_configs_encode_safe_defaults(self):
+        protocol_a = OmegaConf.load("configs/protocol/a.yaml")
+        protocol_b = OmegaConf.load("configs/protocol/b.yaml")
+
+        assert protocol_a.protocol == "A"
+        assert protocol_a.training.freeze_encoder is True
+        assert protocol_a.training.max_epochs == 50
+        assert protocol_a.training.early_stopping_patience == 10
+        assert protocol_a.optimizer.lr == pytest.approx(1.0e-4)
+        assert protocol_a.task.head_type == "linear"
+        assert list(protocol_a.task.hidden_dims) == []
+        assert protocol_a.task.dropout == 0.0
+
+        assert protocol_b.protocol == "B"
+        assert protocol_b.training.freeze_encoder is False
+        assert protocol_b.training.max_epochs == 100
+        assert protocol_b.training.early_stopping_patience == 10
+        assert protocol_b.optimizer.lr == pytest.approx(3.0e-4)
+        assert protocol_b.task.head_type == "mlp"
+        assert list(protocol_b.task.hidden_dims) == [64]
+        assert protocol_b.task.dropout == 0.3
 
 
 class TestExperimentRunnerRetry:
@@ -2357,6 +2431,13 @@ class TestXGBoostBaseline:
         cfg = OmegaConf.load("configs/xgboost.yaml")
 
         assert cfg.xgboost.n_jobs == 4
+
+    def test_xgboost_balanced_scale_pos_weight_uses_native_ratio(self):
+        from scripts.training.xgboost_baseline import _resolve_scale_pos_weight
+
+        labels = torch.tensor([0, 0, 0, 0, 1], dtype=torch.float32)
+
+        assert _resolve_scale_pos_weight("balanced", labels.numpy()) == pytest.approx(4.0)
 
 
 class TestTrainingScriptClassWeighting:

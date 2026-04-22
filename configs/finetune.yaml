@@ -1,14 +1,15 @@
 # Downstream Task Finetuning Configuration
 #
 # This config orchestrates finetuning a pretrained encoder on downstream tasks.
-# By default, the encoder is frozen and only the task head is trained (linear probing).
+# By default, the encoder is frozen and only the task head is trained. Use
+# protocol=a or protocol=b for thesis Protocol A/B-safe manual launches.
 #
 # Example usage:
-#   # Linear probing (frozen encoder, default)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt
+#   # Protocol A: strict linear probe (frozen encoder, linear head, 50 epochs, lr=1e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=a
 #
-#   # Full finetuning (train encoder + head)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.freeze_encoder=false
+#   # Protocol B: full finetune (unfrozen encoder, MLP head, 100 epochs, lr=3e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=b
 #
 #   # Gradual unfreezing (freeze for N epochs, then unfreeze)
 #   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
@@ -24,6 +25,7 @@ defaults:
   - model: transformer
   - tasks: mortality_24h
   - _self_
+  - optional protocol: null
 
 # Project info
 project_name: slices

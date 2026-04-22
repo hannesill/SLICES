@@ -45,7 +45,9 @@ xgboost:
   colsample_bytree: 0.8
   min_child_weight: 1
   early_stopping_rounds: 20
-  scale_pos_weight: balanced  # auto-compute from label distribution for binary tasks
+  # "balanced" resolves to XGBoost's native binary ratio: n_negative / n_positive.
+  # This is intentionally stronger than neural sqrt-balanced class weights.
+  scale_pos_weight: balanced
   n_jobs: 4  # cap per-process CPU use when Sprint 11 runs many baselines in parallel
 
 # Data loading

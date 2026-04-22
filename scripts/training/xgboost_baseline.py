@@ -35,6 +35,29 @@ def _xgboost_eval_metric(task_type: str) -> str:
     return "mae" if task_type == "regression" else "aucpr"
 
 
+def _add_wandb_tag(tags: list[str], tag: str) -> None:
+    """Append a W&B tag once, preserving caller order."""
+    if tag not in tags:
+        tags.append(tag)
+
+
+def _resolve_scale_pos_weight(scale_pos_weight, y_train) -> float | None:
+    """Resolve XGBoost's native positive-class weight.
+
+    ``balanced`` intentionally follows XGBoost's standard binary weighting:
+    ``n_negative / n_positive``. This differs from the neural sqrt-balanced
+    class weights, whose effective positive/negative ratio is milder.
+    """
+    if scale_pos_weight is None:
+        return None
+    if scale_pos_weight == "balanced":
+        y_train = np.asarray(y_train)
+        n_pos = float(y_train.sum())
+        n_neg = float(len(y_train) - n_pos)
+        return n_neg / max(n_pos, 1.0)
+    return float(scale_pos_weight)
+
+
 def _binary_ece(y_true, y_pred_proba, n_bins: int = 15) -> float:
     """Compute L1 expected calibration error with uniform probability bins."""
     y_true = np.asarray(y_true, dtype=float)
@@ -61,16 +84,17 @@ def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
     """Build W&B tags in parity with neural training runs."""
     tags = list(cfg.logging.get("wandb_tags", []))
     if cfg.get("sprint") is not None:
-        tags.append(f"sprint:{cfg.sprint}")
+        _add_wandb_tag(tags, f"sprint:{cfg.sprint}")
     if cfg.get("revision") is not None:
-        tags.append(f"revision:{cfg.revision}")
+        _add_wandb_tag(tags, f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
         tag = f"rerun-reason:{cfg.rerun_reason}"
         if len(tag) > 64:
             tag = tag[:61] + "..."
-        tags.append(tag)
+        _add_wandb_tag(tags, tag)
     if cfg.get("label_fraction", 1.0) < 1.0:
-        tags.append(f"label_fraction:{cfg.label_fraction}")
+        _add_wandb_tag(tags, f"label_fraction:{cfg.label_fraction}")
+        _add_wandb_tag(tags, "ablation:label-efficiency")
     return tags or None
 
 
@@ -171,22 +195,30 @@ def main(cfg: DictConfig) -> None:
         "n_jobs": n_jobs,
     }
 
+    resolved_scale_pos_weight = None
     if task_type == "regression":
         model = XGBRegressor(
             **common_params,
             eval_metric=_xgboost_eval_metric(task_type),
         )
     else:
-        # Auto-compute scale_pos_weight if requested
-        scale_pos_weight = xgb_cfg.get("scale_pos_weight", None)
-        if scale_pos_weight == "balanced":
-            n_pos = y_train.sum()
-            n_neg = len(y_train) - n_pos
-            scale_pos_weight = n_neg / max(n_pos, 1)
-            print(f"  scale_pos_weight (balanced): {scale_pos_weight:.2f}")
+        requested_scale_pos_weight = xgb_cfg.get("scale_pos_weight", None)
+        resolved_scale_pos_weight = _resolve_scale_pos_weight(requested_scale_pos_weight, y_train)
+        if resolved_scale_pos_weight is not None:
+            was_struct = OmegaConf.is_struct(cfg)
+            OmegaConf.set_struct(cfg, False)
+            cfg.xgboost.scale_pos_weight = resolved_scale_pos_weight
+            OmegaConf.set_struct(cfg, was_struct)
+            if requested_scale_pos_weight == "balanced":
+                print(
+                    "  scale_pos_weight (native balanced n_neg/n_pos): "
+                    f"{resolved_scale_pos_weight:.6g}"
+                )
+            else:
+                print(f"  scale_pos_weight: {resolved_scale_pos_weight:.6g}")
         model = XGBClassifier(
             **common_params,
-            scale_pos_weight=scale_pos_weight,
+            scale_pos_weight=resolved_scale_pos_weight,
             eval_metric=_xgboost_eval_metric(task_type),
         )
 
@@ -220,6 +252,8 @@ def main(cfg: DictConfig) -> None:
         metrics["test/accuracy"] = accuracy_score(y_test, y_pred_class)
         metrics["test/brier_score"] = brier_score_loss(y_test, y_pred_proba)
         metrics["test/ece"] = _binary_ece(y_test, y_pred_proba)
+        if resolved_scale_pos_weight is not None:
+            metrics["xgboost/scale_pos_weight"] = resolved_scale_pos_weight
 
     print("\n  Test Results:")
     for key, value in metrics.items():
