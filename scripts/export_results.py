@@ -5,7 +5,7 @@ Canonical results export pipeline for SLICES.
 Pulls all experiment runs from W&B, extracts config + test metrics, and produces
 structured parquet files:
 
-  - results/per_seed_results.parquet   — one row per W&B run (~3000 rows)
+  - results/per_seed_results.parquet   — one row per W&B run/export membership
   - results/aggregated_results.parquet — one row per unique config (~600 rows),
                                          with mean/std/min/max across seeds
   - results/statistical_tests.parquet  — pairwise Wilcoxon + Bonferroni +
@@ -42,7 +42,6 @@ from pathlib import Path
 
 import pandas as pd
 import wandb
-
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
@@ -91,6 +90,8 @@ FIXED_SEED_EXPERIMENT_TYPES = {
     "temporal_contrastive",
 }
 EXPECTED_FIXED_SEEDS = {42, 123, 456, 789, 1011}
+CAPACITY_PILOT_LABEL_FRACTIONS = {0.01, 0.1, 0.5}
+CAPACITY_PILOT_PARADIGMS = {"mae", "supervised"}
 
 # For core runs: the sprint tag is not part of the config identity.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
@@ -415,6 +416,53 @@ def _select_export_sprint(
     return requested_matches[0]
 
 
+def _is_capacity_pilot_inherited_row(row: dict) -> bool:
+    """Return True for default-size rows inherited into Sprint 7p comparisons."""
+    try:
+        label_fraction = float(row.get("label_fraction", 1.0))
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        row.get("dataset") == "miiv"
+        and row.get("task") == "mortality_24h"
+        and row.get("paradigm") in CAPACITY_PILOT_PARADIGMS
+        and row.get("model_size") == "default"
+        and any(
+            math.isclose(label_fraction, allowed, rel_tol=0.0, abs_tol=1e-9)
+            for allowed in CAPACITY_PILOT_LABEL_FRACTIONS
+        )
+    )
+
+
+def _additional_inherited_export_sprints(
+    row: dict,
+    tags: list[str],
+    requested_sprints: list[str] | None = None,
+) -> list[str]:
+    """Return inherited target sprints that need explicit export rows.
+
+    Unscoped and multi-sprint thesis exports need both the source-family row and
+    target-family comparison row for inherited baselines. Sprint tags are
+    intentionally coarse, so target-specific eligibility keeps unrelated source
+    rows out of the target family.
+    """
+    config_sprint = str(row.get("config_sprint", ""))
+    current_sprint = str(row.get("sprint", ""))
+    requested = {str(sprint) for sprint in requested_sprints} if requested_sprints else None
+    inherited: list[str] = []
+
+    for sprint in _sprint_tags(tags):
+        if requested is not None and sprint not in requested:
+            continue
+        if sprint in {config_sprint, current_sprint}:
+            continue
+        if sprint == "7p" and _is_capacity_pilot_inherited_row(row):
+            inherited.append(sprint)
+
+    return list(dict.fromkeys(inherited))
+
+
 def _recover_pretrain_metadata(
     run_name: str, config: dict
 ) -> tuple[float | None, float | None, str | None]:
@@ -664,7 +712,7 @@ def build_per_seed_df(
 ) -> pd.DataFrame:
     """Build the per-seed DataFrame from raw W&B runs.
 
-    One row per run with config columns + metric columns + wandb IDs.
+    One row per run/export membership with config columns, metrics, and W&B IDs.
     """
     rows = []
     failed = []
@@ -674,6 +722,19 @@ def build_per_seed_df(
         try:
             row = extract_run(run, ALL_METRICS, requested_sprints=requested_sprints)
             rows.append(row)
+            tags = [f"sprint:{s}" for s in json.loads(row.get("sprint_tags", "[]"))]
+            for inherited_sprint in _additional_inherited_export_sprints(
+                row,
+                tags,
+                requested_sprints=requested_sprints,
+            ):
+                rows.append(
+                    extract_run(
+                        run,
+                        ALL_METRICS,
+                        requested_sprints=[inherited_sprint],
+                    )
+                )
         except Exception as e:
             run_id = getattr(run, "id", "unknown")
             failed.append(run_id)
