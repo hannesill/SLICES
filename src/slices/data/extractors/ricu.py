@@ -189,6 +189,7 @@ class RicuExtractor(BaseExtractor):
             "dataset": self._metadata.get("dataset"),
             "ricu_seq_length_hours": int(self._metadata["seq_length_hours"]),
             "ricu_raw_export_horizon_hours": self._get_raw_export_horizon_hours(),
+            "feature_blocklist": sorted(FEATURE_BLOCKLIST),
             "files": files,
         }
 
