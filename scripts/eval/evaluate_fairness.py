@@ -62,6 +62,23 @@ log = logging.getLogger("evaluate_fairness")
 CORE_SPRINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "7p", "10", "11", "12", "13"]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
+BINARY_FAIRNESS_REQUIRED_METRICS = [
+    "n_valid_groups",
+    "worst_group_auroc",
+    "worst_group_auprc",
+    "auroc_gap",
+    "auprc_gap",
+    "demographic_parity_diff",
+    "equalized_odds_diff",
+    "disparate_impact_ratio",
+]
+REGRESSION_FAIRNESS_REQUIRED_METRICS = [
+    "n_valid_groups",
+    "worst_group_mse",
+    "worst_group_mae",
+    "mse_gap",
+    "mae_gap",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +185,26 @@ def _has_finite_summary_value(summary: dict[str, Any], key: str) -> bool:
     return True
 
 
+def _task_type_for_run(run) -> str:
+    """Infer fairness metric family from W&B config."""
+    config = run.config or {}
+    task_type = _get_nested(config, "task.task_type")
+    if task_type:
+        return str(task_type).lower()
+
+    task_name = _get_nested(config, "task.task_name", "")
+    if str(task_name).startswith("los"):
+        return "regression"
+    return "binary"
+
+
+def _required_fairness_metrics_for_run(run) -> list[str]:
+    """Return required aggregate fairness metrics for this run's task type."""
+    if _task_type_for_run(run) == "regression":
+        return REGRESSION_FAIRNESS_REQUIRED_METRICS
+    return BINARY_FAIRNESS_REQUIRED_METRICS
+
+
 def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
     """Check whether all requested dataset-appropriate fairness keys exist.
 
@@ -179,16 +216,12 @@ def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
         expected_attrs = _expected_fairness_attributes(run, protected_attributes)
         if not expected_attrs:
             return False
+        required_metrics = _required_fairness_metrics_for_run(run)
         for attr in expected_attrs:
             prefix = f"fairness/{attr}/"
-            if not _has_finite_summary_value(sm, f"{prefix}n_valid_groups"):
-                return False
-            has_task_metric = _has_finite_summary_value(
-                sm,
-                f"{prefix}worst_group_auroc",
-            ) or _has_finite_summary_value(sm, f"{prefix}worst_group_mse")
-            if not has_task_metric:
-                return False
+            for metric_name in required_metrics:
+                if not _has_finite_summary_value(sm, f"{prefix}{metric_name}"):
+                    return False
         return True
     except Exception:
         return False

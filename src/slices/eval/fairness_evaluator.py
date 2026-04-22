@@ -135,9 +135,10 @@ class FairnessEvaluator:
         Returns:
             Tensor of group indices (0-3).
         """
-        groups = torch.zeros_like(ages, dtype=torch.long)
+        groups = torch.full_like(ages, fill_value=-1, dtype=torch.long)
+        finite_ages = torch.isfinite(ages)
         for i, (low, high) in enumerate(self.AGE_BINS):
-            groups[(ages >= low) & (ages <= high)] = i
+            groups[finite_ages & (ages >= low) & (ages <= high)] = i
         return groups
 
     def _encode_attribute(
@@ -173,7 +174,7 @@ class FairnessEvaluator:
             ages_tensor = torch.tensor(ages)
             group_ids = self._bin_age(ages_tensor)
             # Mark missing ages as -1
-            group_ids[ages_tensor < 0] = -1
+            group_ids[(ages_tensor < 0) | ~torch.isfinite(ages_tensor)] = -1
             group_names = {i: label for i, label in enumerate(self.AGE_LABELS)}
             group_names[-1] = "unknown"
             return group_ids, group_names, patient_ids
@@ -430,6 +431,7 @@ class FairnessEvaluator:
         per_group_mae: Dict[str, float] = {}
         per_group_r2: Dict[str, float] = {}
         mse_values = []
+        mae_values = []
 
         for g in valid_groups:
             group_mask = group_ids == g
@@ -450,14 +452,21 @@ class FairnessEvaluator:
             per_group_mae[name] = mae
             per_group_r2[name] = r2
             mse_values.append(mse)
+            mae_values.append(mae)
 
         worst_group_mse = max(mse_values) if mse_values else float("nan")
+        worst_group_mae = max(mae_values) if mae_values else float("nan")
+        mse_gap = (max(mse_values) - min(mse_values)) if len(mse_values) >= 2 else float("nan")
+        mae_gap = (max(mae_values) - min(mae_values)) if len(mae_values) >= 2 else float("nan")
 
         return {
             "per_group_mse": per_group_mse,
             "per_group_mae": per_group_mae,
             "per_group_r2": per_group_r2,
             "worst_group_mse": worst_group_mse,
+            "worst_group_mae": worst_group_mae,
+            "mse_gap": mse_gap,
+            "mae_gap": mae_gap,
             "n_valid_groups": len(valid_groups),
             "group_sizes": group_sizes,
             "group_sample_sizes": group_sample_sizes,

@@ -151,6 +151,10 @@ class TestRegressionFairness:
         assert per_group_mse["F"] == pytest.approx(0.125)
         assert per_group_mae["M"] == pytest.approx(0.25)
         assert per_group_mae["F"] == pytest.approx(0.25)
+        assert report["gender"]["worst_group_mse"] == pytest.approx(0.125)
+        assert report["gender"]["worst_group_mae"] == pytest.approx(0.25)
+        assert report["gender"]["mse_gap"] == pytest.approx(0.0)
+        assert report["gender"]["mae_gap"] == pytest.approx(0.0)
 
 
 class TestAgeBinning:
@@ -184,6 +188,24 @@ class TestAgeBinning:
         assert groups[4].item() == 2  # 65 -> 65-79
         assert groups[5].item() == 2  # 79 -> 65-79
         assert groups[6].item() == 3  # 80 -> 80+
+
+    def test_null_and_nan_ages_are_unknown(self):
+        """Null and numeric NaN ages should not fall into the youngest bin."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "patient_id": [1, 2, 3],
+                "gender": ["M", "F", "M"],
+                "age": [None, float("nan"), 30.0],
+                "los_days": [5.0, 5.0, 5.0],
+            }
+        )
+        evaluator = FairnessEvaluator(static_df, protected_attributes=["age_group"])
+
+        group_ids, group_names, _ = evaluator._encode_attribute([1, 2, 3], "age_group")
+
+        assert group_ids.tolist() == [-1, -1, 0]
+        assert group_names[-1] == "unknown"
 
 
 class TestAttributeAutoDetection:

@@ -92,6 +92,12 @@ FIXED_SEED_EXPERIMENT_TYPES = {
 EXPECTED_FIXED_SEEDS = {42, 123, 456, 789, 1011}
 CAPACITY_PILOT_LABEL_FRACTIONS = {0.01, 0.1, 0.5}
 CAPACITY_PILOT_PARADIGMS = {"mae", "supervised"}
+PRIMARY_THESIS_TASKS = {
+    "mortality_24h",
+    "mortality_hospital",
+    "aki_kdigo",
+    "los_remaining",
+}
 
 # For core runs: the sprint tag is not part of the config identity.
 # lr/mask_ratio excluded because they're determined by protocol (redundant) or
@@ -157,7 +163,9 @@ TEST_METRICS = [
     "test/r2",
     # Universal
     "test/loss",
-    # Fairness (populated by scripts/eval/evaluate_fairness.py)
+    # Fairness (populated by scripts/eval/evaluate_fairness.py).
+    # Numeric fairness/* summary keys are also extracted dynamically so per-group
+    # LOS regression summaries are not dropped by this canonical aggregate list.
     "fairness/gender/worst_group_auroc",
     "fairness/gender/worst_group_auprc",
     "fairness/gender/auroc_gap",
@@ -165,6 +173,11 @@ TEST_METRICS = [
     "fairness/gender/demographic_parity_diff",
     "fairness/gender/equalized_odds_diff",
     "fairness/gender/disparate_impact_ratio",
+    "fairness/gender/worst_group_mse",
+    "fairness/gender/worst_group_mae",
+    "fairness/gender/mse_gap",
+    "fairness/gender/mae_gap",
+    "fairness/gender/n_valid_groups",
     "fairness/age_group/worst_group_auroc",
     "fairness/age_group/worst_group_auprc",
     "fairness/age_group/auroc_gap",
@@ -172,6 +185,11 @@ TEST_METRICS = [
     "fairness/age_group/demographic_parity_diff",
     "fairness/age_group/equalized_odds_diff",
     "fairness/age_group/disparate_impact_ratio",
+    "fairness/age_group/worst_group_mse",
+    "fairness/age_group/worst_group_mae",
+    "fairness/age_group/mse_gap",
+    "fairness/age_group/mae_gap",
+    "fairness/age_group/n_valid_groups",
     "fairness/race/worst_group_auroc",
     "fairness/race/worst_group_auprc",
     "fairness/race/auroc_gap",
@@ -179,6 +197,11 @@ TEST_METRICS = [
     "fairness/race/demographic_parity_diff",
     "fairness/race/equalized_odds_diff",
     "fairness/race/disparate_impact_ratio",
+    "fairness/race/worst_group_mse",
+    "fairness/race/worst_group_mae",
+    "fairness/race/mse_gap",
+    "fairness/race/mae_gap",
+    "fairness/race/n_valid_groups",
 ]
 
 VAL_METRICS = [
@@ -188,6 +211,7 @@ VAL_METRICS = [
 ]
 
 ALL_METRICS = TEST_METRICS + VAL_METRICS
+PERFORMANCE_TEST_METRICS = [metric for metric in TEST_METRICS if metric.startswith("test/")]
 
 # Canonical model variants used in the benchmark matrix.
 MODEL_VARIANTS = {
@@ -444,6 +468,7 @@ def _is_label_efficiency_inherited_row(row: dict) -> bool:
 
     return (
         math.isclose(label_fraction, 1.0, rel_tol=0.0, abs_tol=1e-9)
+        and not _has_hp_ablation_provenance(row)
         and row.get("phase") in {"finetune", "supervised"}
         and row.get("paradigm") in {"mae", "jepa", "contrastive", "supervised"}
         and row.get("model_size") == "default"
@@ -460,12 +485,23 @@ def _is_transfer_inherited_row(row: dict) -> bool:
 
     return (
         row.get("phase") == "finetune"
+        and not _has_hp_ablation_provenance(row)
         and row.get("paradigm") in {"mae", "jepa", "contrastive"}
         and row.get("dataset") in {"miiv", "eicu"}
         and row.get("protocol") == "B"
         and math.isclose(label_fraction, 1.0, rel_tol=0.0, abs_tol=1e-9)
         and row.get("model_size") == "default"
         and row.get("source_dataset") is None
+    )
+
+
+def _has_hp_ablation_provenance(row: dict) -> bool:
+    """Return whether a row carries upstream HP-ablation provenance."""
+    subtype = row.get("experiment_subtype")
+    return (
+        subtype in {"lr_ablation", "mask_ablation"}
+        or row.get("upstream_pretrain_lr") is not None
+        or row.get("upstream_pretrain_mask_ratio") is not None
     )
 
 
@@ -589,6 +625,15 @@ def _infer_model_size(config: dict) -> str:
     return f"d{d_model}_L{n_layers}"
 
 
+def _metric_value_or_nan(value) -> float:
+    """Coerce numeric W&B summary values to export floats."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float("nan")
+    if math.isnan(value) or math.isinf(value):
+        return float("nan")
+    return float(value)
+
+
 def extract_run(
     run,
     metric_keys: list[str],
@@ -632,14 +677,15 @@ def extract_run(
     # Extract metrics from summary
     metrics = {}
     for key in metric_keys:
-        val = summary.get(key, None)
-        if val is not None and isinstance(val, (int, float)):
-            if math.isnan(val) or math.isinf(val):
-                metrics[key] = float("nan")
-            else:
-                metrics[key] = float(val)
-        else:
-            metrics[key] = float("nan")
+        metrics[key] = _metric_value_or_nan(summary.get(key, None))
+
+    for key, value in summary.items():
+        if (
+            key.startswith("fairness/")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            metrics[key] = _metric_value_or_nan(value)
 
     config_sprint = str(config.get("sprint", ""))
     sprint_str = _select_export_sprint(config_sprint, tags, requested_sprints)
@@ -872,13 +918,46 @@ def build_per_seed_df(
     return df
 
 
+def filter_thesis_tasks(
+    per_seed_df: pd.DataFrame,
+    include_extension_tasks: bool = False,
+) -> pd.DataFrame:
+    """Apply the primary thesis task whitelist unless extension export is requested."""
+    if include_extension_tasks or per_seed_df.empty or "task" not in per_seed_df.columns:
+        return per_seed_df
+
+    mask = per_seed_df["task"].isin(PRIMARY_THESIS_TASKS)
+    excluded = per_seed_df.loc[~mask, "task"].dropna()
+    if not excluded.empty:
+        task_counts = excluded.value_counts().to_dict()
+        print(
+            "  Excluding extension task rows from primary thesis export: "
+            + ", ".join(f"{task}={count}" for task, count in sorted(task_counts.items())),
+            file=sys.stderr,
+        )
+    return per_seed_df.loc[mask].copy().reset_index(drop=True)
+
+
+def _metric_columns(df: pd.DataFrame) -> list[str]:
+    """Return static and dynamically discovered numeric metric columns."""
+    static_metrics = [c for c in ALL_METRICS if c in df.columns]
+    dynamic_fairness = [
+        c
+        for c in sorted(df.columns)
+        if c.startswith("fairness/")
+        and c not in static_metrics
+        and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    return static_metrics + dynamic_fairness
+
+
 def _aggregate_group(df: pd.DataFrame, fingerprint_cols: list[str]) -> pd.DataFrame:
     """Aggregate a subset of runs by the given fingerprint columns.
 
     Returns a DataFrame with one row per unique fingerprint, containing
     mean/std/min/max of metrics and lists of run IDs/seeds/groups.
     """
-    metric_cols = [c for c in ALL_METRICS if c in df.columns]
+    metric_cols = _metric_columns(df)
 
     # Sentinel for NaN in groupby
     work = df.copy()
@@ -1423,7 +1502,7 @@ def validate(
                     )
 
     # Check for runs with no test metrics at all
-    test_cols = [c for c in TEST_METRICS if c in per_seed_df.columns]
+    test_cols = [c for c in PERFORMANCE_TEST_METRICS if c in per_seed_df.columns]
     if test_cols:
         all_nan = per_seed_df[test_cols].isna().all(axis=1)
         if all_nan.any():
@@ -1462,6 +1541,31 @@ def validate(
                     + f" — missing {primary_metric}"
                 )
 
+    checkpoint_issues = _checkpoint_provenance_issues(per_seed_df)
+    if checkpoint_issues:
+        warnings.append(
+            f"WARNING: {len(checkpoint_issues)} evaluation runs have missing or failed "
+            "checkpoint provenance. Publication exports fail closed by default; use "
+            "--allow-incomplete only for exploratory exports."
+        )
+        for row, reason in checkpoint_issues[:10]:
+            warnings.append(
+                "  "
+                + ", ".join(
+                    f"{c}={row.get(c)}"
+                    for c in [
+                        "wandb_run_id",
+                        "paradigm",
+                        "dataset",
+                        "task",
+                        "seed",
+                        "phase",
+                    ]
+                    if c in row
+                )
+                + f" — {reason}"
+            )
+
     # Summary by experiment type
     n_runs = len(per_seed_df)
     n_configs = len(aggregated_df)
@@ -1475,6 +1579,78 @@ def validate(
     print(f"  Warnings: {len(warnings)}", file=sys.stderr)
 
     return warnings
+
+
+def _is_missing_export_value(value) -> bool:
+    """Return whether a scalar export value should be treated as missing."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(missing) if isinstance(missing, bool) else False
+
+
+def _is_true_export_value(value) -> bool:
+    """Return whether a W&B summary value represents boolean true."""
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 1
+    return False
+
+
+def _row_requires_checkpoint_provenance(row: pd.Series) -> bool:
+    """Return whether an exported evaluation row should carry checkpoint provenance."""
+    phase = row.get("phase")
+    if phase not in EVAL_PHASES:
+        return False
+    paradigm = str(row.get("paradigm", "")).lower()
+    if paradigm == "xgboost":
+        return False
+    return True
+
+
+def _checkpoint_provenance_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Series, str]]:
+    """Find evaluation rows whose logged test metrics lack reproducible checkpoint metadata."""
+    if per_seed_df.empty:
+        return []
+
+    issues = []
+    for _, row in per_seed_df.iterrows():
+        if not _row_requires_checkpoint_provenance(row):
+            continue
+
+        source = row.get("_eval_checkpoint_source")
+        if _is_missing_export_value(source):
+            issues.append((row, "missing _eval_checkpoint_source"))
+            continue
+
+        if source == "failed":
+            error = row.get("_best_ckpt_error")
+            reason = "recorded checkpoint-selection failure"
+            if not _is_missing_export_value(error):
+                reason += f": {error}"
+            issues.append((row, reason))
+            continue
+
+        if source not in {"best", "final"}:
+            issues.append((row, f"unrecognized _eval_checkpoint_source={source!r}"))
+            continue
+
+        if source == "best":
+            if _is_missing_export_value(row.get("_best_ckpt_path")):
+                issues.append((row, "best-checkpoint evaluation missing _best_ckpt_path"))
+                continue
+            if not _is_true_export_value(row.get("_best_ckpt_load_ok")):
+                issues.append((row, "best-checkpoint evaluation did not record load success"))
+
+    return issues
 
 
 # ---------------------------------------------------------------------------
@@ -1557,6 +1733,14 @@ def parse_args() -> argparse.Namespace:
             "publication exports fail closed by default."
         ),
     )
+    parser.add_argument(
+        "--include-extension-tasks",
+        action="store_true",
+        help=(
+            "Include optional extension tasks such as ICU mortality. By default, "
+            f"primary thesis exports are restricted to {sorted(PRIMARY_THESIS_TASKS)}."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.revision:
@@ -1600,7 +1784,15 @@ def main():
         requested_sprints=args.sprint,
         allow_extraction_failures=args.allow_extraction_failures,
     )
+    per_seed_df = filter_thesis_tasks(
+        per_seed_df,
+        include_extension_tasks=args.include_extension_tasks,
+    )
     print(f"  Shape: {per_seed_df.shape}", file=sys.stderr)
+
+    if per_seed_df.empty:
+        print("No rows remain after task filtering. Exiting.", file=sys.stderr)
+        sys.exit(0 if args.allow_incomplete else 1)
 
     print("\nBuilding aggregated DataFrame...", file=sys.stderr)
     aggregated_df = build_aggregated_df(per_seed_df)
