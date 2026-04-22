@@ -20,7 +20,6 @@ import pytest
 import torch
 import yaml
 from omegaconf import OmegaConf
-
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.labels.aki import AKILabelBuilder
 from slices.data.labels.los import LOSLabelBuilder
@@ -1133,6 +1132,50 @@ class TestMortalityPrecision:
         labels = builder.build_labels(raw_data)
         assert labels["label"][0] == 1
 
+    def test_timestamp_death_during_observation_excluded_even_if_outtime_after_obs(self):
+        """Observation-window timestamp deaths do not require outtime < obs_end."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary",
+            prediction_window_hours=24,
+            observation_window_hours=48,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, base + timedelta(hours=12), None, "timestamp", "admissions.deathtime", 1)],
+        )
+
+        labels = builder.build_labels(raw_data)
+
+        assert labels["label"][0] is None
+
+    def test_hospital_timestamp_death_during_observation_excluded_even_if_outtime_after_obs(self):
+        """Hospital mortality with obs window must exclude early observed deaths."""
+        base = datetime(2020, 1, 1, 0, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary",
+            prediction_window_hours=None,
+            observation_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        raw_data = self._make_mortality_data(
+            stays=[(1, base, base + timedelta(hours=96))],
+            deaths=[(1, base + timedelta(hours=12), None, "timestamp", "admissions.deathtime", 1)],
+        )
+
+        labels = builder.build_labels(raw_data)
+
+        assert labels["label"][0] is None
+
     def test_timestamp_precision_outside_window(self):
         """Exact timestamp after prediction window → negative."""
         base = datetime(2020, 1, 1, 0, 0, 0)
@@ -1619,6 +1662,133 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["project_name"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
+
+    def test_pretrain_and_finetune_commands_resume_from_last_checkpoint(self, tmp_path):
+        from scripts.internal.run_experiments import Run
+
+        pretrain_dir = tmp_path / "pretrain"
+        finetune_dir = tmp_path / "finetune"
+        (pretrain_dir / "checkpoints").mkdir(parents=True)
+        (finetune_dir / "checkpoints").mkdir(parents=True)
+        (pretrain_dir / "checkpoints" / "last.ckpt").write_text("checkpoint")
+        (finetune_dir / "checkpoints" / "last.ckpt").write_text("checkpoint")
+
+        pretrain = Run(
+            id="pretrain",
+            sprint="1",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(pretrain_dir),
+        )
+        finetune = Run(
+            id="finetune",
+            sprint="1",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(finetune_dir),
+            depends_on=[pretrain.id],
+            task="mortality_24h",
+            freeze_encoder=False,
+        )
+
+        pretrain_cmd = pretrain.build_command({})
+        assert f"ckpt_path={pretrain_dir / 'checkpoints' / 'last.ckpt'}" in pretrain_cmd
+        assert f"ckpt_path={finetune_dir / 'checkpoints' / 'last.ckpt'}" in finetune.build_command(
+            {pretrain.id: pretrain}
+        )
+
+    def test_recover_stale_running_resets_pid_reuse(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        state = {
+            "version": 1,
+            "runs": {"run-a": {"status": "running", "pid": 123, "command": "uv run expected"}},
+        }
+
+        monkeypatch.setattr(runner, "is_pid_alive", lambda pid: True)
+        monkeypatch.setattr(runner, "_pid_matches_command", lambda pid, command: False)
+
+        runner.recover_stale_running(state)
+
+        assert state["runs"]["run-a"]["status"] == "pending"
+        assert "pid" not in state["runs"]["run-a"]
+        assert "command" not in state["runs"]["run-a"]
+
+    def test_scheduler_exit_code_flags_pending_and_running_runs(self):
+        import scripts.internal.run_experiments as runner
+
+        runs = [
+            runner.Run(
+                id="pending-run",
+                sprint="1",
+                run_type="pretrain",
+                paradigm="mae",
+                dataset="miiv",
+                seed=42,
+                output_dir="outputs/pending",
+            ),
+            runner.Run(
+                id="running-run",
+                sprint="1",
+                run_type="pretrain",
+                paradigm="mae",
+                dataset="miiv",
+                seed=123,
+                output_dir="outputs/running",
+            ),
+        ]
+        state = {
+            "version": 1,
+            "runs": {
+                "pending-run": {"status": "pending"},
+                "running-run": {"status": "running"},
+            },
+        }
+
+        assert runner._scheduler_exit_code(runs, state) == 1
+
+    def test_cmd_tag_filters_inherited_sources_by_revision(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        class FakeRun:
+            def __init__(self, tags):
+                self.tags = tags
+                self.name = "fake"
+                self.id = "fake"
+                self.updated = False
+
+            def update(self):
+                self.updated = True
+
+        matching = FakeRun(["sprint:1", "revision:thesis-v1"])
+        stale = FakeRun(["sprint:1", "revision:old"])
+
+        class FakeApi:
+            default_entity = "entity"
+
+            def runs(self, path, filters):
+                return [matching, stale]
+
+        monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(Api=lambda: FakeApi()))
+
+        args = SimpleNamespace(
+            sprint=["2"],
+            dry_run=False,
+            project="slices",
+            entity="entity",
+            revision="thesis-v1",
+        )
+
+        runner.cmd_tag(args)
+
+        assert "sprint:2" in matching.tags
+        assert matching.updated is True
+        assert "sprint:2" not in stale.tags
+        assert stale.updated is False
 
     def test_wandb_logger_includes_model_size_metadata(self, monkeypatch):
         import slices.training.utils as training_utils
@@ -2656,6 +2826,9 @@ class TestExperimentRunnerMatrix:
         assert len(builder.runs) == 100
         assert sorted({run.seed for run in builder.runs}) == SEEDS_EXTENDED
         assert BASELINE_SPRINTS["7p"] == ["6", "10"]
+        assert "10" in BASELINE_SPRINTS["6"]
+        assert "10" in BASELINE_SPRINTS["7"]
+        assert "10" in BASELINE_SPRINTS["8"]
         assert {run.extra_overrides["+model_size"] for run in builder.runs} == {
             "medium",
             "large",

@@ -429,6 +429,27 @@ class RicuExtractor(BaseExtractor):
             )
             progress.update(task, completed=True)
 
+        obs_counts = dense_timeseries.select(
+            "stay_id",
+            pl.col("mask").list.eval(pl.element().list.sum()).list.sum().alias("_n_observed"),
+        )
+        empty_stay_ids = obs_counts.filter(pl.col("_n_observed") == 0)["stay_id"].to_list()
+        if empty_stay_ids:
+            console.print(
+                f"[yellow]Excluding {len(empty_stay_ids)} stays with zero observations "
+                "in the model input window.[/yellow]"
+            )
+            dense_timeseries = dense_timeseries.filter(~pl.col("stay_id").is_in(empty_stay_ids))
+            stays_filtered = stays_filtered.filter(~pl.col("stay_id").is_in(empty_stay_ids))
+            self._stays_cache = stays_filtered
+            stay_ids = stays_filtered["stay_id"].to_list()
+
+            if not stay_ids:
+                console.print(
+                    "[red]Error: No stays remaining after zero-observation filtering![/red]"
+                )
+                return
+
         # -----------------------------------------------------------------
         # Step 3: Extract labels
         # -----------------------------------------------------------------
@@ -505,6 +526,8 @@ class RicuExtractor(BaseExtractor):
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
+                "zero_observation_stays_excluded": True,
+                "n_zero_observation_stays_excluded": len(empty_stay_ids),
                 "label_manifest": label_manifest,
                 "label_quality_stats": self._label_quality_stats,
                 "upstream_source_signature": self._get_upstream_source_signature(),

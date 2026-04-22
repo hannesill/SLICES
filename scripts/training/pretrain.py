@@ -186,7 +186,10 @@ def main(cfg: DictConfig) -> None:
     print("4. Starting Training")
     print("=" * 80)
 
-    trainer.fit(model, datamodule=datamodule)
+    ckpt_path = cfg.get("ckpt_path", None)
+    if ckpt_path:
+        print(f"  Resuming trainer state from: {ckpt_path}")
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # =========================================================================
     # 5. Save Encoder

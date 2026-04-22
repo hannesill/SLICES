@@ -76,3 +76,36 @@ def test_resolve_evaluation_artifact_supports_xgboost(tmp_path):
 
     assert artifact_path == model_path
     assert source == "xgboost_model"
+
+
+def test_has_fairness_metrics_requires_requested_attribute_completeness():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv"},
+        summary_metrics={
+            "fairness/gender/n_valid_groups": 2,
+            "fairness/gender/worst_group_auroc": 0.71,
+            "fairness/age_group/n_valid_groups": 4,
+            "fairness/age_group/worst_group_auroc": 0.69,
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender", "age_group"]) is True
+    assert mod.has_fairness_metrics(run, ["gender", "age_group", "race"]) is False
+
+
+def test_has_fairness_metrics_ignores_race_for_eicu():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "eicu"},
+        summary_metrics={
+            "fairness/gender/n_valid_groups": 2,
+            "fairness/gender/worst_group_auroc": 0.71,
+            "fairness/age_group/n_valid_groups": 4,
+            "fairness/age_group/worst_group_auroc": 0.69,
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender", "age_group", "race"]) is True

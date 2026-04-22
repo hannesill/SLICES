@@ -931,6 +931,19 @@ class TestTransformerEncoderObsAware:
         # Different masks should produce different outputs (obs_proj sees mask)
         assert not torch.allclose(out_full, out_sparse, atol=1e-5)
 
+    def test_all_empty_obs_aware_row_is_finite(self, encoder):
+        """Fully unobserved rows should not create all-masked attention NaNs."""
+        B, T, D = 2, 8, 10
+        x = torch.zeros(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[1, 0, 0] = True
+        encoder.eval()
+
+        with torch.no_grad():
+            out = encoder(x, mask=obs_mask, padding_mask=obs_mask.any(dim=-1))
+
+        assert torch.isfinite(out).all()
+
     def test_backward_compatible(self, encoder):
         """Verify forward(x) without mask still uses input_proj."""
         B, T, D = 2, 8, 10

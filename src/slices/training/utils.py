@@ -164,7 +164,7 @@ def setup_pretrain_callbacks(cfg: DictConfig) -> list:
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename="ssl-{epoch:03d}-{val_loss:.4f}",
+        filename="ssl-{epoch:03d}",
         monitor="val/loss",
         mode="min",
         save_top_k=3,
@@ -232,13 +232,9 @@ def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune
 
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
-    # Replace '/' with '_' in monitor name for safe filenames.
-    # Lightning interprets '/' as a directory separator in checkpoint filenames,
-    # which causes best checkpoints to silently not save (empty directories).
-    safe_monitor = monitor.replace("/", "_")
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename=f"{checkpoint_prefix}-{{epoch:03d}}-{{{safe_monitor}:.4f}}",
+        filename=f"{checkpoint_prefix}-{{epoch:03d}}",
         monitor=monitor,
         mode=mode,
         save_top_k=3,

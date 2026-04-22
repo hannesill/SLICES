@@ -36,6 +36,9 @@ seed: 42
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
+# Resume from an interrupted trainer checkpoint.
+ckpt_path: null
+
 # Data configuration overrides
 # Base settings inherited from configs/data/ricu.yaml
 data:
