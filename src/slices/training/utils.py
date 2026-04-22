@@ -264,8 +264,10 @@ def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune
 # =============================================================================
 
 
-def _add_wandb_tag(tags: list[str], tag: str) -> None:
-    """Append a W&B tag once, preserving caller order."""
+def _add_wandb_tag(tags: list[str], tag: str | None) -> None:
+    """Append a W&B tag once, ignoring unset values."""
+    if not tag:
+        return
     if tag not in tags:
         tags.append(tag)
 
@@ -279,8 +281,10 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         return None
 
     tags = list(cfg.logging.get("wandb_tags", []))
-    if cfg.get("sprint") is not None:
-        _add_wandb_tag(tags, f"sprint:{cfg.sprint}")
+    if cfg.get("experiment_class") is not None:
+        _add_wandb_tag(tags, f"experiment_class:{cfg.experiment_class}")
+    if cfg.get("experiment_subtype") is not None:
+        _add_wandb_tag(tags, f"experiment_subtype:{cfg.experiment_subtype}")
     if cfg.get("revision") is not None:
         _add_wandb_tag(tags, f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
@@ -290,6 +294,19 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         _add_wandb_tag(tags, tag)
     if cfg.get("launch_commit") is not None:
         _add_wandb_tag(tags, f"commit:{str(cfg.launch_commit)[:12]}")
+    if cfg.get("phase") is not None:
+        _add_wandb_tag(tags, f"phase:{cfg.phase}")
+    if cfg.get("dataset") is not None:
+        _add_wandb_tag(tags, f"dataset:{cfg.dataset}")
+    if cfg.get("paradigm") is not None:
+        _add_wandb_tag(tags, f"paradigm:{cfg.paradigm}")
+    elif cfg.get("ssl") and cfg.ssl.get("name") is not None:
+        _add_wandb_tag(tags, f"paradigm:{cfg.ssl.name}")
+    task_name = cfg.get("task", {}).get("task_name")
+    if task_name is not None:
+        _add_wandb_tag(tags, f"task:{task_name}")
+    if cfg.get("seed") is not None:
+        _add_wandb_tag(tags, f"seed:{cfg.seed}")
     model_size = cfg.get("model_size")
     if model_size is not None:
         _add_wandb_tag(tags, f"model_size:{model_size}")
@@ -297,7 +314,9 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     # Add downstream protocol family tag. Supervised-from-scratch shares the
     # Protocol B optimization budget; the phase tag distinguishes it from SSL.
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
-    if freeze_encoder is not None:
+    if cfg.get("protocol") is not None:
+        _add_wandb_tag(tags, f"protocol:{cfg.protocol}")
+    elif freeze_encoder is not None:
         protocol = "A" if freeze_encoder else "B"
         _add_wandb_tag(tags, f"protocol:{protocol}")
 

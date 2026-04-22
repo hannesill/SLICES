@@ -22,8 +22,9 @@ dataset: miiv
 # Paradigm
 paradigm: xgboost
 
-# Experiment group (stored as a sprint tag for historical W&B compatibility)
-sprint: null
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -48,7 +49,7 @@ xgboost:
   # "balanced" resolves to XGBoost's native binary ratio: n_negative / n_positive.
   # This is intentionally stronger than neural sqrt-balanced class weights.
   scale_pos_weight: balanced
-  n_jobs: 4  # cap per-process CPU use when Sprint 11 runs many baselines in parallel
+  n_jobs: 4  # cap per-process CPU use when many baselines run in parallel
 
 # Data loading
 training:
@@ -66,7 +67,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: s${sprint}_xgboost_${dataset}_${task.task_name}_seed${seed}
+  run_name: ${experiment_class}_xgboost_${dataset}_${task.task_name}_seed${seed}
   wandb_group: xgboost_${dataset}_${task.task_name}
   wandb_tags:
     - "phase:baseline"

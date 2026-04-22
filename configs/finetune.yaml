@@ -37,10 +37,9 @@ dataset: miiv  # miiv | eicu | combined
 # Paradigm — auto-detected from checkpoint in finetune.py; override with paradigm=jepa etc.
 paradigm: mae
 
-# Experiment group (stored as a sprint tag for historical W&B compatibility)
-sprint: null
-
-# Revision tracking (for rerunning experiment groups with changed settings)
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -146,7 +145,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: s${sprint}_finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
+  run_name: ${experiment_class}_finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
   wandb_group: finetune_${dataset}_${paradigm}_${task.task_name}
   wandb_tags:
     - "phase:finetune"

@@ -8,17 +8,17 @@ summary.
 
 Designed for batch evaluation of the benchmark fairness corpus across finetune,
 supervised, and classical baseline runs. Supports resumability via
---skip-existing (default) and scoping via --sprint/--paradigm/--dataset filters.
+--skip-existing (default) and scoping via --experiment-class/--paradigm/--dataset filters.
 
 Usage:
     # Evaluate the benchmark fairness corpus for one explicit revision
     uv run python scripts/eval/evaluate_fairness.py \
         --project slices-thesis --revision thesis-v1 --entity <entity>
 
-    # Scope to specific sprint/dataset
+    # Scope to specific experiment class/dataset
     uv run python scripts/eval/evaluate_fairness.py \
         --project slices-thesis --revision thesis-v1 --entity <entity> \
-        --sprint 1 --dataset miiv
+        --experiment-class core_ssl_benchmark --dataset miiv
 
     # Preview which runs would be evaluated
     uv run python scripts/eval/evaluate_fairness.py \
@@ -59,7 +59,16 @@ log = logging.getLogger("evaluate_fairness")
 # Constants
 # ---------------------------------------------------------------------------
 
-CORE_SPRINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "7p", "10", "11", "12", "13"]
+DEFAULT_EXPERIMENT_CLASSES = [
+    "core_ssl_benchmark",
+    "label_efficiency",
+    "cross_dataset_transfer",
+    "hp_robustness",
+    "capacity_study",
+    "classical_baselines",
+    "ts2vec_extension",
+    "smart_external_reference",
+]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 BINARY_FAIRNESS_REQUIRED_METRICS = [
@@ -107,7 +116,7 @@ def _retry(fn, max_retries=3, base_delay=5):
 def fetch_eval_runs(
     project: str,
     entity: Optional[str],
-    sprints: Optional[list[str]],
+    experiment_classes: Optional[list[str]],
     paradigms: Optional[list[str]],
     datasets: Optional[list[str]],
     phases: list[str],
@@ -122,8 +131,8 @@ def fetch_eval_runs(
     filters: dict = {"state": "finished"}
     tag_filters: list[str] = []
 
-    if sprints and len(sprints) == 1:
-        tag_filters.append(f"sprint:{sprints[0]}")
+    if experiment_classes and len(experiment_classes) == 1:
+        tag_filters.append(f"experiment_class:{experiment_classes[0]}")
     if paradigms and len(paradigms) == 1:
         tag_filters.append(f"paradigm:{paradigms[0]}")
     if datasets and len(datasets) == 1:
@@ -140,7 +149,9 @@ def fetch_eval_runs(
     runs_iter = api.runs(path, filters=filters or {}, order="-created_at")
 
     # Client-side filtering for multi-value filters
-    sprint_set = set(sprints) if sprints and len(sprints) > 1 else None
+    experiment_class_set = (
+        set(experiment_classes) if experiment_classes and len(experiment_classes) > 1 else None
+    )
     paradigm_set = set(paradigms) if paradigms and len(paradigms) > 1 else None
     dataset_set = set(datasets) if datasets and len(datasets) > 1 else None
     phase_set = set(phases) if phases and len(phases) > 1 else None
@@ -150,7 +161,10 @@ def fetch_eval_runs(
     for run in runs_iter:
         tags = set(run.tags)
 
-        if sprint_set and not any(f"sprint:{s}" in tags for s in sprint_set):
+        if experiment_class_set and not any(
+            f"experiment_class:{experiment_class}" in tags
+            for experiment_class in experiment_class_set
+        ):
             continue
         if paradigm_set and not any(f"paradigm:{p}" in tags for p in paradigm_set):
             continue
@@ -609,9 +623,9 @@ def parse_args() -> argparse.Namespace:
         help="W&B entity (default: $WANDB_ENTITY)",
     )
     parser.add_argument(
-        "--sprint",
+        "--experiment-class",
         nargs="+",
-        help="Filter to experiment group(s). Default: benchmark fairness groups",
+        help="Filter to experiment class(es). Default: downstream-producing benchmark classes",
     )
     parser.add_argument("--paradigm", nargs="+", help="Filter to paradigm(s)")
     parser.add_argument("--dataset", nargs="+", help="Filter to dataset(s)")
@@ -696,16 +710,16 @@ def main() -> None:
     device = _resolve_device(args.device)
     log.info("Device: %s", device)
 
-    # Default to the benchmark fairness groups if not specified.
-    sprints = args.sprint or CORE_SPRINTS
-    log.info("Experiment groups: %s", sprints)
+    # Default to the benchmark fairness classes if not specified.
+    experiment_classes = args.experiment_class or DEFAULT_EXPERIMENT_CLASSES
+    log.info("Experiment classes: %s", experiment_classes)
 
     # Fetch runs from W&B
     runs = _retry(
         lambda: fetch_eval_runs(
             project=args.project,
             entity=args.entity,
-            sprints=sprints,
+            experiment_classes=experiment_classes,
             paradigms=args.paradigm,
             datasets=args.dataset,
             phases=args.phase,

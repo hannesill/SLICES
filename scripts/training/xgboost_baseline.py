@@ -35,8 +35,10 @@ def _xgboost_eval_metric(task_type: str) -> str:
     return "mae" if task_type == "regression" else "aucpr"
 
 
-def _add_wandb_tag(tags: list[str], tag: str) -> None:
-    """Append a W&B tag once, preserving caller order."""
+def _add_wandb_tag(tags: list[str], tag: str | None) -> None:
+    """Append a W&B tag once, ignoring unset values."""
+    if not tag:
+        return
     if tag not in tags:
         tags.append(tag)
 
@@ -83,8 +85,10 @@ def _binary_ece(y_true, y_pred_proba, n_bins: int = 15) -> float:
 def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
     """Build W&B tags in parity with neural training runs."""
     tags = list(cfg.logging.get("wandb_tags", []))
-    if cfg.get("sprint") is not None:
-        _add_wandb_tag(tags, f"sprint:{cfg.sprint}")
+    if cfg.get("experiment_class") is not None:
+        _add_wandb_tag(tags, f"experiment_class:{cfg.experiment_class}")
+    if cfg.get("experiment_subtype") is not None:
+        _add_wandb_tag(tags, f"experiment_subtype:{cfg.experiment_subtype}")
     if cfg.get("revision") is not None:
         _add_wandb_tag(tags, f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
@@ -92,6 +96,19 @@ def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
         if len(tag) > 64:
             tag = tag[:61] + "..."
         _add_wandb_tag(tags, tag)
+    if cfg.get("phase") is not None:
+        _add_wandb_tag(tags, f"phase:{cfg.phase}")
+    if cfg.get("dataset") is not None:
+        _add_wandb_tag(tags, f"dataset:{cfg.dataset}")
+    if cfg.get("paradigm") is not None:
+        _add_wandb_tag(tags, f"paradigm:{cfg.paradigm}")
+    task_name = cfg.get("task", {}).get("task_name")
+    if task_name is not None:
+        _add_wandb_tag(tags, f"task:{task_name}")
+    if cfg.get("seed") is not None:
+        _add_wandb_tag(tags, f"seed:{cfg.seed}")
+    if cfg.get("protocol") is not None:
+        _add_wandb_tag(tags, f"protocol:{cfg.protocol}")
     if cfg.get("label_fraction", 1.0) < 1.0:
         _add_wandb_tag(tags, f"label_fraction:{cfg.label_fraction}")
         _add_wandb_tag(tags, "ablation:label-efficiency")
