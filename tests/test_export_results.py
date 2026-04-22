@@ -89,6 +89,59 @@ def test_extract_run_uses_requested_inherited_sprint_tag_for_family():
     assert requested_row["config_sprint"] == "6"
 
 
+def test_build_per_seed_df_adds_revision_wide_capacity_membership_for_inherited_row():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "sprint": "6",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "encoder": {"d_model": 64, "n_layers": 2},
+            "training": {"freeze_encoder": False},
+            "task": {"task_name": "mortality_24h"},
+            "label_fraction": 0.1,
+        },
+        tags=["sprint:6", "sprint:7p", "phase:finetune"],
+        name="s6_inherited_capacity_baseline",
+    )
+
+    df = mod.build_per_seed_df([run])
+
+    assert set(df["experiment_type"]) == {"label_efficiency", "capacity_pilot"}
+    capacity = df[df["experiment_type"] == "capacity_pilot"].iloc[0]
+    assert capacity["sprint"] == "7p"
+    assert capacity["config_sprint"] == "6"
+    assert capacity["wandb_run_id"] == "dummy-id"
+
+    scoped_df = mod.build_per_seed_df([run], requested_sprints=["6", "7p"])
+    assert set(scoped_df["experiment_type"]) == {"label_efficiency", "capacity_pilot"}
+
+
+def test_build_per_seed_df_does_not_add_capacity_membership_for_irrelevant_tagged_rows():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "sprint": "6",
+            "dataset": "eicu",
+            "paradigm": "jepa",
+            "seed": 42,
+            "encoder": {"d_model": 64, "n_layers": 2},
+            "training": {"freeze_encoder": False},
+            "task": {"task_name": "mortality_hospital"},
+            "label_fraction": 0.05,
+        },
+        tags=["sprint:6", "sprint:7p", "phase:finetune"],
+        name="s6_coarsely_tagged_but_not_capacity_scope",
+    )
+
+    df = mod.build_per_seed_df([run])
+
+    assert df["experiment_type"].tolist() == ["label_efficiency"]
+
+
 def test_build_statistical_tests_df_adds_classical_context_rows():
     mod = importlib.import_module("scripts.export_results")
 
