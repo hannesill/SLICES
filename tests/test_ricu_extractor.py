@@ -373,6 +373,23 @@ class TestRicuExtractorInit:
         after_change = RicuExtractor(config)
         assert after_change._check_existing_extraction() is None
 
+    def test_upstream_signature_includes_feature_blocklist(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        signature = RicuExtractor(config)._get_upstream_source_signature()
+
+        assert "feature_blocklist" in signature
+        assert "norepi_dur" in signature["feature_blocklist"]
+        assert "qsofa" in signature["feature_blocklist"]
+
 
 # ---------------------------------------------------------------------------
 # Core extraction methods
@@ -650,6 +667,63 @@ class TestRicuExtractorRun:
         assert "ricu_metadata" in meta
         assert "upstream_source_signature" in meta
         assert len(meta["upstream_source_signature"]["files"]) >= 4
+
+    def test_run_excludes_derived_blocklisted_features(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Derived RICU concepts should not enter processed model inputs."""
+        metadata_path = ricu_output_dir / "ricu_metadata.yaml"
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+        metadata["feature_names"] = [
+            "hr",
+            "norepi_dur",
+            "norepi60",
+            "sofa",
+            "pafi",
+            "qsofa",
+            "sbp",
+            "crea",
+        ]
+        metadata["n_features"] = len(metadata["feature_names"])
+        with open(metadata_path, "w") as f:
+            yaml.safe_dump(metadata, f)
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path).with_columns(
+            pl.lit(30.0).alias("norepi_dur"),
+            pl.lit(0.2).alias("norepi60"),
+            pl.lit(4.0).alias("sofa"),
+            pl.lit(250.0).alias("pafi"),
+            pl.lit(2.0).alias("qsofa"),
+            pl.lit(True).alias("norepi_dur_mask"),
+            pl.lit(True).alias("norepi60_mask"),
+            pl.lit(True).alias("sofa_mask"),
+            pl.lit(True).alias("pafi_mask"),
+            pl.lit(True).alias("qsofa_mask"),
+        )
+        timeseries.write_parquet(timeseries_path)
+
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+        RicuExtractor(config).run()
+
+        with open(output_dir / "metadata.yaml") as f:
+            meta = yaml.safe_load(f)
+        assert meta["feature_names"] == ["hr", "sbp", "crea"]
+        assert meta["n_features"] == 3
+
+        ts = pl.read_parquet(output_dir / "timeseries.parquet")
+        first_ts = ts["timeseries"].to_list()[0]
+        first_mask = ts["mask"].to_list()[0]
+        assert len(first_ts[0]) == 3
+        assert len(first_mask[0]) == 3
 
     def test_run_filters_short_stays(self, ricu_output_dir: Path, tmp_path: Path) -> None:
         output_dir = tmp_path / "processed"

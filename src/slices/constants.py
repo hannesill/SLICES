@@ -38,8 +38,65 @@ PIN_MEMORY: bool = True
 # =============================================================================
 # Feature Blocklist
 # =============================================================================
-# RICU concepts that must be excluded from model input:
-# - los_hosp / los_icu: leak downstream task labels (updated hourly by RICU,
-#   directly reveal the length-of-stay answer)
-# - dur_var: internal ricu helper variable, not a clinical concept
-FEATURE_BLOCKLIST: frozenset = frozenset({"los_hosp", "los_icu", "dur_var"})
+# RICU concepts that must be excluded from model input because they either
+# directly leak labels, encode future treatment duration, or are high-level
+# summaries derived from lower-level features already present in the benchmark.
+DIRECT_LEAKAGE_FEATURES: frozenset[str] = frozenset(
+    {
+        # Updated hourly by RICU and directly reveal length-of-stay targets.
+        "los_hosp",
+        "los_icu",
+        # Internal ricu helper variable, not a clinical concept.
+        "dur_var",
+    }
+)
+
+FUTURE_DERIVED_FEATURES: frozenset[str] = frozenset(
+    {
+        # Medication duration concepts use stop/end times and can encode
+        # post-observation-window treatment duration in rows timestamped <24h.
+        "dobu_dur",
+        "dopa_dur",
+        "epi_dur",
+        "norepi_dur",
+        # Derived from vasopressor rate + duration concepts.
+        "dobu60",
+        "dopa60",
+        "epi60",
+        "norepi60",
+        "vaso_ind",
+        # Derived sepsis/cardio-SOFA features downstream of the duration concepts
+        # or suspected-infection windows; keep raw ingredients instead.
+        "sofa_cardio",
+        "sofa",
+        "susp_inf",
+        "sep3",
+    }
+)
+
+DERIVED_SUMMARY_FEATURES: frozenset[str] = frozenset(
+    {
+        # Ratios or dose-equivalent summaries; raw components/rates are retained.
+        "pafi",
+        "safi",
+        "norepi_equiv",
+        # Windowed or composite clinical indicators/scores; raw components are
+        # retained where available.
+        "vent_ind",
+        "gcs",
+        "urine24",
+        "sofa_resp",
+        "sofa_coag",
+        "sofa_liver",
+        "sofa_cns",
+        "sofa_renal",
+        "qsofa",
+        "sirs",
+        "news",
+        "mews",
+    }
+)
+
+FEATURE_BLOCKLIST: frozenset[str] = (
+    DIRECT_LEAKAGE_FEATURES | FUTURE_DERIVED_FEATURES | DERIVED_SUMMARY_FEATURES
+)
