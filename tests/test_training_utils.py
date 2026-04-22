@@ -21,6 +21,7 @@ from slices.training.utils import (
     build_optimizer,
     build_scheduler,
     report_and_validate_train_label_support,
+    run_fairness_evaluation,
     save_encoder_checkpoint,
     setup_finetune_callbacks,
 )
@@ -351,6 +352,78 @@ class TestSetupFinetuneCallbacks:
             assert LabelBuilder.config_hash(hydra_config) == LabelBuilder.config_hash(
                 package_config
             )
+
+
+class TestRunFairnessEvaluation:
+    """Tests for inline fairness evaluator setup."""
+
+    def test_passes_task_type_to_fairness_evaluator(self, monkeypatch):
+        import slices.eval.fairness_evaluator as fairness_module
+        import slices.eval.inference as inference_module
+
+        captured = {}
+
+        class DummyEvaluator:
+            def __init__(
+                self,
+                static_df,
+                protected_attributes,
+                min_subgroup_size,
+                task_type,
+                dataset_name,
+            ):
+                captured["task_type"] = task_type
+                captured["dataset_name"] = dataset_name
+
+            def evaluate(self, predictions, labels_tensor, all_stay_ids):
+                return {"gender": {"n_valid_groups": 1}}
+
+            def print_report(self, fairness_report):
+                captured["printed"] = fairness_report
+
+        class DummyModel:
+            device = torch.device("cpu")
+
+        class DummyDataset:
+            static_df = object()
+
+        class DummyDataModule:
+            dataset = DummyDataset()
+            processed_dir = Path("data/processed/miiv")
+
+            def test_dataloader(self):
+                return []
+
+        monkeypatch.setattr(
+            inference_module,
+            "run_inference",
+            lambda *args, **kwargs: (torch.tensor([1.2]), torch.tensor([1.0]), [10]),
+        )
+        monkeypatch.setattr(fairness_module, "FairnessEvaluator", DummyEvaluator)
+        monkeypatch.setattr(
+            fairness_module,
+            "flatten_fairness_report",
+            lambda report: {"fairness/gender/n_valid_groups": 1},
+        )
+
+        cfg = OmegaConf.create(
+            {
+                "task": {"task_type": "regression"},
+                "eval": {
+                    "fairness": {
+                        "enabled": True,
+                        "protected_attributes": ["gender"],
+                        "min_subgroup_size": 5,
+                    }
+                },
+            }
+        )
+
+        report = run_fairness_evaluation(DummyModel(), DummyDataModule(), cfg)
+
+        assert report == {"gender": {"n_valid_groups": 1}}
+        assert captured["task_type"] == "regression"
+        assert captured["dataset_name"] == "miiv"
 
 
 class TestSupervisedCheckpointFormat:

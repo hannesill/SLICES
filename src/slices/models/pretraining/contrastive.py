@@ -227,6 +227,7 @@ class ContrastiveObjective(BaseSSLObjective):
                 full_2,
                 effective_mask_1,
                 effective_mask_2,
+                valid_timestep_mask,
             )
         else:
             # 4b. Instance mode: mean-pool -> project -> instance NT-Xent
@@ -236,7 +237,13 @@ class ContrastiveObjective(BaseSSLObjective):
             z1 = self.projection_head(pooled_1)  # (B, proj_dim)
             z2 = self.projection_head(pooled_2)  # (B, proj_dim)
 
-            loss, metrics = self._nt_xent_loss(z1, z2, effective_mask_1, effective_mask_2)
+            loss, metrics = self._nt_xent_loss(
+                z1,
+                z2,
+                effective_mask_1,
+                effective_mask_2,
+                valid_timestep_mask,
+            )
 
         return loss, metrics
 
@@ -258,6 +265,30 @@ class ContrastiveObjective(BaseSSLObjective):
         summed = (encoded * mask_expanded).sum(dim=1)  # (B, d_model)
         counts = padding_mask.sum(dim=1, keepdim=True).clamp(min=1).float()  # (B, 1)
         return summed / counts
+
+    @staticmethod
+    def _timestep_count_metrics(
+        ssl_mask_1: torch.Tensor,
+        ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
+    ) -> Dict[str, float]:
+        """Count visible/masked timesteps over eligible non-empty timesteps only."""
+        eligible_mask = eligible_mask.to(device=ssl_mask_1.device, dtype=torch.bool)
+        ssl_mask_1 = ssl_mask_1.to(dtype=torch.bool) & eligible_mask
+        ssl_mask_2 = ssl_mask_2.to(dtype=torch.bool) & eligible_mask
+        denom = max(int(eligible_mask.shape[0]), 1)
+
+        n_vis_1 = ssl_mask_1.sum().item()
+        n_vis_2 = ssl_mask_2.sum().item()
+        n_masked_1 = ((~ssl_mask_1) & eligible_mask).sum().item()
+        n_masked_2 = ((~ssl_mask_2) & eligible_mask).sum().item()
+
+        return {
+            "contrastive_n_visible_view1": n_vis_1 / denom,
+            "contrastive_n_visible_view2": n_vis_2 / denom,
+            "contrastive_n_masked_view1": n_masked_1 / denom,
+            "contrastive_n_masked_view2": n_masked_2 / denom,
+        }
 
     @staticmethod
     def _scatter_to_full(
@@ -286,6 +317,7 @@ class ContrastiveObjective(BaseSSLObjective):
         full_2: torch.Tensor,
         ssl_mask_1: torch.Tensor,
         ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute temporal NT-Xent loss on overlapping timestep tokens.
 
@@ -298,6 +330,7 @@ class ContrastiveObjective(BaseSSLObjective):
             full_2: (B, T, d_enc) scattered encoded tokens from view 2.
             ssl_mask_1: (B, T) True = visible in view 1.
             ssl_mask_2: (B, T) True = visible in view 2.
+            eligible_mask: (B, T) True for non-empty timesteps eligible for masking.
 
         Returns:
             (loss, metrics_dict)
@@ -313,6 +346,11 @@ class ContrastiveObjective(BaseSSLObjective):
         if N < 2:
             loss = full_1.sum() * 0.0  # zero with grad connectivity
             with torch.no_grad():
+                count_metrics = self._timestep_count_metrics(
+                    ssl_mask_1,
+                    ssl_mask_2,
+                    eligible_mask,
+                )
                 metrics = {
                     "contrastive_loss": loss.detach(),
                     "ssl_loss": loss.detach(),
@@ -320,13 +358,10 @@ class ContrastiveObjective(BaseSSLObjective):
                     "contrastive_pos_similarity": torch.tensor(0.0),
                     "contrastive_temperature": temperature,
                     "contrastive_n_timesteps": T,
-                    "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
-                    "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
-                    "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
-                    "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
                     "contrastive_n_overlap_tokens": 0,
                     "contrastive_n_overlap_per_sample": 0.0,
                 }
+                metrics.update(count_metrics)
             return loss, metrics
 
         # Gather overlap tokens — boolean indexing in row-major order ensures
@@ -358,6 +393,11 @@ class ContrastiveObjective(BaseSSLObjective):
             preds = sim_matrix.argmax(dim=1)
             accuracy = (preds == labels).float().mean()
             pos_sim = F.cosine_similarity(z1, z2, dim=-1).mean()
+            count_metrics = self._timestep_count_metrics(
+                ssl_mask_1,
+                ssl_mask_2,
+                eligible_mask,
+            )
 
             metrics = {
                 "contrastive_loss": loss.detach(),
@@ -366,13 +406,10 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_pos_similarity": pos_sim,
                 "contrastive_temperature": temperature,
                 "contrastive_n_timesteps": T,
-                "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
-                "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
-                "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
-                "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
                 "contrastive_n_overlap_tokens": N,
                 "contrastive_n_overlap_per_sample": N / B,
             }
+            metrics.update(count_metrics)
 
         return loss, metrics
 
@@ -382,6 +419,7 @@ class ContrastiveObjective(BaseSSLObjective):
         z2: torch.Tensor,
         ssl_mask_1: torch.Tensor,
         ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute NT-Xent (Normalized Temperature-scaled Cross Entropy) loss.
 
@@ -390,6 +428,7 @@ class ContrastiveObjective(BaseSSLObjective):
             z2: (B, proj_dim) L2-normalized projections from view 2.
             ssl_mask_1: (B, T) mask for view 1 (for metrics).
             ssl_mask_2: (B, T) mask for view 2 (for metrics).
+            eligible_mask: (B, T) True for non-empty timesteps eligible for masking.
 
         Returns:
             (loss, metrics_dict)
@@ -402,6 +441,12 @@ class ContrastiveObjective(BaseSSLObjective):
                 T = ssl_mask_1.shape[1]
                 valid_mask_1 = ssl_mask_1[valid_samples]
                 valid_mask_2 = ssl_mask_2[valid_samples]
+                valid_eligible_mask = eligible_mask[valid_samples]
+                count_metrics = self._timestep_count_metrics(
+                    valid_mask_1,
+                    valid_mask_2,
+                    valid_eligible_mask,
+                )
                 metrics = {
                     "contrastive_loss": loss.detach(),
                     "ssl_loss": loss.detach(),
@@ -412,23 +457,17 @@ class ContrastiveObjective(BaseSSLObjective):
                     "contrastive_effective_rank": torch.tensor(0.0, device=z1.device),
                     "contrastive_temperature": self.config.temperature,
                     "contrastive_n_timesteps": T,
-                    "contrastive_n_visible_view1": valid_mask_1.sum().item()
-                    / max(n_valid_samples, 1),
-                    "contrastive_n_visible_view2": valid_mask_2.sum().item()
-                    / max(n_valid_samples, 1),
-                    "contrastive_n_masked_view1": (~valid_mask_1).sum().item()
-                    / max(n_valid_samples, 1),
-                    "contrastive_n_masked_view2": (~valid_mask_2).sum().item()
-                    / max(n_valid_samples, 1),
                     "contrastive_n_samples_used": n_valid_samples,
                     "contrastive_n_samples_skipped": z1.shape[0] - n_valid_samples,
                 }
+                metrics.update(count_metrics)
             return loss, metrics
 
         z1 = z1[valid_samples]
         z2 = z2[valid_samples]
         ssl_mask_1 = ssl_mask_1[valid_samples]
         ssl_mask_2 = ssl_mask_2[valid_samples]
+        eligible_mask = eligible_mask[valid_samples]
 
         B = z1.shape[0]
         temperature = self.config.temperature
@@ -477,12 +516,13 @@ class ContrastiveObjective(BaseSSLObjective):
             p = p / p.sum().clamp(min=1e-12)
             eff_rank = (-p * p.clamp(min=1e-7).log()).sum().exp()
 
-            # Timestep statistics
+            # Timestep statistics over eligible non-empty timesteps only.
             T = ssl_mask_1.shape[1]
-            n_vis_1 = ssl_mask_1.sum().item()
-            n_vis_2 = ssl_mask_2.sum().item()
-            n_masked_1 = (~ssl_mask_1).sum().item()
-            n_masked_2 = (~ssl_mask_2).sum().item()
+            count_metrics = self._timestep_count_metrics(
+                ssl_mask_1,
+                ssl_mask_2,
+                eligible_mask,
+            )
 
             metrics = {
                 "contrastive_loss": loss.detach(),
@@ -494,12 +534,9 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_effective_rank": eff_rank,
                 "contrastive_temperature": temperature,
                 "contrastive_n_timesteps": T,
-                "contrastive_n_visible_view1": n_vis_1 / B,
-                "contrastive_n_visible_view2": n_vis_2 / B,
-                "contrastive_n_masked_view1": n_masked_1 / B,
-                "contrastive_n_masked_view2": n_masked_2 / B,
                 "contrastive_n_samples_used": B,
                 "contrastive_n_samples_skipped": valid_samples.numel() - B,
             }
+            metrics.update(count_metrics)
 
         return loss, metrics

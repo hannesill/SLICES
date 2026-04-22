@@ -264,6 +264,12 @@ def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune
 # =============================================================================
 
 
+def _add_wandb_tag(tags: list[str], tag: str) -> None:
+    """Append a W&B tag once, preserving caller order."""
+    if tag not in tags:
+        tags.append(tag)
+
+
 def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     """Set up W&B experiment logger.
 
@@ -274,35 +280,40 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
 
     tags = list(cfg.logging.get("wandb_tags", []))
     if cfg.get("sprint") is not None:
-        tags.append(f"sprint:{cfg.sprint}")
+        _add_wandb_tag(tags, f"sprint:{cfg.sprint}")
     if cfg.get("revision") is not None:
-        tags.append(f"revision:{cfg.revision}")
+        _add_wandb_tag(tags, f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
         tag = f"rerun-reason:{cfg.rerun_reason}"
         if len(tag) > 64:
             tag = tag[:61] + "..."
-        tags.append(tag)
+        _add_wandb_tag(tags, tag)
     if cfg.get("launch_commit") is not None:
-        tags.append(f"commit:{str(cfg.launch_commit)[:12]}")
+        _add_wandb_tag(tags, f"commit:{str(cfg.launch_commit)[:12]}")
     model_size = cfg.get("model_size")
     if model_size is not None:
-        tags.append(f"model_size:{model_size}")
+        _add_wandb_tag(tags, f"model_size:{model_size}")
 
-    # Add protocol tag for finetune runs (Protocol A = frozen, Protocol B = unfrozen)
+    # Add downstream protocol family tag. Supervised-from-scratch shares the
+    # Protocol B optimization budget; the phase tag distinguishes it from SSL.
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
     if freeze_encoder is not None:
         protocol = "A" if freeze_encoder else "B"
-        tags.append(f"protocol:{protocol}")
+        _add_wandb_tag(tags, f"protocol:{protocol}")
 
     # Add mask_ratio tag for pretrain runs (useful for ablation filtering)
     ssl_cfg = cfg.get("ssl", {})
     if ssl_cfg and ssl_cfg.get("mask_ratio") is not None:
-        tags.append(f"mask_ratio:{ssl_cfg.mask_ratio}")
+        _add_wandb_tag(tags, f"mask_ratio:{ssl_cfg.mask_ratio}")
 
     # Add label_fraction tag when subsampling training data
     label_fraction = cfg.get("label_fraction")
     if label_fraction is not None and label_fraction < 1.0:
-        tags.append(f"label_fraction:{label_fraction}")
+        _add_wandb_tag(tags, f"label_fraction:{label_fraction}")
+        _add_wandb_tag(tags, "ablation:label-efficiency")
+
+    if cfg.get("source_dataset") is not None:
+        _add_wandb_tag(tags, "ablation:transfer")
 
     tags = tags or None
 
@@ -371,6 +382,7 @@ def run_fairness_evaluation(
         datamodule.test_dataloader(),
         device=model.device,
     )
+    task_type = cfg.get("task", {}).get("task_type", "binary")
 
     evaluator = FairnessEvaluator(
         static_df=datamodule.dataset.static_df,
@@ -378,6 +390,7 @@ def run_fairness_evaluation(
             fairness_cfg.get("protected_attributes", ["gender", "age_group"])
         ),
         min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
+        task_type=task_type,
         dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
     )
     fairness_report = evaluator.evaluate(predictions, labels_tensor, all_stay_ids)

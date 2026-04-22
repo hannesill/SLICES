@@ -960,6 +960,17 @@ def generate_all_runs() -> list[Run]:
     return builder.build_all()
 
 
+def filter_runs_for_sprints(all_runs: list[Run], sprints: list[str]) -> list[Run]:
+    """Filter runs while preserving the caller's requested sprint order."""
+    sprint_order: dict[str, int] = {}
+    for sprint in sprints:
+        sprint_order.setdefault(sprint, len(sprint_order))
+
+    indexed_runs = [(idx, run) for idx, run in enumerate(all_runs) if run.sprint in sprint_order]
+    indexed_runs.sort(key=lambda item: (sprint_order[item[1].sprint], item[0]))
+    return [run for _, run in indexed_runs]
+
+
 def apply_revision(runs: list[Run], revision: str, reason: str | None = None) -> list[Run]:
     """Post-process runs to inject revision into IDs, output dirs, and overrides.
 
@@ -1489,7 +1500,7 @@ def cmd_run(args):
 
     # Filter to requested sprints
     sprints = [str(s) for s in args.sprint]
-    runs = [r for r in all_runs if r.sprint in sprints]
+    runs = filter_runs_for_sprints(all_runs, sprints)
 
     # Also include dependency runs from earlier sprints (pretrain reuse)
     run_ids = {r.id for r in runs}
@@ -1715,7 +1726,7 @@ def cmd_warmup(args):
 
     # Filter to requested sprints
     sprints = [str(s) for s in args.sprint]
-    runs = [r for r in all_runs if r.sprint in sprints]
+    runs = filter_runs_for_sprints(all_runs, sprints)
 
     # Also include dependency runs
     run_ids = {r.id for r in runs}

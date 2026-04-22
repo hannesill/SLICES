@@ -84,8 +84,9 @@ class SeqAttentionBlock(nn.Module):
     using additive observation-based attention biases (SMART's key innovation).
 
     The attention mask uses an additive scheme where mask[i] + mask[j] creates
-    graded attention: 0 (neither observed) → blocked, 1 (one observed) → partial,
-    2 (both observed) → full attention.
+    graded finite attention bias: 0 (neither observed) is the lowest bias,
+    1 (one observed) is intermediate, and 2 (both observed) is highest.
+    Padding remains hard-blocked, but missing/missing pairs are not.
     """
 
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1) -> None:
@@ -141,8 +142,9 @@ class SeqAttentionBlock(nn.Module):
         obs_mask_extended = torch.cat([query_observed, obs_mask], dim=2)  # (B, V, T+1)
         obs_mask_flat = obs_mask_extended.reshape(B * V, T_plus_1).float()  # (B*V, T+1)
 
-        # Additive mask: mask[i] + mask[j] gives 0, 1, or 2
-        # This creates graded attention bias (higher = more attention)
+        # Additive mask: mask[i] + mask[j] gives a finite 0, 1, or 2 bias.
+        # This is graded attention bias (higher = more attention), not a hard
+        # block for neither-observed timestep pairs.
         attn_bias = obs_mask_flat.unsqueeze(-1) + obs_mask_flat.unsqueeze(-2)  # (B*V, T+1, T+1)
 
         # Handle padding mask if provided (add -inf for padded positions)

@@ -402,7 +402,7 @@ command and pass the same commit hash for W&B config provenance:
 
 **Matrix**: 2 baselines × 3 datasets × 4 tasks × 5 seeds = 120 full-label runs + 240 label-efficiency runs = **360 runs**
 
-**XGBoost**: 8 summary statistics per input feature (mean, std, min, max, first, last, obs_count, obs_fraction) → 896 tabular features. Uses `ICUDataModule` for identical data splits.
+**XGBoost**: 8 summary statistics per input feature (mean, std, min, max, first, last, obs_count, obs_fraction) → 896 tabular features. Uses `ICUDataModule` for identical data splits. For binary tasks, `scale_pos_weight=balanced` resolves to XGBoost's native `n_negative / n_positive` ratio and is logged numerically in the run config/summary; this is intentionally not the neural sqrt-balanced weighting scheme.
 
 **GRU-D**: d_model=64, 1 GRU layer, same downstream training protocol as supervised Transformer (lr=3e-4, wd=0.05, patience=10, label smoothing, class weights). Trains on GPU via `supervised.py --config-name gru_d`.
 
@@ -478,6 +478,7 @@ parsing run names.
 | `paradigm:mae` / `paradigm:jepa` / `paradigm:contrastive` / `paradigm:supervised` / `paradigm:xgboost` / `paradigm:gru_d` | Paradigm |
 | `task:mortality_24h` / etc. | Downstream task |
 | `ablation:label-efficiency` / `ablation:transfer` | Ablation type |
+| `protocol:A` / `protocol:B` | Downstream evaluation family. Supervised-from-scratch and classical baselines align with Protocol B for comparison; use `phase:*` to distinguish SSL finetunes from non-SSL baselines. |
 | `sprint:N` | Execution sprint |
 | `revision:<id>` | Thesis rerun revision for fairness/export filtering |
 | `seed:42` / `seed:123` / `seed:456` / `seed:789` / `seed:1011` | Random seed |

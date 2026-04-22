@@ -203,6 +203,34 @@ class TestSeqAttentionBlock:
         # Outputs should differ due to different attention biases
         assert not torch.allclose(out_all, out_half, atol=1e-5)
 
+    def test_seq_attention_missing_pairs_use_finite_graded_bias(self, monkeypatch):
+        """SMART appendix attention should not hard-block missing/missing pairs."""
+        import slices.models.encoders.smart as smart_module
+
+        captured = {}
+
+        def fake_scaled_dot_product_attention(q, k, v, attn_mask=None):
+            captured["attn_mask"] = attn_mask.detach().clone()
+            return torch.zeros_like(q)
+
+        monkeypatch.setattr(
+            smart_module.F,
+            "scaled_dot_product_attention",
+            fake_scaled_dot_product_attention,
+        )
+
+        block = SeqAttentionBlock(d_model=4, n_heads=1, dropout=0.0)
+        x = torch.randn(1, 1, 3, 4)
+        obs_mask = torch.zeros(1, 1, 2, dtype=torch.bool)
+
+        block(x, obs_mask)
+
+        attn_mask = captured["attn_mask"]
+        assert attn_mask.shape == (1, 1, 3, 3)
+        assert torch.isfinite(attn_mask).all()
+        assert attn_mask[0, 0, 1, 2].item() == 0.0
+        assert attn_mask[0, 0, 0, 1].item() == 1.0
+
 
 class TestVarAttentionBlock:
     """Tests for VarAttentionBlock (cross-variable attention)."""
