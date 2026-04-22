@@ -22,10 +22,9 @@ project_name: slices
 # Dataset identifier — drives data paths via ricu.yaml interpolation
 dataset: miiv  # miiv | eicu | combined
 
-# Experiment group (stored as a sprint tag for historical W&B compatibility)
-sprint: null
-
-# Revision tracking (for rerunning experiment groups with changed settings)
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -97,7 +96,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: s${sprint}_pretrain_${dataset}_${ssl.name}_seed${seed}
+  run_name: ${experiment_class}_pretrain_${dataset}_${ssl.name}_seed${seed}
   wandb_group: pretrain_${dataset}_${ssl.name}
   wandb_tags:
     - "phase:pretrain"

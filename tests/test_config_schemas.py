@@ -9,7 +9,6 @@ Tests cover:
 import pytest
 import yaml
 from pydantic import ValidationError
-
 from slices.data.config_schemas import DataConfig
 from slices.training.config_schemas import (
     OptimizerConfig,
@@ -247,3 +246,32 @@ class TestCheckpointFallbackYAML:
         assert "training" in raw
         assert "allow_best_ckpt_fallback" in raw["training"]
         assert raw["training"]["allow_best_ckpt_fallback"] is expected
+
+
+class TestExperimentClassMetadataYAML:
+    """Test final rerun metadata fields in launch configs."""
+
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "pretrain.yaml",
+            "finetune.yaml",
+            "supervised.yaml",
+            "gru_d.yaml",
+            "xgboost.yaml",
+        ],
+    )
+    def test_configs_use_experiment_class_metadata_not_sprint(self, config_name):
+        import pathlib
+
+        yaml_path = pathlib.Path(__file__).parent.parent / "configs" / config_name
+        with open(yaml_path) as f:
+            raw = yaml.safe_load(f)
+
+        assert "sprint" not in raw
+        assert raw["experiment_class"] is None
+        assert raw["experiment_subtype"] is None
+        assert raw["revision"] is None
+        assert raw["rerun_reason"] is None
+        assert "s${sprint}" not in raw["logging"]["run_name"]
+        assert "${experiment_class}" in raw["logging"]["run_name"]

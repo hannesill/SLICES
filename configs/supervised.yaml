@@ -33,10 +33,9 @@ dataset: miiv  # miiv | eicu | combined
 # Paradigm — always "supervised" for this config
 paradigm: supervised
 
-# Experiment group (stored as a sprint tag for historical W&B compatibility)
-sprint: null
-
-# Revision tracking (for rerunning experiment groups with changed settings)
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -129,7 +128,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: s${sprint}_supervised_${dataset}_${task.task_name}_seed${seed}
+  run_name: ${experiment_class}_supervised_${dataset}_${task.task_name}_seed${seed}
   wandb_group: supervised_${dataset}_${task.task_name}
   wandb_tags:
     - "phase:supervised"

@@ -729,13 +729,21 @@ class TestFairnessRevisionScoping:
 
         assert excinfo.value.code == 2
 
-    def test_default_core_sprints_include_all_downstream_training_sprints(self):
-        """The standalone thesis fairness corpus should include every downstream sprint."""
+    def test_default_experiment_classes_include_all_downstream_training_classes(self):
+        """The standalone thesis fairness corpus should include every downstream class."""
         mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
-        assert set(["1", "2", "3", "4", "5", "6", "7", "8", "7p", "10", "11", "12", "13"]).issubset(
-            set(mod.CORE_SPRINTS)
-        )
+        expected = {
+            "core_ssl_benchmark",
+            "label_efficiency",
+            "cross_dataset_transfer",
+            "hp_robustness",
+            "capacity_study",
+            "classical_baselines",
+            "ts2vec_extension",
+            "smart_external_reference",
+        }
+        assert expected.issubset(set(mod.DEFAULT_EXPERIMENT_CLASSES))
 
     def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
         """A single revision should be sent as a W&B tag filter."""
@@ -757,7 +765,7 @@ class TestFairnessRevisionScoping:
         mod.fetch_eval_runs(
             project="proj",
             entity="entity",
-            sprints=["1"],
+            experiment_classes=["core_ssl_benchmark"],
             paradigms=["mae"],
             datasets=["miiv"],
             phases=["finetune"],
@@ -766,7 +774,7 @@ class TestFairnessRevisionScoping:
 
         assert captured["path"] == "entity/proj"
         assert captured["filters"]["tags"]["$all"] == [
-            "sprint:1",
+            "experiment_class:core_ssl_benchmark",
             "paradigm:mae",
             "dataset:miiv",
             "phase:finetune",
@@ -796,7 +804,7 @@ class TestFairnessRevisionScoping:
         filtered = mod.fetch_eval_runs(
             project="proj",
             entity=None,
-            sprints=None,
+            experiment_classes=None,
             paradigms=None,
             datasets=None,
             phases=["finetune", "supervised"],
@@ -910,6 +918,9 @@ class TestFairnessRevisionScoping:
         env["WANDB_ENTITY"] = "test-entity"
         env["REVISION"] = "thesis-v2"
         env["RUN_EXPORT"] = "0"
+        env["SKIP_LAUNCH_GIT_CHECK"] = "1"
+        env["VALIDATE_PROCESSED_ARTIFACTS"] = "0"
+        env["PURGE_RUNTIME_CACHES"] = "0"
 
         result = subprocess.run(
             ["bash", "scripts/internal/launch_thesis_tmux.sh"],
@@ -929,8 +940,8 @@ class TestFairnessRevisionScoping:
         assert "--project slices-thesis" in runner_text
         assert "--entity test-entity" in runner_text
 
-    def test_tmux_launcher_includes_sprint11_in_fairness(self, tmp_path):
-        """The fairness sweep should include the canonical baseline sprint by default."""
+    def test_tmux_launcher_includes_classical_baselines_in_fairness(self, tmp_path):
+        """The fairness sweep should include the canonical baseline class by default."""
         repo_root = Path(__file__).resolve().parents[1]
         temp_repo = tmp_path / "repo"
         (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
@@ -959,6 +970,9 @@ class TestFairnessRevisionScoping:
         env["SESSION_NAME"] = "test-session"
         env["WANDB_ENTITY"] = "test-entity"
         env["RUN_EXPORT"] = "0"
+        env["SKIP_LAUNCH_GIT_CHECK"] = "1"
+        env["VALIDATE_PROCESSED_ARTIFACTS"] = "0"
+        env["PURGE_RUNTIME_CACHES"] = "0"
 
         result = subprocess.run(
             ["bash", "scripts/internal/launch_thesis_tmux.sh"],
@@ -973,7 +987,9 @@ class TestFairnessRevisionScoping:
         assert len(runner_scripts) == 1
         runner_text = runner_scripts[0].read_text()
 
-        assert "--sprint 1 2 3 4 5 6 7 8 10 11" in runner_text
+        assert "--experiment-class" in runner_text
+        assert "classical_baselines" in runner_text
+        assert "core_ssl_benchmark" in runner_text
 
     def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
         """The status pane should use uv-managed Python."""
@@ -1005,6 +1021,9 @@ class TestFairnessRevisionScoping:
         env["SESSION_NAME"] = "test-session"
         env["WANDB_ENTITY"] = "test-entity"
         env["RUN_EXPORT"] = "0"
+        env["SKIP_LAUNCH_GIT_CHECK"] = "1"
+        env["VALIDATE_PROCESSED_ARTIFACTS"] = "0"
+        env["PURGE_RUNTIME_CACHES"] = "0"
 
         result = subprocess.run(
             ["bash", "scripts/internal/launch_thesis_tmux.sh"],
@@ -1338,8 +1357,8 @@ class TestMortalityPrecision:
 # ============================================================================
 
 
-class TestExporterHistoricalRecovery:
-    """Tests for _recover_pretrain_metadata run-name parsing."""
+class TestExporterClassMetadata:
+    """Tests for class-based exporter metadata recovery."""
 
     def test_lr_decode_matches_run_experiments_encoding(self):
         """Decode table must match str(v).replace('.','') encoding from run_experiments.py."""
@@ -1365,64 +1384,64 @@ class TestExporterHistoricalRecovery:
         assert _MR_DECODE["075"] == 0.75
 
     def test_recover_lr_from_output_dir(self):
-        """Historical LR ablation finetunes recovered from output_dir pattern."""
-        from scripts.export_results import _recover_pretrain_metadata
-
-        config = {"output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed789_lr00002"}
-        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
-        assert up_lr == 2e-4
-        assert subtype == "lr_ablation"
-
-    def test_recover_mask_ratio_from_output_dir(self):
-        """Historical mask_ratio ablation finetunes recovered from output_dir."""
+        """LR sensitivity finetunes recover upstream LR from output_dir pattern."""
         from scripts.export_results import _recover_pretrain_metadata
 
         config = {
-            "output_dir": "outputs/sprint1c/finetune_jepa_mortality_24h_miiv_seed42_mask_ratio03"
+            "output_dir": "outputs/hp_robustness/finetune_mae_mortality_24h_miiv_seed789_lr00002"
+        }
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
+        assert up_lr == 2e-4
+        assert subtype == "lr_sensitivity"
+
+    def test_recover_mask_ratio_from_output_dir(self):
+        """Mask-ratio sensitivity finetunes recover upstream mask ratio from output_dir."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {
+            "output_dir": (
+                "outputs/hp_robustness/" "finetune_jepa_mortality_24h_miiv_seed42_mask_ratio03"
+            )
         }
         up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
         assert up_mr == 0.3
-        assert subtype == "mask_ablation"
+        assert subtype == "mask_ratio_sensitivity"
 
     def test_new_runs_use_config_directly(self):
         """New runs with explicit upstream fields skip name parsing."""
         from scripts.export_results import _recover_pretrain_metadata
 
-        config = {"upstream_pretrain_lr": 5e-4, "experiment_subtype": "lr_ablation"}
+        config = {"upstream_pretrain_lr": 5e-4, "experiment_subtype": "lr_sensitivity"}
         up_lr, up_mr, subtype = _recover_pretrain_metadata("irrelevant_name", config)
         assert up_lr == 5e-4
-        assert subtype == "lr_ablation"
+        assert subtype == "lr_sensitivity"
 
     def test_core_run_returns_none(self):
         """Core runs (no HP ablation) return None for all fields."""
         from scripts.export_results import _recover_pretrain_metadata
 
-        config = {"output_dir": "outputs/sprint1/finetune_mae_mortality_24h_miiv_seed42"}
+        config = {"output_dir": "outputs/core_ssl_benchmark/finetune_mae_mortality_24h_miiv_seed42"}
         up_lr, up_mr, subtype = _recover_pretrain_metadata("some_run", config)
         assert up_lr is None
         assert up_mr is None
         assert subtype is None
 
     def test_infer_model_size_for_capacity_variants(self):
-        """Exporter should preserve Sprint 7p medium/large labels."""
+        """Exporter should preserve medium/large labels."""
         from scripts.export_results import _infer_model_size
 
         assert _infer_model_size({"encoder": {"d_model": 64, "n_layers": 2}}) == "default"
-        assert _infer_model_size({"sprint": "7p", "encoder": {"d_model": 128, "n_layers": 4}}) == (
-            "medium"
-        )
-        assert _infer_model_size({"sprint": "7p", "encoder": {"d_model": 256, "n_layers": 4}}) == (
-            "large"
-        )
+        assert _infer_model_size({"encoder": {"d_model": 128, "n_layers": 4}}) == "medium"
+        assert _infer_model_size({"encoder": {"d_model": 256, "n_layers": 4}}) == "large"
 
-    def test_extract_run_reclassifies_transfer_and_sprint13(self):
-        """Sprint-10 transfer seeds and Sprint 13 should export with stable experiment types."""
+    def test_extract_run_uses_experiment_class_tags(self):
+        """Runs should export with explicit final experiment classes."""
         from scripts.export_results import extract_run
 
         transfer = DummyWandbRun(
             run_id="transfer",
             config={
-                "sprint": "10",
+                "experiment_class": "cross_dataset_transfer",
                 "dataset": "eicu",
                 "paradigm": "mae",
                 "source_dataset": "miiv",
@@ -1434,12 +1453,12 @@ class TestExporterHistoricalRecovery:
             tags=["phase:finetune"],
             name="finetune_mae_mortality_24h_eicu_from_miiv_seed789",
         )
-        assert extract_run(transfer, [])["experiment_type"] == "transfer"
+        assert extract_run(transfer, [])["experiment_class"] == "cross_dataset_transfer"
 
         ts2vec = DummyWandbRun(
             run_id="ts2vec",
             config={
-                "sprint": "13",
+                "experiment_class": "ts2vec_extension",
                 "dataset": "miiv",
                 "paradigm": "ts2vec",
                 "seed": 42,
@@ -1450,20 +1469,23 @@ class TestExporterHistoricalRecovery:
             tags=["phase:finetune"],
             name="finetune_ts2vec_mortality_24h_miiv_seed42",
         )
-        assert extract_run(ts2vec, [])["experiment_type"] == "temporal_contrastive"
+        assert extract_run(ts2vec, [])["experiment_class"] == "ts2vec_extension"
 
     def test_extract_run_recovers_transfer_from_output_dir(self):
-        """Historical transfer runs should recover source_dataset from output_dir."""
+        """Transfer runs should recover source_dataset from output_dir."""
         from scripts.export_results import extract_run
 
         transfer = DummyWandbRun(
             run_id="transfer_output_dir",
             config={
-                "sprint": "10",
+                "experiment_class": "cross_dataset_transfer",
                 "dataset": "eicu",
                 "paradigm": "mae",
                 "seed": 789,
-                "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_eicu_seed789_from_miiv",
+                "output_dir": (
+                    "outputs/cross_dataset_transfer/"
+                    "finetune_mae_mortality_24h_eicu_seed789_from_miiv"
+                ),
                 "encoder": {"d_model": 64, "n_layers": 2},
                 "training": {"freeze_encoder": False},
                 "task": {"task_name": "mortality_24h"},
@@ -1474,7 +1496,7 @@ class TestExporterHistoricalRecovery:
 
         row = extract_run(transfer, [])
         assert row["source_dataset"] == "miiv"
-        assert row["experiment_type"] == "transfer"
+        assert row["experiment_class"] == "cross_dataset_transfer"
 
     def test_extract_run_assigns_protocol_b_to_xgboost_baselines(self):
         """XGBoost baselines must align with the Protocol-B comparison family."""
@@ -1483,7 +1505,7 @@ class TestExporterHistoricalRecovery:
         run = DummyWandbRun(
             run_id="xgb",
             config={
-                "sprint": "11",
+                "experiment_class": "classical_baselines",
                 "dataset": "miiv",
                 "paradigm": "xgboost",
                 "seed": 42,
@@ -1502,7 +1524,7 @@ class TestExporterHistoricalRecovery:
         cfg = OmegaConf.create(
             {
                 "logging": {"wandb_tags": ["phase:baseline"]},
-                "sprint": "11",
+                "experiment_class": "classical_baselines",
                 "revision": "thesis-v1",
                 "rerun_reason": "rerun canonical thesis baseline sweep with fixed tags",
                 "label_fraction": 0.1,
@@ -1512,7 +1534,7 @@ class TestExporterHistoricalRecovery:
         tags = _build_wandb_tags(cfg)
 
         assert "phase:baseline" in tags
-        assert "sprint:11" in tags
+        assert "experiment_class:classical_baselines" in tags
         assert "revision:thesis-v1" in tags
         assert "label_fraction:0.1" in tags
         assert "ablation:label-efficiency" in tags
@@ -1526,11 +1548,13 @@ class TestExporterHistoricalRecovery:
             DummyWandbRun(
                 run_id="hp_lr_2e4",
                 config={
-                    "sprint": "10",
+                    "experiment_class": "hp_robustness",
                     "dataset": "miiv",
                     "paradigm": "mae",
                     "seed": 42,
-                    "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed42_lr00002",
+                    "output_dir": (
+                        "outputs/hp_robustness/" "finetune_mae_mortality_24h_miiv_seed42_lr00002"
+                    ),
                     "encoder": {"d_model": 64, "n_layers": 2},
                     "training": {"freeze_encoder": False},
                     "task": {"task_name": "mortality_24h"},
@@ -1542,11 +1566,13 @@ class TestExporterHistoricalRecovery:
             DummyWandbRun(
                 run_id="hp_lr_5e4",
                 config={
-                    "sprint": "10",
+                    "experiment_class": "hp_robustness",
                     "dataset": "miiv",
                     "paradigm": "mae",
                     "seed": 42,
-                    "output_dir": "outputs/sprint10/finetune_mae_mortality_24h_miiv_seed42_lr00005",
+                    "output_dir": (
+                        "outputs/hp_robustness/" "finetune_mae_mortality_24h_miiv_seed42_lr00005"
+                    ),
                     "encoder": {"d_model": 64, "n_layers": 2},
                     "training": {"freeze_encoder": False},
                     "task": {"task_name": "mortality_24h"},
@@ -1560,20 +1586,20 @@ class TestExporterHistoricalRecovery:
         df = build_per_seed_df(runs)
 
         assert len(df) == 2
-        assert set(df["experiment_type"]) == {"hp_ablation"}
+        assert set(df["experiment_class"]) == {"hp_robustness"}
         assert sorted(df["upstream_pretrain_lr"].tolist()) == [2e-4, 5e-4]
 
-    def test_build_aggregated_df_merges_hp_ablation_across_sprints(self):
-        """Sprint 10 historical seeds should merge with Sprint 1b/1c HP-ablation families."""
+    def test_build_aggregated_df_merges_hp_robustness_across_seeds(self):
+        """HP robustness rows should merge across seeds by scientific fingerprint."""
         from scripts.export_results import build_aggregated_df
 
         per_seed_df = pd.DataFrame(
             [
                 {
                     "wandb_run_id": f"run_{i}",
-                    "experiment_type": "hp_ablation",
-                    "experiment_subtype": "lr_ablation",
-                    "sprint": sprint,
+                    "experiment_class": "hp_robustness",
+                    "experiment_type": "hp_robustness",
+                    "experiment_subtype": "lr_sensitivity",
                     "paradigm": "mae",
                     "dataset": "miiv",
                     "task": "mortality_24h",
@@ -1586,19 +1612,17 @@ class TestExporterHistoricalRecovery:
                     "upstream_pretrain_lr": 2e-4,
                     "upstream_pretrain_mask_ratio": None,
                 }
-                for i, (sprint, seed) in enumerate(
-                    [("1b", 42), ("1b", 123), ("10", 456), ("10", 789), ("10", 1011)]
-                )
+                for i, seed in enumerate([42, 123, 456, 789, 1011])
             ]
         )
 
         agg = build_aggregated_df(per_seed_df)
 
         assert len(agg) == 1
-        assert agg.iloc[0]["experiment_type"] == "hp_ablation"
-        assert agg.iloc[0]["experiment_subtype"] == "lr_ablation"
+        assert agg.iloc[0]["experiment_class"] == "hp_robustness"
+        assert agg.iloc[0]["experiment_subtype"] == "lr_sensitivity"
         assert agg.iloc[0]["n_seeds"] == 5
-        assert set(yaml.safe_load(agg.iloc[0]["sprint_list"])) == {"1b", "10"}
+        assert set(yaml.safe_load(agg.iloc[0]["experiment_class_list"])) == {"hp_robustness"}
 
     def test_build_per_seed_df_raises_on_ambiguous_core_collision(self):
         """Distinct configs that a fingerprint would collapse should fail closed."""
@@ -1608,7 +1632,7 @@ class TestExporterHistoricalRecovery:
             DummyWandbRun(
                 run_id="core_lr_1e4",
                 config={
-                    "sprint": "1",
+                    "experiment_class": "core_ssl_benchmark",
                     "dataset": "miiv",
                     "paradigm": "mae",
                     "seed": 42,
@@ -1624,7 +1648,7 @@ class TestExporterHistoricalRecovery:
             DummyWandbRun(
                 run_id="core_lr_3e4",
                 config={
-                    "sprint": "2",
+                    "experiment_class": "core_ssl_benchmark",
                     "dataset": "miiv",
                     "paradigm": "mae",
                     "seed": 42,
@@ -1650,13 +1674,13 @@ class TestExperimentRunnerWandbOverrides:
         from scripts.internal.run_experiments import Run, apply_wandb_target
 
         run = Run(
-            id="s1_supervised_mortality_24h_miiv_seed42",
-            sprint="1",
+            id="core_ssl_benchmark_supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
             run_type="supervised",
             paradigm="supervised",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/supervised_mortality_24h_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/supervised_mortality_24h_miiv_seed42",
         )
 
         result = apply_wandb_target([run], project="slices-thesis", entity="hannes-ill")
@@ -1664,32 +1688,32 @@ class TestExperimentRunnerWandbOverrides:
         assert result[0].extra_overrides["logging.wandb_project"] == "slices-thesis"
         assert result[0].extra_overrides["logging.wandb_entity"] == "hannes-ill"
 
-    def test_cmd_run_respects_requested_sprint_order(self, monkeypatch):
+    def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
-        sprint7p = runner.Run(
-            id="s7p_supervised_mortality_24h_miiv_seed42",
-            sprint="7p",
+        capacity = runner.Run(
+            id="capacity_study_supervised_mortality_24h_miiv_seed42",
+            experiment_class="capacity_study",
             run_type="supervised",
             paradigm="supervised",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint7p/supervised_mortality_24h_miiv_seed42",
+            output_dir="outputs/capacity_study/supervised_mortality_24h_miiv_seed42",
             task="mortality_24h",
         )
-        sprint10 = runner.Run(
-            id="s10_supervised_mortality_24h_miiv_seed789",
-            sprint="10",
+        classical = runner.Run(
+            id="classical_baselines_supervised_mortality_24h_miiv_seed789",
+            experiment_class="classical_baselines",
             run_type="supervised",
             paradigm="supervised",
             dataset="miiv",
             seed=789,
-            output_dir="outputs/sprint10/supervised_mortality_24h_miiv_seed789",
+            output_dir="outputs/classical_baselines/supervised_mortality_24h_miiv_seed789",
             task="mortality_24h",
         )
         scheduled = {}
 
-        monkeypatch.setattr(runner, "generate_all_runs", lambda: [sprint7p, sprint10])
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [capacity, classical])
         monkeypatch.setattr(runner, "load_state", lambda: {"version": 1, "runs": {}})
         monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
         monkeypatch.setattr(
@@ -1699,7 +1723,7 @@ class TestExperimentRunnerWandbOverrides:
         )
 
         args = SimpleNamespace(
-            sprint=["10", "7p"],
+            experiment_class=["classical_baselines", "capacity_study"],
             revision=None,
             reason=None,
             project=None,
@@ -1710,7 +1734,10 @@ class TestExperimentRunnerWandbOverrides:
 
         runner.cmd_run(args)
 
-        assert [run.sprint for run in scheduled["runs"]] == ["10", "7p"]
+        assert [run.experiment_class for run in scheduled["runs"]] == [
+            "classical_baselines",
+            "capacity_study",
+        ]
 
     def test_pretrain_and_finetune_commands_resume_from_last_checkpoint(self, tmp_path):
         from scripts.internal.run_experiments import Run
@@ -1724,7 +1751,7 @@ class TestExperimentRunnerWandbOverrides:
 
         pretrain = Run(
             id="pretrain",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
@@ -1733,7 +1760,7 @@ class TestExperimentRunnerWandbOverrides:
         )
         finetune = Run(
             id="finetune",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
@@ -1773,7 +1800,7 @@ class TestExperimentRunnerWandbOverrides:
         runs = [
             runner.Run(
                 id="pending-run",
-                sprint="1",
+                experiment_class="core_ssl_benchmark",
                 run_type="pretrain",
                 paradigm="mae",
                 dataset="miiv",
@@ -1782,7 +1809,7 @@ class TestExperimentRunnerWandbOverrides:
             ),
             runner.Run(
                 id="running-run",
-                sprint="1",
+                experiment_class="core_ssl_benchmark",
                 run_type="pretrain",
                 paradigm="mae",
                 dataset="miiv",
@@ -1800,44 +1827,10 @@ class TestExperimentRunnerWandbOverrides:
 
         assert runner._scheduler_exit_code(runs, state) == 1
 
-    def test_cmd_tag_filters_inherited_sources_by_revision(self, monkeypatch):
+    def test_runner_no_longer_exposes_inherited_tag_command(self):
         import scripts.internal.run_experiments as runner
 
-        class FakeRun:
-            def __init__(self, tags):
-                self.tags = tags
-                self.name = "fake"
-                self.id = "fake"
-                self.updated = False
-
-            def update(self):
-                self.updated = True
-
-        matching = FakeRun(["sprint:1", "revision:thesis-v1"])
-        stale = FakeRun(["sprint:1", "revision:old"])
-
-        class FakeApi:
-            default_entity = "entity"
-
-            def runs(self, path, filters):
-                return [matching, stale]
-
-        monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(Api=lambda: FakeApi()))
-
-        args = SimpleNamespace(
-            sprint=["2"],
-            dry_run=False,
-            project="slices",
-            entity="entity",
-            revision="thesis-v1",
-        )
-
-        runner.cmd_tag(args)
-
-        assert "sprint:2" in matching.tags
-        assert matching.updated is True
-        assert "sprint:2" not in stale.tags
-        assert stale.updated is False
+        assert not hasattr(runner, "cmd_tag")
 
     def test_wandb_logger_includes_model_size_metadata(self, monkeypatch):
         import slices.training.utils as training_utils
@@ -1860,8 +1853,8 @@ class TestExperimentRunnerWandbOverrides:
 
         cfg = OmegaConf.create(
             {
-                "output_dir": "outputs/sprint7p/example",
-                "sprint": "7p",
+                "output_dir": "outputs/capacity_study/example",
+                "experiment_class": "capacity_study",
                 "model_size": "medium",
                 "source_dataset": "eicu",
                 "label_fraction": 0.1,
@@ -1870,7 +1863,7 @@ class TestExperimentRunnerWandbOverrides:
                     "use_wandb": True,
                     "wandb_project": "slices",
                     "wandb_entity": None,
-                    "run_name": "s7p_finetune_miiv_mae_mortality_24h_seed42",
+                    "run_name": "capacity_study_finetune_miiv_mae_mortality_24h_seed42",
                     "wandb_group": "finetune_miiv_mae_mortality_24h",
                     "wandb_tags": ["phase:finetune"],
                 },
@@ -1880,8 +1873,11 @@ class TestExperimentRunnerWandbOverrides:
         logger = training_utils.setup_wandb_logger(cfg)
 
         assert isinstance(logger, DummyWandbLogger)
-        assert captured["kwargs"]["name"] == "s7p_finetune_miiv_mae_mortality_24h_seed42_medium"
+        assert captured["kwargs"]["name"] == (
+            "capacity_study_finetune_miiv_mae_mortality_24h_seed42_medium"
+        )
         assert captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_medium_frac01"
+        assert "experiment_class:capacity_study" in captured["kwargs"]["tags"]
         assert "model_size:medium" in captured["kwargs"]["tags"]
         assert "ablation:label-efficiency" in captured["kwargs"]["tags"]
         assert "ablation:transfer" in captured["kwargs"]["tags"]
@@ -1891,21 +1887,21 @@ class TestExperimentRunnerWandbOverrides:
 
         pretrain = Run(
             id="pretrain_mae_miiv_seed42",
-            sprint="7",
+            experiment_class="cross_dataset_transfer",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint7/pretrain_mae_miiv_seed42",
+            output_dir="outputs/cross_dataset_transfer/pretrain_mae_miiv_seed42",
         )
         finetune = Run(
             id="finetune_mae_eicu_seed42",
-            sprint="7",
+            experiment_class="cross_dataset_transfer",
             run_type="finetune",
             paradigm="mae",
             dataset="eicu",
             seed=42,
-            output_dir="outputs/sprint7/finetune_mae_mortality_24h_eicu_seed42_from_miiv",
+            output_dir="outputs/cross_dataset_transfer/finetune_mae_mortality_24h_eicu_seed42_from_miiv",
             depends_on=[pretrain.id],
             task="mortality_24h",
             freeze_encoder=False,
@@ -1920,21 +1916,21 @@ class TestExperimentRunnerWandbOverrides:
 
         pretrain = Run(
             id="pretrain_mae_miiv_seed42",
-            sprint="2",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         probe = Run(
             id="probe_mae_miiv_seed42",
-            sprint="2",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint2/probe_mae_mortality_24h_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/probe_mae_mortality_24h_miiv_seed42",
             depends_on=[pretrain.id],
             task="mortality_24h",
             freeze_encoder=True,
@@ -1952,21 +1948,21 @@ class TestExperimentRunnerWandbOverrides:
 
         pretrain = Run(
             id="pretrain_mae_miiv_seed42",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         finetune = Run(
             id="finetune_mae_miiv_seed42",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/finetune_mae_mortality_24h_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/finetune_mae_mortality_24h_miiv_seed42",
             depends_on=[pretrain.id],
             task="mortality_24h",
             freeze_encoder=False,
@@ -2003,37 +1999,37 @@ class TestExperimentRunnerWandbOverrides:
 class TestExperimentRunnerRetry:
     """Tests for retry scoping and dependency preservation."""
 
-    def test_cmd_retry_respects_sprint_filter_but_keeps_dependencies(self, monkeypatch):
+    def test_cmd_retry_respects_class_filter_but_keeps_dependencies(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
         dependency = runner.Run(
             id="dep_pretrain",
-            sprint="0",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         target = runner.Run(
             id="target_finetune",
-            sprint="1",
+            experiment_class="label_efficiency",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            output_dir="outputs/label_efficiency/finetune_mae_miiv_seed42",
             depends_on=[dependency.id],
             task="mortality_24h",
         )
         other = runner.Run(
             id="other_failed",
-            sprint="2",
+            experiment_class="classical_baselines",
             run_type="supervised",
             paradigm="supervised",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint2/supervised_miiv_seed42",
+            output_dir="outputs/classical_baselines/supervised_miiv_seed42",
             task="mortality_24h",
         )
 
@@ -2058,7 +2054,7 @@ class TestExperimentRunnerRetry:
         )
 
         args = SimpleNamespace(
-            sprint=["1"],
+            experiment_class=["label_efficiency"],
             failed=True,
             skipped=False,
             revision=None,
@@ -2080,21 +2076,21 @@ class TestExperimentRunnerRetry:
 
         dependency = runner.Run(
             id="dep_pretrain",
-            sprint="0",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         target = runner.Run(
             id="target_finetune",
-            sprint="1",
+            experiment_class="label_efficiency",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            output_dir="outputs/label_efficiency/finetune_mae_miiv_seed42",
             depends_on=[dependency.id],
             task="mortality_24h",
         )
@@ -2117,7 +2113,7 @@ class TestExperimentRunnerRetry:
         )
 
         args = SimpleNamespace(
-            sprint=["1"],
+            experiment_class=["label_efficiency"],
             failed=False,
             skipped=True,
             revision=None,
@@ -2143,21 +2139,21 @@ class TestExperimentRunnerRetry:
 
         dependency = runner.Run(
             id="dep_pretrain",
-            sprint="0",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint0/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         target = runner.Run(
             id="target_finetune",
-            sprint="1",
+            experiment_class="label_efficiency",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            output_dir="outputs/label_efficiency/finetune_mae_miiv_seed42",
             depends_on=[dependency.id],
             task="mortality_24h",
         )
@@ -2182,7 +2178,7 @@ class TestExperimentRunnerRetry:
         )
 
         args = SimpleNamespace(
-            sprint=["1"],
+            experiment_class=["label_efficiency"],
             failed=True,
             skipped=True,
             revision=None,
@@ -2204,28 +2200,30 @@ class TestExperimentRunnerRetry:
         import scripts.internal.run_experiments as runner
 
         dependency = runner.Run(
-            id="s1_pretrain_mae_miiv_seed42",
-            sprint="1",
+            id="core_ssl_benchmark_pretrain_mae_miiv_seed42",
+            run_key="pretrain_mae_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         target = runner.Run(
-            id="s2_finetune_mae_mortality_24h_miiv_seed42",
-            sprint="2",
+            id="label_efficiency_finetune_mae_mortality_24h_miiv_seed42",
+            run_key="finetune_mae_mortality_24h_miiv_seed42",
+            experiment_class="label_efficiency",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint2/finetune_mae_mortality_24h_miiv_seed42",
+            output_dir="outputs/label_efficiency/finetune_mae_mortality_24h_miiv_seed42",
             depends_on=[dependency.id],
             task="mortality_24h",
         )
 
-        revised_dep_id = "s1_rev-thesis-v1_pretrain_mae_miiv_seed42"
-        revised_target_id = "s2_rev-thesis-v1_finetune_mae_mortality_24h_miiv_seed42"
+        revised_dep_id = "core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42"
+        revised_target_id = "label_efficiency_rev-thesis-v1_finetune_mae_mortality_24h_miiv_seed42"
         state = {
             "version": 1,
             "runs": {
@@ -2246,7 +2244,7 @@ class TestExperimentRunnerRetry:
         )
 
         args = SimpleNamespace(
-            sprint=["2"],
+            experiment_class=["label_efficiency"],
             failed=True,
             skipped=False,
             revision="thesis-v1",
@@ -2270,21 +2268,21 @@ class TestExperimentRunnerRetry:
 
         pretrain = runner.Run(
             id="pretrain",
-            sprint="10",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint10/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         finetune = runner.Run(
             id="finetune",
-            sprint="10",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint10/finetune_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/finetune_mae_miiv_seed42",
             task="mortality_24h",
         )
 
@@ -2302,21 +2300,21 @@ class TestExperimentRunnerRetry:
 
         pretrain = runner.Run(
             id="pretrain",
-            sprint="10",
+            experiment_class="core_ssl_benchmark",
             run_type="pretrain",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint10/pretrain_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
         )
         finetune = runner.Run(
             id="finetune",
-            sprint="10",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint10/finetune_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/finetune_mae_miiv_seed42",
             task="mortality_24h",
         )
 
@@ -2334,12 +2332,12 @@ class TestExperimentRunnerRetry:
 
         failed_run = runner.Run(
             id="failed",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="supervised",
             paradigm="supervised",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/supervised_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/supervised_miiv_seed42",
             task="mortality_24h",
         )
         state = {"version": 1, "runs": {failed_run.id: {"status": "failed"}}}
@@ -2356,12 +2354,12 @@ class TestExperimentRunnerRetry:
 
         skipped_run = runner.Run(
             id="skipped",
-            sprint="1",
+            experiment_class="core_ssl_benchmark",
             run_type="finetune",
             paradigm="mae",
             dataset="miiv",
             seed=42,
-            output_dir="outputs/sprint1/finetune_mae_miiv_seed42",
+            output_dir="outputs/core_ssl_benchmark/finetune_mae_miiv_seed42",
             task="mortality_24h",
         )
         state = {"version": 1, "runs": {skipped_run.id: {"status": "skipped"}}}
@@ -2385,8 +2383,8 @@ class TestExportStatisticalScope:
                 for task, base in [("mortality_24h", 0.30), ("aki_kdigo", 0.25)]:
                     rows.append(
                         {
+                            "experiment_class": "classical_baselines",
                             "experiment_type": "classical_baselines",
-                            "sprint": "11",
                             "paradigm": paradigm,
                             "dataset": "miiv",
                             "task": task,
@@ -2875,51 +2873,49 @@ class TestFinetuneCheckpointParadigmDetection:
 
 
 class TestExperimentRunnerMatrix:
-    """Tests for thesis-final sprint matrix coverage."""
+    """Tests for thesis-final experiment-class matrix coverage."""
 
-    def test_classical_baselines_are_canonicalized_to_sprint11(self):
+    def test_matrix_counts_match_final_experiment_classes(self):
         from collections import Counter
 
-        from scripts.internal.run_experiments import generate_all_runs
+        from scripts.internal.run_experiments import (
+            EXPECTED_CLASS_COUNTS,
+            generate_all_runs,
+            scientific_fingerprint,
+        )
 
         runs = generate_all_runs()
-        by_sprint = Counter(run.sprint for run in runs)
+        by_class = Counter(run.experiment_class for run in runs)
 
         assert len(runs) == 2305
-        assert by_sprint["1"] == 19
-        assert by_sprint["3"] == 31
-        assert by_sprint["4"] == 31
-        assert by_sprint["5"] == 186
-        assert by_sprint["6"] == 504
-        assert by_sprint["11"] == 360
+        assert sum(run.experiment_class != "smart_external_reference" for run in runs) == 2170
+        assert by_class == EXPECTED_CLASS_COUNTS
+        assert len({scientific_fingerprint(run) for run in runs}) == len(runs)
+        assert not any(run.task == "mortality" for run in runs)
 
-        non_s11_classical = [
-            run for run in runs if run.run_type in ("gru_d", "xgboost") and run.sprint != "11"
+        non_classical_baselines = [
+            run
+            for run in runs
+            if run.run_type in ("gru_d", "xgboost")
+            and run.experiment_class != "classical_baselines"
         ]
-        assert non_s11_classical == []
+        assert non_classical_baselines == []
 
-    def test_sprint7p_expanded_to_five_seeds(self):
-        from scripts.internal.run_experiments import BASELINE_SPRINTS, SEEDS_EXTENDED, MatrixBuilder
+    def test_capacity_study_expanded_to_five_seeds(self):
+        from scripts.internal.run_experiments import SEEDS_EXTENDED, MatrixBuilder
 
         builder = MatrixBuilder()
-        builder.build_sprint7p()
+        builder.build_capacity_study()
 
         assert len(builder.runs) == 100
         assert sorted({run.seed for run in builder.runs}) == SEEDS_EXTENDED
-        assert BASELINE_SPRINTS["7p"] == ["6", "10"]
-        assert "10" in BASELINE_SPRINTS["6"]
-        assert "10" in BASELINE_SPRINTS["7"]
-        assert "10" in BASELINE_SPRINTS["8"]
-        assert {run.extra_overrides["+model_size"] for run in builder.runs} == {
-            "medium",
-            "large",
-        }
+        assert {run.model_size for run in builder.runs} == {"medium", "large"}
 
-    def test_sprint13_includes_both_protocols(self):
+    def test_ts2vec_extension_includes_both_protocols(self):
         from scripts.internal.run_experiments import MatrixBuilder
 
         builder = MatrixBuilder()
-        builder.build_sprint13()
+        builder.build_ts2vec_extension()
 
         assert len(builder.runs) == 135
         pretrains = [run for run in builder.runs if run.run_type == "pretrain"]

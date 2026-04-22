@@ -38,16 +38,18 @@ def test_default_phases_include_baseline():
     assert "baseline" in mod.DEFAULT_PHASES
 
 
-def test_default_core_sprints_include_sprint11():
+def test_default_experiment_classes_include_classical_baselines():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
-    assert "11" in mod.CORE_SPRINTS
+    assert "classical_baselines" in mod.DEFAULT_EXPERIMENT_CLASSES
 
 
-def test_default_core_sprints_include_ablation_and_transfer_sprints():
+def test_default_experiment_classes_include_downstream_families():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
-    assert {"6", "7", "8"}.issubset(set(mod.CORE_SPRINTS))
+    assert {"label_efficiency", "cross_dataset_transfer", "hp_robustness"}.issubset(
+        set(mod.DEFAULT_EXPERIMENT_CLASSES)
+    )
 
 
 def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):

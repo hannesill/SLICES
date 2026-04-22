@@ -25,8 +25,9 @@ dataset: miiv
 # Paradigm
 paradigm: gru_d
 
-# Experiment group (stored as a sprint tag for historical W&B compatibility)
-sprint: null
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -83,7 +84,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null
-  run_name: s${sprint}_gru_d_${dataset}_${task.task_name}_seed${seed}
+  run_name: ${experiment_class}_gru_d_${dataset}_${task.task_name}_seed${seed}
   wandb_group: gru_d_${dataset}_${task.task_name}
   wandb_tags:
     - "phase:baseline"
