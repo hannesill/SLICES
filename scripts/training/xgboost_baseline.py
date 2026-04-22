@@ -325,11 +325,18 @@ def main(cfg: DictConfig) -> None:
     if cfg.logging.get("use_wandb", False):
         import wandb
 
+        run_name = cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}")
+        group_name = cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}")
+        if cfg.get("label_fraction", 1.0) < 1.0:
+            frac_str = str(cfg.label_fraction).replace(".", "")
+            run_name += f"_frac{frac_str}"
+            group_name += f"_frac{frac_str}"
+
         run = wandb.init(
             project=cfg.logging.wandb_project,
             entity=cfg.logging.get("wandb_entity", None),
-            name=cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}"),
-            group=cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}"),
+            name=run_name,
+            group=group_name,
             tags=_build_wandb_tags(cfg),
             config=OmegaConf.to_container(cfg, resolve=True),
         )

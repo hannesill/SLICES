@@ -143,7 +143,7 @@ def fetch_eval_runs(
         tag_filters.append(f"revision:{revisions[0]}")
 
     if tag_filters:
-        filters["tags"] = {"$all": tag_filters}
+        filters["$and"] = [{"tags": tag} for tag in tag_filters]
 
     log.info("Fetching runs from %s with filters: %s", path, json.dumps(filters, default=str))
     runs_iter = api.runs(path, filters=filters or {}, order="-created_at")

@@ -186,8 +186,8 @@ class Run:
         ]
         if self.experiment_subtype is not None:
             overrides.append(f"experiment_subtype={self.experiment_subtype}")
-        if self.protocol is not None:
-            overrides.append(f"+protocol={self.protocol}")
+        if self.protocol is not None and self.run_type == "finetune":
+            overrides.append(f"protocol={self.protocol}")
         if self.model_size is not None:
             overrides.append(f"+model_size={self.model_size}")
         for k, v in self.extra_overrides.items():
@@ -664,6 +664,8 @@ class MatrixBuilder:
                     )
                 for mask_ratio in MASK_RATIO_ROBUSTNESS:
                     extra = {"ssl.mask_ratio": mask_ratio}
+                    if paradigm == "contrastive":
+                        extra["ssl.complementary_masks"] = False
                     subtype = "mask_ratio_sensitivity"
                     pretrain = self._add_pretrain(
                         experiment_class,
@@ -918,6 +920,59 @@ def set_run_status(state: dict, run_id: str, status: str, **kwargs) -> None:
     state["runs"][run_id].update(kwargs)
 
 
+def _run_launch_commit(run: Run) -> str | None:
+    commit = run.extra_overrides.get("+launch_commit")
+    return str(commit) if commit else None
+
+
+def _state_launch_commit(info: dict) -> str | None:
+    commit = info.get("launch_commit")
+    if commit:
+        return str(commit)
+    command = str(info.get("command") or "")
+    match = re.search(r"(?:^|\s)\+?launch_commit=([^\s]+)", command)
+    return match.group(1) if match else None
+
+
+def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None:
+    """Do not trust completed/skipped state from a different reviewed commit."""
+    reset = 0
+    for run in runs:
+        expected_commit = _run_launch_commit(run)
+        if expected_commit is None:
+            continue
+
+        info = state["runs"].get(run.id)
+        if not info:
+            continue
+
+        status = info.get("status", "pending")
+        if status == "pending":
+            continue
+
+        actual_commit = _state_launch_commit(info)
+        if actual_commit == expected_commit:
+            continue
+
+        if status == "running":
+            print(
+                f"  WARNING {run.id}: state is running from launch_commit="
+                f"{actual_commit or 'unknown'}, expected {expected_commit}; leaving it untouched."
+            )
+            continue
+
+        state["runs"][run.id] = {
+            "status": "pending",
+            "reset_reason": (
+                f"launch_commit changed from {actual_commit or 'unknown'} " f"to {expected_commit}"
+            ),
+        }
+        reset += 1
+
+    if reset:
+        print(f"Reset {reset} stale run state entries for launch_commit mismatch.")
+
+
 def is_pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -1040,6 +1095,8 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
         _print_dry_run(runs, runs_by_id)
         return 0
 
+    reset_state_for_launch_commit_mismatch(runs, state)
+
     print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}\n")
 
@@ -1099,15 +1156,16 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
             )
             proc._log_fh = log_fh  # type: ignore[attr-defined]
             active[run.id] = proc
-            set_run_status(
-                state,
-                run.id,
-                "running",
-                started_at=now,
-                pid=proc.pid,
-                log_file=str(log_file),
-                command=shlex.join(cmd),
-            )
+            status_updates = {
+                "started_at": now,
+                "pid": proc.pid,
+                "log_file": str(log_file),
+                "command": shlex.join(cmd),
+            }
+            launch_commit = _run_launch_commit(run)
+            if launch_commit is not None:
+                status_updates["launch_commit"] = launch_commit
+            set_run_status(state, run.id, "running", **status_updates)
 
         save_state(state)
 
