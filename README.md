@@ -29,7 +29,7 @@ and model-capacity studies.
 
 | Comparison | What Varies | What It Tests |
 |---|---|---|
-| **MAE vs JEPA** | Input-space vs latent-space prediction | Same masking, same encoder input |
+| **MAE vs JEPA** | Input-space vs latent-space prediction | Same encoder input, tokenization, and mask budget |
 | **JEPA vs Contrastive** | Local positional prediction vs global invariance | Both operate in latent space |
 | **MAE vs Contrastive** | Reconstruction vs discrimination | Opposite ends of the SSL spectrum |
 
@@ -42,7 +42,9 @@ Fair comparison of SSL objectives for clinical time series is currently impossib
 ## SSL Paradigms
 
 The controlled SSL objectives share the same timestep-level obs-aware Transformer
-encoder and differ only in the SSL objective and masking logic:
+encoder, obs-aware tokenization, and default mask budget. The masking strategy is
+reported as part of each objective because JEPA uses block masking to avoid the
+random-mask interpolation failure observed during development.
 
 | Objective | Predicts | Target | Loss |
 |---|---|---|---|
@@ -268,7 +270,7 @@ uv run mypy src/
 - **RICU-based extraction**: Data harmonization across datasets handled by RICU (R). Python reads the output.
 - **Normalize-then-zero-fill**: Single imputation strategy (z-normalize, fill missing with 0). Eliminates imputation as a confound.
 - **Observation masks**: Missingness tracked separately; SSL objectives use this for masking.
-- **Shared masking**: MAE, JEPA, and Contrastive share identical masking code (`masking.py`) for fair comparison.
+- **Controlled masking budget**: MAE, JEPA, and Contrastive share the same default mask ratio through the common `masking.py` infrastructure; objective-specific masking strategies are reported explicitly.
 - **Patient-level splits**: No data leakage between train/val/test.
 - **Config-driven ablations**: Change one YAML default to switch paradigm, encoder, or task.
 

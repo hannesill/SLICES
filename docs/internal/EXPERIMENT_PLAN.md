@@ -27,6 +27,12 @@ Controlled SSL objectives share:
 - same masking budget where configs intend parity
 - same training budget unless the experiment class is an explicit ablation
 
+Masking strategy is not forced to be identical across objectives. MAE uses
+random timestep masking, JEPA uses block timestep masking to avoid the
+random-mask interpolation failure observed during development, and Contrastive
+uses two masked views. The controlled invariant is the mask budget/interface, not
+the exact mask geometry.
+
 `ts2vec_extension` is a temporal-contrastive extension. It provides context for
 the contrastive result but is not one of the three core thesis vertices.
 
