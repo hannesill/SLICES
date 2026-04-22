@@ -173,6 +173,40 @@ def test_build_per_seed_df_adds_unscoped_inherited_memberships_for_thesis_famili
     assert ("run-2", "8", "hp_ablation") in memberships
 
 
+def test_build_per_seed_df_rejects_hp_ablation_from_label_and_transfer_inheritance():
+    mod = importlib.import_module("scripts.export_results")
+
+    runs = []
+    for run_id, lr_code in [("hp-lr-2e4", "00002"), ("hp-lr-5e4", "00005")]:
+        run = DummyRun(
+            config={
+                "sprint": "10",
+                "dataset": "miiv",
+                "paradigm": "mae",
+                "seed": 42,
+                "output_dir": (
+                    "outputs/sprint10/" f"finetune_mae_mortality_24h_miiv_seed42_lr{lr_code}"
+                ),
+                "encoder": {"d_model": 64, "n_layers": 2},
+                "training": {"freeze_encoder": False},
+                "task": {"task_name": "mortality_24h"},
+                "label_fraction": 1.0,
+            },
+            tags=["sprint:10", "sprint:6", "sprint:7", "phase:finetune"],
+            name=f"finetune_mae_mortality_24h_miiv_seed42_lr{lr_code}",
+        )
+        run.id = run_id
+        run.url = f"https://wandb.test/{run_id}"
+        runs.append(run)
+
+    df = mod.build_per_seed_df(runs)
+
+    assert len(df) == 2
+    assert set(df["experiment_type"]) == {"hp_ablation"}
+    assert set(df["sprint"]) == {"10"}
+    assert sorted(df["upstream_pretrain_lr"].tolist()) == [2e-4, 5e-4]
+
+
 def test_build_per_seed_df_fails_closed_on_extraction_errors():
     mod = importlib.import_module("scripts.export_results")
 
@@ -392,6 +426,135 @@ def test_validate_warns_when_evaluation_row_missing_primary_metric():
     warnings = mod.validate(per_seed_df, aggregated_df)
 
     assert any("missing their primary test metric" in warning for warning in warnings)
+
+
+def test_extract_run_exports_los_regression_fairness_keys():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "sprint": "1",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "encoder": {"d_model": 64, "n_layers": 2},
+            "training": {"freeze_encoder": False},
+            "task": {"task_name": "los_remaining", "task_type": "regression"},
+        },
+        tags=["sprint:1", "phase:finetune"],
+        summary={
+            "test/mae": 1.4,
+            "fairness/gender/worst_group_mse": 2.5,
+            "fairness/gender/worst_group_mae": 1.2,
+            "fairness/gender/mse_gap": 0.7,
+            "fairness/gender/mae_gap": 0.3,
+            "fairness/gender/per_group_mse/F": 1.8,
+            "fairness/gender/per_group_mse/M": 2.5,
+            "fairness/gender/per_group_mae/F": 0.9,
+            "fairness/gender/per_group_mae/M": 1.2,
+        },
+        name="los_fairness",
+    )
+
+    row = mod.extract_run(run, mod.ALL_METRICS)
+    assert row["fairness/gender/worst_group_mse"] == pytest.approx(2.5)
+    assert row["fairness/gender/mse_gap"] == pytest.approx(0.7)
+    assert row["fairness/gender/per_group_mse/M"] == pytest.approx(2.5)
+
+    agg = mod.build_aggregated_df(pd.DataFrame([row]))
+    assert agg.iloc[0]["fairness/gender/worst_group_mse/mean"] == pytest.approx(2.5)
+    assert agg.iloc[0]["fairness/gender/per_group_mae/F/mean"] == pytest.approx(0.9)
+
+
+def test_validate_warns_on_missing_or_failed_checkpoint_provenance():
+    mod = importlib.import_module("scripts.export_results")
+
+    per_seed_df = pd.DataFrame(
+        [
+            {
+                "wandb_run_id": "run-missing",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 42,
+                "phase": "finetune",
+                "test/auprc": 0.4,
+            },
+            {
+                "wandb_run_id": "run-failed",
+                "paradigm": "jepa",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 123,
+                "phase": "finetune",
+                "test/auprc": 0.4,
+                "_eval_checkpoint_source": "failed",
+                "_best_ckpt_error": "no best checkpoint",
+            },
+            {
+                "wandb_run_id": "run-bad-load",
+                "paradigm": "contrastive",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 456,
+                "phase": "finetune",
+                "test/auprc": 0.4,
+                "_eval_checkpoint_source": "best",
+                "_best_ckpt_path": "outputs/run/checkpoints/best.ckpt",
+                "_best_ckpt_load_ok": False,
+            },
+            {
+                "wandb_run_id": "run-xgb",
+                "paradigm": "xgboost",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 42,
+                "phase": "baseline",
+                "test/auprc": 0.4,
+            },
+        ]
+    )
+
+    warnings = mod.validate(per_seed_df, pd.DataFrame())
+    joined = "\n".join(warnings)
+
+    assert "checkpoint provenance" in joined
+    assert "run-missing" in joined
+    assert "missing _eval_checkpoint_source" in joined
+    assert "run-failed" in joined
+    assert "run-bad-load" in joined
+    assert "run-xgb" not in joined
+
+
+def test_filter_thesis_tasks_excludes_optional_mortality_by_default():
+    mod = importlib.import_module("scripts.export_results")
+
+    df = pd.DataFrame(
+        [
+            {"task": "mortality_24h", "wandb_run_id": "main"},
+            {"task": "mortality", "wandb_run_id": "extension"},
+        ]
+    )
+
+    filtered = mod.filter_thesis_tasks(df)
+    unfiltered = mod.filter_thesis_tasks(df, include_extension_tasks=True)
+
+    assert filtered["wandb_run_id"].tolist() == ["main"]
+    assert unfiltered["wandb_run_id"].tolist() == ["main", "extension"]
+
+
+def test_parse_args_exposes_extension_task_escape_hatch(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--include-extension-tasks"],
+    )
+
+    args = mod.parse_args()
+
+    assert args.include_extension_tasks is True
 
 
 def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
