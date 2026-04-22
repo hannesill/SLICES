@@ -112,6 +112,8 @@ TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
 
 STATE_FILE = Path("outputs/experiment_state.json")
 LOG_DIR = Path("logs/runner")
+LAUNCH_IDENTITY_FILE = ".runner_launch_identity.json"
+LAUNCH_IDENTITY_KEYS = ("revision", "wandb_project", "wandb_entity", "launch_commit")
 
 PROTO_A = {"freeze_encoder": True, "max_epochs": 50, "patience": 10, "lr": 1e-4}
 PROTO_B = {"freeze_encoder": False, "max_epochs": 100, "patience": 10, "lr": 3e-4}
@@ -196,7 +198,7 @@ class Run:
 
     def _append_resume(self, cmd: list[str]) -> None:
         last_ckpt = Path(self.output_dir) / "checkpoints" / "last.ckpt"
-        if last_ckpt.exists():
+        if last_ckpt.exists() and _can_resume_from_last_checkpoint(self):
             cmd.append(f"ckpt_path={last_ckpt}")
 
     def _pretrain_cmd(self) -> list[str]:
@@ -910,6 +912,164 @@ def save_state(state: dict) -> None:
         raise
 
 
+def _normalize_identity_value(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _normalize_launch_identity(identity: dict | None) -> dict[str, str | None]:
+    if not isinstance(identity, dict):
+        identity = {}
+    return {key: _normalize_identity_value(identity.get(key)) for key in LAUNCH_IDENTITY_KEYS}
+
+
+def _override_value(overrides: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = overrides.get(key)
+        if value is not None and str(value):
+            return str(value)
+    return None
+
+
+def _run_launch_identity(run: Run) -> dict[str, str | None]:
+    return _normalize_launch_identity(
+        {
+            "revision": _override_value(run.extra_overrides, "revision"),
+            "wandb_project": _override_value(
+                run.extra_overrides,
+                "logging.wandb_project",
+                "project_name",
+            ),
+            "wandb_entity": _override_value(run.extra_overrides, "logging.wandb_entity"),
+            "launch_commit": _run_launch_commit(run),
+        }
+    )
+
+
+def _command_override(command: str | None, *keys: str) -> str | None:
+    if not command:
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = str(command).split()
+
+    key_set = set(keys)
+    for token in tokens:
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        key = key.lstrip("+")
+        if key in key_set and value:
+            return value
+    return None
+
+
+def _state_launch_identity(info: dict | None) -> dict[str, str | None]:
+    if not isinstance(info, dict):
+        return _normalize_launch_identity(None)
+
+    identity = {}
+    if isinstance(info.get("launch_identity"), dict):
+        identity.update(info["launch_identity"])
+
+    for key in LAUNCH_IDENTITY_KEYS:
+        if not identity.get(key) and info.get(key):
+            identity[key] = info[key]
+
+    command = str(info.get("command") or "")
+    if not identity.get("revision"):
+        identity["revision"] = _command_override(command, "revision")
+    if not identity.get("wandb_project"):
+        identity["wandb_project"] = _command_override(
+            command,
+            "logging.wandb_project",
+            "project_name",
+        )
+    if not identity.get("wandb_entity"):
+        identity["wandb_entity"] = _command_override(command, "logging.wandb_entity")
+    if not identity.get("launch_commit"):
+        identity["launch_commit"] = _state_launch_commit(info)
+
+    return _normalize_launch_identity(identity)
+
+
+def _has_scoped_launch_identity(identity: dict[str, str | None]) -> bool:
+    return any(identity.get(key) is not None for key in LAUNCH_IDENTITY_KEYS)
+
+
+def _launch_identity_matches(
+    expected: dict[str, str | None],
+    actual: dict[str, str | None],
+) -> bool:
+    expected = _normalize_launch_identity(expected)
+    actual = _normalize_launch_identity(actual)
+    return all(expected[key] == actual[key] for key in LAUNCH_IDENTITY_KEYS)
+
+
+def _launch_identity_changed_keys(
+    expected: dict[str, str | None],
+    actual: dict[str, str | None],
+) -> list[str]:
+    expected = _normalize_launch_identity(expected)
+    actual = _normalize_launch_identity(actual)
+    return [key for key in LAUNCH_IDENTITY_KEYS if expected[key] != actual[key]]
+
+
+def _format_launch_identity(identity: dict[str, str | None]) -> str:
+    identity = _normalize_launch_identity(identity)
+    return ", ".join(
+        f"{key}={identity[key] if identity[key] is not None else 'none'}"
+        for key in LAUNCH_IDENTITY_KEYS
+    )
+
+
+def _read_output_launch_identity(output_dir: Path) -> dict[str, str | None] | None:
+    marker = output_dir / LAUNCH_IDENTITY_FILE
+    if not marker.exists():
+        return None
+    try:
+        payload = json.loads(marker.read_text())
+    except (OSError, json.JSONDecodeError):
+        return _normalize_launch_identity(None)
+    if isinstance(payload, dict) and isinstance(payload.get("launch_identity"), dict):
+        return _normalize_launch_identity(payload["launch_identity"])
+    if isinstance(payload, dict):
+        return _normalize_launch_identity(payload)
+    return _normalize_launch_identity(None)
+
+
+def _write_output_launch_identity(run: Run) -> None:
+    output_dir = Path(run.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run.id,
+        "launch_identity": _run_launch_identity(run),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    fd, tmp = tempfile.mkstemp(dir=output_dir, prefix=f"{LAUNCH_IDENTITY_FILE}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, output_dir / LAUNCH_IDENTITY_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _can_resume_from_last_checkpoint(run: Run) -> bool:
+    expected = _run_launch_identity(run)
+    actual = _read_output_launch_identity(Path(run.output_dir))
+    if actual is None:
+        return not _has_scoped_launch_identity(expected)
+    return _launch_identity_matches(expected, actual)
+
+
 def get_run_status(state: dict, run_id: str) -> str:
     return state["runs"].get(run_id, {}).get("status", "pending")
 
@@ -941,8 +1101,8 @@ def _safe_path_component(value: str | None) -> str:
 
 def _quarantine_stale_output_dir(
     run: Run,
-    actual_commit: str | None,
-    expected_commit: str,
+    actual_identity: str | None,
+    expected_identity: str,
 ) -> str | None:
     output_dir = Path(run.output_dir)
     if not output_dir.exists():
@@ -950,8 +1110,8 @@ def _quarantine_stale_output_dir(
 
     parent = output_dir.parent
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    actual = _safe_path_component(actual_commit)
-    expected = _safe_path_component(expected_commit)
+    actual = _safe_path_component(actual_identity)
+    expected = _safe_path_component(expected_identity)
     stem = f"{output_dir.name}.stale-{actual}-to-{expected}-{timestamp}"
     candidate = parent / stem
     suffix = 1
@@ -963,55 +1123,81 @@ def _quarantine_stale_output_dir(
     return str(candidate)
 
 
-def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None:
-    """Do not trust state or artifacts from a different reviewed commit."""
+def reset_state_for_launch_identity_mismatch(runs: list[Run], state: dict) -> None:
+    """Do not trust state or artifacts from a different launch target."""
     reset = 0
     quarantined = 0
     for run in runs:
-        expected_commit = _run_launch_commit(run)
-        if expected_commit is None:
-            continue
-
+        expected_identity = _run_launch_identity(run)
         info = state["runs"].get(run.id)
-        if not info:
-            continue
+        status = info.get("status", "pending") if info else "pending"
+        actual_identity = _state_launch_identity(info)
+        reasons = []
 
-        status = info.get("status", "pending")
-        actual_commit = _state_launch_commit(info)
-        if actual_commit == expected_commit:
-            continue
-        if status == "pending" and actual_commit is None and not Path(run.output_dir).exists():
+        if info and not _launch_identity_matches(expected_identity, actual_identity):
+            changed_keys = _launch_identity_changed_keys(expected_identity, actual_identity)
+            if changed_keys == ["launch_commit"]:
+                reasons.append(
+                    "launch_commit changed from "
+                    f"{actual_identity['launch_commit'] or 'unknown'} "
+                    f"to {expected_identity['launch_commit'] or 'none'}"
+                )
+            else:
+                reasons.append(
+                    "launch identity changed from "
+                    f"{_format_launch_identity(actual_identity)} to "
+                    f"{_format_launch_identity(expected_identity)}"
+                )
+
+        output_dir = Path(run.output_dir)
+        output_identity = _read_output_launch_identity(output_dir) if output_dir.exists() else None
+        if output_dir.exists():
+            if output_identity is None:
+                if _has_scoped_launch_identity(expected_identity):
+                    reasons.append("output directory has no launch identity marker")
+            elif not _launch_identity_matches(expected_identity, output_identity):
+                reasons.append(
+                    "output directory launch identity is "
+                    f"{_format_launch_identity(output_identity)}, expected "
+                    f"{_format_launch_identity(expected_identity)}"
+                )
+
+        if not reasons:
             continue
 
         if status == "running":
             print(
-                f"  WARNING {run.id}: state is running from launch_commit="
-                f"{actual_commit or 'unknown'}, expected {expected_commit}; leaving it untouched."
+                f"  WARNING {run.id}: state/output identity mismatch while run is marked "
+                "running; leaving it untouched."
             )
             continue
 
         quarantined_output_dir = _quarantine_stale_output_dir(
             run,
-            actual_commit,
-            expected_commit,
+            _format_launch_identity(output_identity or actual_identity),
+            _format_launch_identity(expected_identity),
         )
         if quarantined_output_dir:
             quarantined += 1
 
         state["runs"][run.id] = {
             "status": "pending",
-            "reset_reason": (
-                f"launch_commit changed from {actual_commit or 'unknown'} " f"to {expected_commit}"
-            ),
+            "launch_identity": expected_identity,
+            "reset_reason": "; ".join(dict.fromkeys(reasons)),
         }
         if quarantined_output_dir:
             state["runs"][run.id]["quarantined_output_dir"] = quarantined_output_dir
         reset += 1
 
     if reset:
-        print(f"Reset {reset} stale run state entries for launch_commit mismatch.")
+        print(f"Reset {reset} stale run state entries for launch identity mismatch.")
     if quarantined:
         print(f"Quarantined {quarantined} stale output directories before relaunch.")
+
+
+def reset_state_for_launch_commit_mismatch(runs: list[Run], state: dict) -> None:
+    """Backward-compatible wrapper for launch identity reconciliation."""
+    reset_state_for_launch_identity_mismatch(runs, state)
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -1136,7 +1322,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
         _print_dry_run(runs, runs_by_id)
         return 0
 
-    reset_state_for_launch_commit_mismatch(runs, state)
+    reset_state_for_launch_identity_mismatch(runs, state)
 
     print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}\n")
@@ -1188,6 +1374,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
             log_file = LOG_DIR / f"{run.id}.log"
             now = datetime.now(timezone.utc).isoformat()
             print(f"  START {run.id}")
+            _write_output_launch_identity(run)
             log_fh = open(log_file, "w")
             proc = subprocess.Popen(
                 cmd,
@@ -1202,10 +1389,11 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
                 "pid": proc.pid,
                 "log_file": str(log_file),
                 "command": shlex.join(cmd),
+                "launch_identity": _run_launch_identity(run),
             }
-            launch_commit = _run_launch_commit(run)
-            if launch_commit is not None:
-                status_updates["launch_commit"] = launch_commit
+            for key, value in status_updates["launch_identity"].items():
+                if value is not None:
+                    status_updates[key] = value
             set_run_status(state, run.id, "running", **status_updates)
 
         save_state(state)
@@ -1298,7 +1486,7 @@ def print_status(experiment_class_filter: list[str] | None = None) -> None:
             if experiment_class and revision:
                 groups.setdefault((experiment_class, revision), []).append(run_id)
 
-    group_keys = sorted(groups)
+    group_keys = sorted(groups, key=lambda key: (key[0], key[1] is not None, key[1] or ""))
     if experiment_class_filter:
         allowed = set(experiment_class_filter)
         group_keys = [key for key in group_keys if key[0] in allowed]

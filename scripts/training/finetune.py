@@ -90,7 +90,12 @@ def main(cfg: DictConfig) -> None:
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
 
-    # Validate checkpoint
+    # Validate checkpoint source.
+    if cfg.checkpoint is not None and cfg.pretrain_checkpoint is not None:
+        raise ValueError(
+            "Provide exactly one checkpoint source: use 'checkpoint' for encoder.pt "
+            "or 'pretrain_checkpoint' for a full Lightning pretrain .ckpt, not both."
+        )
     if cfg.checkpoint is None and cfg.pretrain_checkpoint is None:
         raise ValueError(
             "Must provide either 'checkpoint' (encoder.pt) or "

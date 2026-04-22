@@ -46,8 +46,7 @@ rerun_reason: null
 # Random seed for reproducibility
 seed: 42
 
-# Checkpoint path (encoder weights from pretraining)
-# Can be either:
+# Checkpoint path (encoder weights from pretraining). Provide exactly one:
 #   - encoder.pt file: checkpoint=outputs/encoder.pt
 #   - full .ckpt file: pretrain_checkpoint=outputs/ssl-epoch=099.ckpt
 checkpoint: null

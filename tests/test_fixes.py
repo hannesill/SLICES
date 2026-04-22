@@ -1760,6 +1760,129 @@ class TestExperimentRunnerWandbOverrides:
         )
         assert not any(part.startswith("ckpt_path=") for part in run.build_command({}))
 
+    def test_wandb_target_mismatch_resets_completed_state_and_output(self, tmp_path):
+        from scripts.internal.run_experiments import (
+            Run,
+            apply_wandb_target,
+            reset_state_for_launch_identity_mismatch,
+        )
+
+        output_dir = tmp_path / "supervised_mortality_24h_miiv_seed42"
+        checkpoint_dir = output_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "last.ckpt").write_text("old checkpoint")
+
+        run = Run(
+            id="core_ssl_benchmark_rev-thesis-v1_supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(output_dir),
+            task="mortality_24h",
+            extra_overrides={"revision": "thesis-v1"},
+        )
+        apply_wandb_target([run], project="new-project", entity="team-a")
+        state = {
+            "version": 1,
+            "runs": {
+                run.id: {
+                    "status": "completed",
+                    "command": (
+                        "uv run python scripts/training/supervised.py "
+                        "revision=thesis-v1 project_name=old-project "
+                        "logging.wandb_project=old-project logging.wandb_entity=team-a"
+                    ),
+                }
+            },
+        }
+
+        reset_state_for_launch_identity_mismatch([run], state)
+
+        state_entry = state["runs"][run.id]
+        assert state_entry["status"] == "pending"
+        assert "launch identity changed" in state_entry["reset_reason"]
+        assert not output_dir.exists()
+        assert Path(state_entry["quarantined_output_dir"]).exists()
+
+    def test_scoped_run_does_not_resume_unmarked_checkpoint(self, tmp_path):
+        from scripts.internal.run_experiments import Run
+
+        output_dir = tmp_path / "pretrain_mae_miiv_seed42"
+        checkpoint_dir = output_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "last.ckpt").write_text("old checkpoint")
+
+        run = Run(
+            id="core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(output_dir),
+            extra_overrides={"revision": "thesis-v1"},
+        )
+
+        assert not any(part.startswith("ckpt_path=") for part in run.build_command({}))
+
+    def test_scoped_run_resumes_matching_marked_checkpoint(self, tmp_path):
+        from scripts.internal.run_experiments import Run, _write_output_launch_identity
+
+        output_dir = tmp_path / "pretrain_mae_miiv_seed42"
+        checkpoint_dir = output_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True)
+        last_ckpt = checkpoint_dir / "last.ckpt"
+        last_ckpt.write_text("checkpoint")
+
+        run = Run(
+            id="core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(output_dir),
+            extra_overrides={"revision": "thesis-v1"},
+        )
+        _write_output_launch_identity(run)
+
+        assert f"ckpt_path={last_ckpt}" in run.build_command({})
+
+    def test_revised_status_handles_base_and_revision_groups(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        base = runner.Run(
+            id="core_ssl_benchmark_supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/core_ssl_benchmark/supervised_mortality_24h_miiv_seed42",
+            task="mortality_24h",
+        )
+        revised_id = "core_ssl_benchmark_rev-thesis-v1_supervised_mortality_24h_miiv_seed42"
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [base])
+        monkeypatch.setattr(
+            runner,
+            "load_state",
+            lambda: {
+                "version": 1,
+                "runs": {
+                    revised_id: {"status": "completed"},
+                },
+            },
+        )
+
+        runner.print_status()
+
+        output = capsys.readouterr().out
+        assert "core_ssl_benchmark" in output
+        assert "core_ssl_benchmark/thesis-v1" in output
+
     def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
@@ -2501,6 +2624,8 @@ class TestExportStatisticalScope:
         assert ("gru_d", "supervised") in pairs
         assert ("supervised", "xgboost") in pairs
         assert ("gru_d", "xgboost") in pairs
+        per_task = stats_df[stats_df["comparison_scope"] == "per_task"]
+        assert set(per_task["task"]) == {"mortality_24h", "aki_kdigo"}
 
 
 class TestXGBoostBaseline:
@@ -2840,6 +2965,18 @@ class TestSupervisedBaselineMetrics:
 
 class TestFinetuneCheckpointParadigmDetection:
     """Regression tests for checkpoint-driven finetune metadata."""
+
+    def test_entrypoint_rejects_ambiguous_checkpoint_sources(self):
+        module = importlib.import_module("scripts.training.finetune")
+        cfg = OmegaConf.create(
+            {
+                "checkpoint": "outputs/pretrain/encoder.pt",
+                "pretrain_checkpoint": "outputs/pretrain/last.ckpt",
+            }
+        )
+
+        with pytest.raises(ValueError, match="exactly one checkpoint source"):
+            module.main.__wrapped__(cfg)
 
     def test_pretrain_checkpoint_auto_detects_paradigm(self, monkeypatch, tmp_path):
         module = importlib.import_module("scripts.training.finetune")
