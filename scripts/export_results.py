@@ -876,60 +876,69 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
             )
         ]
 
-        scope_cols = [
+        base_scope_cols = [
             col
             for col in FINGERPRINT
             if col in subset.columns and col not in {"paradigm", "task", "phase"}
         ]
-        if "primary_metric_name" not in scope_cols:
-            scope_cols.append("primary_metric_name")
+        if "primary_metric_name" not in base_scope_cols:
+            base_scope_cols.append("primary_metric_name")
 
-        work = _fillna_for_grouping(subset, scope_cols)
-        for scope_key, scope_group in work.groupby(scope_cols, dropna=False):
-            if not isinstance(scope_key, tuple):
-                scope_key = (scope_key,)
-            scope = dict(zip(scope_cols, scope_key))
-            for col, value in list(scope.items()):
-                if value == "__none__":
-                    scope[col] = None
-
-            paradigms = sorted(
-                paradigm
-                for paradigm in scope_group["paradigm"].dropna().unique().tolist()
-                if paradigm != "__none__"
-            )
-            if len(paradigms) < 2:
-                continue
-
-            higher_is_better = scope.get("primary_metric_name") not in LOWER_IS_BETTER_METRICS
-            family_rows = []
-            for paradigm_a, paradigm_b in combinations(paradigms, 2):
-                if experiment_class in CONTEXTUAL_STAT_CLASSES:
-                    a_classical = paradigm_a in {"gru_d", "xgboost"}
-                    b_classical = paradigm_b in {"gru_d", "xgboost"}
-                    if a_classical == b_classical:
-                        continue
-                paired, coverage = _paired_metric_frame(scope_group, paradigm_a, paradigm_b)
-                if paired.empty:
+        scope_defs = [
+            ("omnibus_primary_metric", base_scope_cols, 2),
+            ("per_task", [*base_scope_cols, "task"], 1),
+        ]
+        for comparison_scope, raw_scope_cols, min_tasks in scope_defs:
+            scope_cols = list(dict.fromkeys(col for col in raw_scope_cols if col in subset.columns))
+            work = _fillna_for_grouping(subset, scope_cols)
+            for scope_key, scope_group in work.groupby(scope_cols, dropna=False):
+                if scope_group["task"].nunique() < min_tasks:
                     continue
-                family_rows.append(
-                    _paired_stat_row(
-                        scope=scope,
-                        paired=paired,
-                        coverage=coverage,
-                        paradigm_a=paradigm_a,
-                        paradigm_b=paradigm_b,
-                        higher_is_better=higher_is_better,
-                    )
-                )
+                if not isinstance(scope_key, tuple):
+                    scope_key = (scope_key,)
+                scope = dict(zip(scope_cols, scope_key))
+                for col, value in list(scope.items()):
+                    if value == "__none__":
+                        scope[col] = None
+                scope["comparison_scope"] = comparison_scope
 
-            corrected = bonferroni_correction([row["p_value"] for row in family_rows])
-            for row, corrected_p in zip(family_rows, corrected, strict=True):
-                row["p_value_bonferroni"] = corrected_p
-                row["significant_bonferroni_005"] = bool(
-                    not math.isnan(corrected_p) and corrected_p < 0.05
+                paradigms = sorted(
+                    paradigm
+                    for paradigm in scope_group["paradigm"].dropna().unique().tolist()
+                    if paradigm != "__none__"
                 )
-                rows.append(row)
+                if len(paradigms) < 2:
+                    continue
+
+                higher_is_better = scope.get("primary_metric_name") not in LOWER_IS_BETTER_METRICS
+                family_rows = []
+                for paradigm_a, paradigm_b in combinations(paradigms, 2):
+                    if experiment_class in CONTEXTUAL_STAT_CLASSES:
+                        a_classical = paradigm_a in {"gru_d", "xgboost"}
+                        b_classical = paradigm_b in {"gru_d", "xgboost"}
+                        if a_classical == b_classical:
+                            continue
+                    paired, coverage = _paired_metric_frame(scope_group, paradigm_a, paradigm_b)
+                    if paired.empty:
+                        continue
+                    family_rows.append(
+                        _paired_stat_row(
+                            scope=scope,
+                            paired=paired,
+                            coverage=coverage,
+                            paradigm_a=paradigm_a,
+                            paradigm_b=paradigm_b,
+                            higher_is_better=higher_is_better,
+                        )
+                    )
+
+                corrected = bonferroni_correction([row["p_value"] for row in family_rows])
+                for row, corrected_p in zip(family_rows, corrected, strict=True):
+                    row["p_value_bonferroni"] = corrected_p
+                    row["significant_bonferroni_005"] = bool(
+                        not math.isnan(corrected_p) and corrected_p < 0.05
+                    )
+                    rows.append(row)
 
     if not rows:
         return pd.DataFrame()
@@ -938,7 +947,9 @@ def build_statistical_tests_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
         col
         for col in [
             "experiment_class",
+            "comparison_scope",
             "dataset",
+            "task",
             "protocol",
             "label_fraction",
             "primary_metric_name",

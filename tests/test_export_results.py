@@ -52,14 +52,19 @@ def test_build_statistical_tests_df_produces_pairwise_significance_rows():
 
     stats_df = mod.build_statistical_tests_df(pd.DataFrame(rows))
 
-    assert len(stats_df) == 1
-    row = stats_df.iloc[0]
+    omnibus = stats_df[stats_df["comparison_scope"] == "omnibus_primary_metric"]
+    assert len(omnibus) == 1
+    row = omnibus.iloc[0]
     assert row["primary_metric_name"] == "test/auprc"
     assert row["paradigm_a"] == "mae"
     assert row["paradigm_b"] == "supervised"
     assert row["n_pairs"] == 6
     assert row["better_paradigm"] == "mae"
     assert row["n_shared_task_seed_pairs"] == 6
+
+    per_task = stats_df[stats_df["comparison_scope"] == "per_task"]
+    assert set(per_task["task"]) == {"mortality_24h", "aki_kdigo"}
+    assert set(per_task["n_pairs"]) == {3}
 
 
 def test_extract_run_requires_experiment_class():

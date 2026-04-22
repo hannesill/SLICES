@@ -442,6 +442,15 @@ class TestFineTuneModule:
 
         assert module.encoder is not None
 
+    def test_rejects_ambiguous_checkpoint_sources(self, sample_config):
+        """Finetuning must not silently prefer one checkpoint source over another."""
+        with pytest.raises(ValueError, match="exactly one checkpoint source"):
+            FineTuneModule(
+                sample_config,
+                checkpoint_path="outputs/pretrain/encoder.pt",
+                pretrain_checkpoint_path="outputs/pretrain/last.ckpt",
+            )
+
     def test_load_pretrain_checkpoint_auto_detect_encoder(self, sample_config, tmp_path):
         """Test that pretrain checkpoint auto-detects encoder architecture.
 

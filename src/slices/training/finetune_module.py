@@ -74,6 +74,11 @@ class FineTuneModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.config = config
+        if checkpoint_path and pretrain_checkpoint_path:
+            raise ValueError(
+                "Provide exactly one checkpoint source: checkpoint_path for encoder.pt "
+                "or pretrain_checkpoint_path for a full Lightning pretrain .ckpt, not both."
+            )
 
         # Validate task and training configs (catches typos via extra="forbid")
         task_dict = OmegaConf.to_container(config.task, resolve=True)
