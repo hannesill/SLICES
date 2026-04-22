@@ -42,12 +42,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import os
 import re
 import sys
 import time
-from numbers import Real
 from pathlib import Path
 from typing import Any, Optional
 
@@ -72,6 +70,12 @@ DEFAULT_EXPERIMENT_CLASSES = [
 ]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
+THESIS_TASKS = {
+    "mortality_24h",
+    "mortality_hospital",
+    "aki_kdigo",
+    "los_remaining",
+}
 BINARY_FAIRNESS_REQUIRED_METRICS = [
     "n_valid_groups",
     "worst_group_auroc",
@@ -191,13 +195,9 @@ def _expected_fairness_attributes(run, protected_attributes: list[str]) -> list[
     return attrs
 
 
-def _has_finite_summary_value(summary: dict[str, Any], key: str) -> bool:
-    value = summary.get(key)
-    if value is None:
-        return False
-    if isinstance(value, Real) and not isinstance(value, bool) and not math.isfinite(float(value)):
-        return False
-    return True
+def _has_summary_value(summary: dict[str, Any], key: str) -> bool:
+    """Return true when a fairness summary key was written, even if undefined."""
+    return key in summary and summary.get(key) is not None
 
 
 def _task_type_for_run(run) -> str:
@@ -235,7 +235,7 @@ def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
         for attr in expected_attrs:
             prefix = f"fairness/{attr}/"
             for metric_name in required_metrics:
-                if not _has_finite_summary_value(sm, f"{prefix}{metric_name}"):
+                if not _has_summary_value(sm, f"{prefix}{metric_name}"):
                     return False
         return True
     except Exception:
@@ -261,7 +261,7 @@ def missing_fairness_report_requirements(
         prefix = f"fairness/{attr}/"
         for metric_name in required_metrics:
             key = f"{prefix}{metric_name}"
-            if not _has_finite_summary_value(flat, key):
+            if not _has_summary_value(flat, key):
                 missing.append(f"{attr}: missing {metric_name}")
 
     return missing
@@ -502,6 +502,15 @@ def _get_nested(config: dict, dotted_key: str, default=None):
     return val
 
 
+def _run_task_name(run) -> str | None:
+    return _get_nested(run.config or {}, "task.task_name")
+
+
+def filter_thesis_task_runs(runs: list) -> list:
+    """Keep only fixed thesis tasks for publication fairness evaluation."""
+    return [run for run in runs if _run_task_name(run) in THESIS_TASKS]
+
+
 def build_datamodule(
     wandb_config: dict,
     batch_size: int = 64,
@@ -640,8 +649,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--project",
-        default=os.environ.get("WANDB_PROJECT", "slices"),
-        help="W&B project name (default: $WANDB_PROJECT or 'slices')",
+        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
+        help="W&B project name (default: $WANDB_PROJECT or 'slices-thesis')",
     )
     parser.add_argument(
         "--entity",
@@ -691,6 +700,11 @@ def parse_args() -> argparse.Namespace:
         "--min-subgroup-size", type=int, default=50, help="Min patients per subgroup"
     )
     parser.add_argument("--dry-run", action="store_true", help="List runs without processing")
+    parser.add_argument(
+        "--include-extension-tasks",
+        action="store_true",
+        help="Include task runs outside the fixed thesis task set.",
+    )
     parser.add_argument(
         "--allow-incomplete",
         action="store_true",
@@ -752,6 +766,13 @@ def main() -> None:
             revisions=args.revision,
         )
     )
+
+    if not args.include_extension_tasks:
+        before = len(runs)
+        runs = filter_thesis_task_runs(runs)
+        dropped = before - len(runs)
+        if dropped:
+            log.info("Dropped %d runs outside thesis tasks: %s", dropped, sorted(THESIS_TASKS))
 
     if not runs:
         print("No runs found matching filters.", file=sys.stderr)

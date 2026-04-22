@@ -162,7 +162,6 @@ MODEL_VARIANTS = {
 PRIMARY_TEST_METRIC_BY_TASK = {
     "mortality_24h": "test/auprc",
     "mortality_hospital": "test/auprc",
-    "mortality": "test/auprc",
     "aki_kdigo": "test/auprc",
     "los_remaining": "test/mae",
 }
@@ -1362,8 +1361,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--project",
-        default=os.environ.get("WANDB_PROJECT", "slices"),
-        help="W&B project name (default: WANDB_PROJECT env var or 'slices')",
+        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
+        help="W&B project name (default: WANDB_PROJECT env var or 'slices-thesis')",
     )
     parser.add_argument(
         "--entity",
@@ -1422,7 +1421,7 @@ def parse_args() -> argparse.Namespace:
         "--include-extension-tasks",
         action="store_true",
         help=(
-            "Include optional extension tasks such as ICU mortality. By default, "
+            "Include task rows outside the fixed thesis task set. By default, "
             f"primary thesis exports are restricted to {sorted(THESIS_TASKS)}."
         ),
     )

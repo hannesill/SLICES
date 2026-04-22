@@ -55,6 +55,7 @@ def test_default_experiment_classes_include_downstream_families():
 def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -64,6 +65,7 @@ def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
     args = mod.parse_args()
 
     assert args.allow_incomplete is True
+    assert args.project == "slices-thesis"
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch):
@@ -148,6 +150,19 @@ def test_has_fairness_metrics_rejects_partial_binary_summaries():
     assert mod.has_fairness_metrics(run, ["gender"]) is False
 
 
+def test_has_fairness_metrics_accepts_written_nan_summary_values():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    summary = _binary_fairness_summary("gender")
+    summary["fairness/gender/worst_group_auroc"] = float("nan")
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics=summary,
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"]) is True
+
+
 def test_has_fairness_metrics_requires_regression_metric_family():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
@@ -221,7 +236,7 @@ def test_missing_fairness_report_requirements_ignores_eicu_race():
     assert missing == []
 
 
-def test_missing_fairness_report_requirements_rejects_nan_required_metric():
+def test_missing_fairness_report_requirements_accepts_written_nan_required_metric():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
     run = SimpleNamespace(config={"dataset": "miiv", "task": {"task_type": "binary"}})
@@ -240,4 +255,13 @@ def test_missing_fairness_report_requirements_rejects_nan_required_metric():
 
     missing = mod.missing_fairness_report_requirements(run, report, ["gender"])
 
-    assert "gender: missing worst_group_auroc" in missing
+    assert missing == []
+
+
+def test_filter_thesis_task_runs_drops_non_thesis_tasks():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    main = SimpleNamespace(config={"task": {"task_name": "mortality_24h"}})
+    extension = SimpleNamespace(config={"task": {"task_name": "sepsis"}})
+
+    assert mod.filter_thesis_task_runs([main, extension]) == [main]

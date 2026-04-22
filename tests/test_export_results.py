@@ -496,7 +496,7 @@ def test_filter_thesis_tasks_excludes_optional_mortality_by_default():
     df = pd.DataFrame(
         [
             {"task": "mortality_24h", "wandb_run_id": "main"},
-            {"task": "mortality", "wandb_run_id": "extension"},
+            {"task": "sepsis", "wandb_run_id": "extension"},
         ]
     )
 
@@ -526,11 +526,13 @@ def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
 
     monkeypatch.setenv("REVISION", "thesis-v1")
     monkeypatch.delenv("WANDB_REVISION", raising=False)
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
     monkeypatch.setattr(sys, "argv", ["export_results.py"])
 
     args = mod.parse_args()
 
     assert args.revision == ["thesis-v1"]
+    assert args.project == "slices-thesis"
 
 
 def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):

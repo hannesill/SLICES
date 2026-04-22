@@ -40,6 +40,7 @@ from slices.training.utils import (
     save_encoder_checkpoint,
     setup_finetune_callbacks,
     setup_wandb_logger,
+    train_label_support_summary,
     validate_data_prerequisites,
 )
 
@@ -229,7 +230,7 @@ def main(cfg: DictConfig) -> None:
                 f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
             )
 
-    report_and_validate_train_label_support(
+    train_support_stats = report_and_validate_train_label_support(
         datamodule=datamodule,
         task_name=task_name,
         task_type=task_type,
@@ -300,6 +301,8 @@ def main(cfg: DictConfig) -> None:
 
     callbacks = setup_finetune_callbacks(cfg, checkpoint_prefix="supervised")
     logger = setup_wandb_logger(cfg)
+    if logger:
+        logger.experiment.summary.update(train_label_support_summary(train_support_stats))
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,

@@ -225,6 +225,30 @@ class TestLabelManifest:
         # Should not raise when the manifest matches the checked task config.
         validate_data_prerequisites(str(tmp_path), "miiv", task_names=["mortality_24h"])
 
+    def test_validate_data_prerequisites_rejects_wrong_benchmark_window(self, tmp_path):
+        """Declared benchmark windows must match the fixed thesis contract."""
+        from slices.training.utils import validate_data_prerequisites
+
+        metadata = {"seq_length_hours": 48}
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(RuntimeError, match="seq_length_hours"):
+            validate_data_prerequisites(str(tmp_path), "miiv")
+
+    def test_validate_data_prerequisites_rejects_blocked_features(self, tmp_path):
+        """Processed tensors must not contain leakage or future-derived features."""
+        from slices.training.utils import validate_data_prerequisites
+
+        metadata = {"feature_names": ["hr", "los_icu"]}
+        (tmp_path / "splits.yaml").write_text("seed: 42\n")
+        with open(tmp_path / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        with pytest.raises(RuntimeError, match="blocked leakage"):
+            validate_data_prerequisites(str(tmp_path), "miiv")
+
     def test_validate_data_prerequisites_uses_provided_task_config(self, tmp_path):
         """Active Hydra task configs should override the fallback task-definition tree."""
         from slices.training.utils import validate_data_prerequisites
@@ -1883,6 +1907,62 @@ class TestExperimentRunnerWandbOverrides:
         assert "core_ssl_benchmark" in output
         assert "core_ssl_benchmark/thesis-v1" in output
 
+    def test_revised_status_filter_uses_revisioned_generated_ids(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        base = runner.Run(
+            id="core_ssl_benchmark_supervised_mortality_24h_miiv_seed42",
+            run_key="supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/core_ssl_benchmark/supervised_mortality_24h_miiv_seed42",
+            task="mortality_24h",
+        )
+        revised_id = "core_ssl_benchmark_rev-thesis-v1_supervised_mortality_24h_miiv_seed42"
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [base])
+        monkeypatch.setattr(
+            runner,
+            "load_state",
+            lambda: {"version": 1, "runs": {revised_id: {"status": "completed"}}},
+        )
+
+        runner.print_status(revision_filter="thesis-v1")
+
+        output = capsys.readouterr().out
+        assert "core_ssl_benchmark/thesis-v1" in output
+        assert "    1 |    1 |" in output
+        assert "core_ssl_benchmark       |" not in output
+
+    def test_main_run_requires_revision_and_project(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.delenv("WANDB_PROJECT", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["run_experiments.py", "run", "--experiment-class", "core_ssl_benchmark"],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
+    def test_main_retry_requires_revision_scope_and_project(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.delenv("WANDB_PROJECT", raising=False)
+        monkeypatch.setattr(sys, "argv", ["run_experiments.py", "retry", "--failed"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
     def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
@@ -2069,11 +2149,14 @@ class TestExperimentRunnerWandbOverrides:
 
         assert isinstance(logger, DummyWandbLogger)
         assert captured["kwargs"]["name"] == (
-            "capacity_study_finetune_miiv_mae_mortality_24h_seed42_medium_frac01"
+            "capacity_study_finetune_miiv_mae_mortality_24h_seed42_from_eicu_medium_frac01"
         )
-        assert captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_medium_frac01"
+        assert (
+            captured["kwargs"]["group"] == "finetune_miiv_mae_mortality_24h_from_eicu_medium_frac01"
+        )
         assert "experiment_class:capacity_study" in captured["kwargs"]["tags"]
         assert "model_size:medium" in captured["kwargs"]["tags"]
+        assert "source_dataset:eicu" in captured["kwargs"]["tags"]
         assert "ablation:label-efficiency" in captured["kwargs"]["tags"]
         assert "ablation:transfer" in captured["kwargs"]["tags"]
 

@@ -13,7 +13,8 @@ Usage:
     uv run python scripts/internal/run_experiments.py run \
         --experiment-class core_ssl_benchmark --dry-run \
         --project slices-thesis --revision thesis-v1 --entity <entity>
-    uv run python scripts/internal/run_experiments.py status --experiment-class core_ssl_benchmark
+    uv run python scripts/internal/run_experiments.py status \
+        --experiment-class core_ssl_benchmark --revision thesis-v1
     uv run python scripts/internal/run_experiments.py retry --failed \
         --experiment-class core_ssl_benchmark --revision thesis-v1 \
         --project slices-thesis --entity <entity>
@@ -1470,19 +1471,26 @@ def _extract_experiment_class_from_id(run_id: str) -> str | None:
     return None
 
 
-def print_status(experiment_class_filter: list[str] | None = None) -> None:
+def print_status(
+    experiment_class_filter: list[str] | None = None,
+    revision_filter: str | None = None,
+) -> None:
     all_runs = generate_all_runs()
+    if revision_filter:
+        all_runs = apply_revision(all_runs, revision_filter)
     state = load_state()
     generated_ids = {run.id for run in all_runs}
 
     groups: dict[tuple[str, str | None], list[str]] = {}
     for run in all_runs:
-        groups.setdefault((run.experiment_class, None), []).append(run.id)
+        groups.setdefault((run.experiment_class, revision_filter), []).append(run.id)
 
     for run_id in state.get("runs", {}):
         if run_id not in generated_ids and "_rev-" in run_id:
             experiment_class = _extract_experiment_class_from_id(run_id)
             revision = _extract_revision_from_id(run_id)
+            if revision_filter and revision != revision_filter:
+                continue
             if experiment_class and revision:
                 groups.setdefault((experiment_class, revision), []).append(run_id)
 
@@ -1684,7 +1692,7 @@ def cmd_run(args):
 
 
 def cmd_status(args):
-    print_status(args.experiment_class)
+    print_status(args.experiment_class, args.revision)
 
 
 def cmd_retry(args):
@@ -1828,6 +1836,7 @@ def main() -> None:
 
     p_status = sub.add_parser("status", help="Show experiment status")
     p_status.add_argument("--experiment-class", nargs="*", choices=EXPERIMENT_CLASSES, default=None)
+    p_status.add_argument("--revision", type=str, default=None, help="Show status for one revision")
 
     p_retry = sub.add_parser("retry", help="Retry failed/skipped runs")
     p_retry.add_argument("--failed", action="store_true", help="Retry failed runs")
@@ -1875,8 +1884,24 @@ def main() -> None:
 
     if getattr(args, "reason", None) and not getattr(args, "revision", None):
         parser.error("--reason requires --revision")
-    if args.command == "retry" and args.revision and not args.experiment_class:
-        parser.error("--revision requires --experiment-class to scope which classes to revise")
+    if args.command == "run":
+        if not args.revision:
+            parser.error("run requires --revision to tag run IDs, output dirs, and W&B metadata")
+        if not args.project:
+            parser.error(
+                "run requires --project or WANDB_PROJECT to avoid logging to config defaults"
+            )
+    if args.command == "retry":
+        if not args.revision:
+            parser.error("retry requires --revision to select the revisioned state namespace")
+        if not args.experiment_class:
+            parser.error("retry requires --experiment-class to scope which classes to revise")
+        if not args.project:
+            parser.error(
+                "retry requires --project or WANDB_PROJECT to avoid logging to config defaults"
+            )
+        if not args.failed and not args.skipped:
+            parser.error("retry requires --failed and/or --skipped")
 
     if args.command == "run":
         exit_code = cmd_run(args)

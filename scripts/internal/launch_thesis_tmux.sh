@@ -258,11 +258,11 @@ EOF
 
 chmod +x "$runner_script"
 
-status_cmd=(
-  bash
-  -lc
-  "cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; uv run python scripts/internal/run_experiments.py status; sleep $(printf "%q" "$STATUS_INTERVAL"); done"
-)
+status_loop="cd $(printf "%q" "$REPO_ROOT"); while true; do clear; date; echo; "
+status_loop+="uv run python scripts/internal/run_experiments.py status "
+status_loop+="--revision $(printf "%q" "$REVISION"); "
+status_loop+="sleep $(printf "%q" "$STATUS_INTERVAL"); done"
+status_cmd=(bash -lc "$status_loop")
 printf -v status_line "%q " "${status_cmd[@]}"
 
 tmux new-session -d -s "$SESSION_NAME" -n run "bash $(printf "%q" "$runner_script") 2>&1 | tee $(printf "%q" "$runner_log")"
