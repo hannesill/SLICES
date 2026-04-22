@@ -96,6 +96,8 @@ def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
         if len(tag) > 64:
             tag = tag[:61] + "..."
         _add_wandb_tag(tags, tag)
+    if cfg.get("launch_commit") is not None:
+        _add_wandb_tag(tags, f"commit:{str(cfg.launch_commit)[:12]}")
     if cfg.get("phase") is not None:
         _add_wandb_tag(tags, f"phase:{cfg.phase}")
     if cfg.get("dataset") is not None:
@@ -134,6 +136,7 @@ def main(cfg: DictConfig) -> None:
 
     from slices.training.utils import (
         report_and_validate_train_label_support,
+        train_label_support_summary,
         validate_data_prerequisites,
     )
 
@@ -163,7 +166,7 @@ def main(cfg: DictConfig) -> None:
     print(f"  Val:   {len(datamodule.val_indices)} stays")
     print(f"  Test:  {len(datamodule.test_indices)} stays")
 
-    report_and_validate_train_label_support(
+    train_support_stats = report_and_validate_train_label_support(
         datamodule=datamodule,
         task_name=task_name,
         task_type=task_type,
@@ -340,6 +343,7 @@ def main(cfg: DictConfig) -> None:
             tags=_build_wandb_tags(cfg),
             config=OmegaConf.to_container(cfg, resolve=True),
         )
+        run.summary.update(train_label_support_summary(train_support_stats))
         run.summary.update(metrics)
         if fairness_report:
             run.summary.update(flatten_fairness_report(fairness_report))

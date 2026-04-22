@@ -20,6 +20,12 @@ from lightning.pytorch.callbacks import (
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from slices.constants import (
+    FEATURE_BLOCKLIST,
+    LABEL_HORIZON_HOURS,
+    MIN_STAY_HOURS,
+    SEQ_LENGTH_HOURS,
+)
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 # =============================================================================
@@ -272,6 +278,62 @@ def _add_wandb_tag(tags: list[str], tag: str | None) -> None:
         tags.append(tag)
 
 
+def _short_wandb_value(value: Any) -> str:
+    """Compact a numeric/string config value for stable W&B display names."""
+    return str(value).replace(".", "").replace("-", "m")
+
+
+def append_wandb_identity_suffixes(name: str | None, cfg: DictConfig) -> str | None:
+    """Append scientific identity fields omitted by the base Hydra run name."""
+    if not name:
+        return name
+
+    suffixes: list[str] = []
+    experiment_subtype = cfg.get("experiment_subtype")
+    if experiment_subtype is not None:
+        suffixes.append(str(experiment_subtype))
+
+    source_dataset = cfg.get("source_dataset")
+    if source_dataset is not None:
+        suffixes.append(f"from_{source_dataset}")
+
+    upstream_lr = cfg.get("upstream_pretrain_lr")
+    if upstream_lr is not None:
+        suffixes.append(f"uplr{_short_wandb_value(upstream_lr)}")
+    elif experiment_subtype == "lr_sensitivity":
+        optimizer_cfg = cfg.get("optimizer", {})
+        lr = optimizer_cfg.get("lr") if optimizer_cfg else None
+        if lr is not None:
+            suffixes.append(f"lr{_short_wandb_value(lr)}")
+
+    upstream_mask_ratio = cfg.get("upstream_pretrain_mask_ratio")
+    if upstream_mask_ratio is not None:
+        suffixes.append(f"upmr{_short_wandb_value(upstream_mask_ratio)}")
+    elif experiment_subtype == "mask_ratio_sensitivity":
+        ssl_cfg = cfg.get("ssl", {})
+        mask_ratio = ssl_cfg.get("mask_ratio") if ssl_cfg else None
+        if mask_ratio is not None:
+            suffixes.append(f"mr{_short_wandb_value(mask_ratio)}")
+
+    if not suffixes:
+        return name
+    return f"{name}_{'_'.join(suffixes)}"
+
+
+def train_label_support_summary(stats: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Format train-label support stats for W&B summary logging."""
+    if not stats:
+        return {}
+
+    summary: dict[str, Any] = {}
+    for key, value in stats.items():
+        if value is None:
+            continue
+        if isinstance(value, (str, bool, int, float)):
+            summary[f"train_label_support/{key}"] = value
+    return summary
+
+
 def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     """Set up W&B experiment logger.
 
@@ -332,7 +394,12 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         _add_wandb_tag(tags, "ablation:label-efficiency")
 
     if cfg.get("source_dataset") is not None:
+        _add_wandb_tag(tags, f"source_dataset:{cfg.source_dataset}")
         _add_wandb_tag(tags, "ablation:transfer")
+    if cfg.get("upstream_pretrain_lr") is not None:
+        _add_wandb_tag(tags, f"upstream_pretrain_lr:{cfg.upstream_pretrain_lr}")
+    if cfg.get("upstream_pretrain_mask_ratio") is not None:
+        _add_wandb_tag(tags, f"upstream_pretrain_mask_ratio:{cfg.upstream_pretrain_mask_ratio}")
 
     tags = tags or None
 
@@ -340,6 +407,7 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     run_name = cfg.logging.get("run_name", None)
     if run_name and freeze_encoder is True:
         run_name = run_name.replace("_finetune_", "_probe_", 1)
+    run_name = append_wandb_identity_suffixes(run_name, cfg)
     if run_name and model_size is not None:
         run_name += f"_{model_size}"
     if run_name and label_fraction is not None and label_fraction < 1.0:
@@ -352,6 +420,7 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     if group:
         if freeze_encoder is True:
             group = group.replace("finetune_", "probe_", 1)
+        group = append_wandb_identity_suffixes(group, cfg)
         if model_size is not None:
             group += f"_{model_size}"
         if label_fraction is not None and label_fraction < 1.0:
@@ -557,6 +626,50 @@ def resolve_balanced_class_weights(
     return [w**0.5 for w in raw]
 
 
+def _validate_benchmark_metadata(metadata: dict[str, Any], path: Path) -> None:
+    """Validate fixed benchmark invariants declared by a processed artifact."""
+    declared_values = {
+        "seq_length_hours": (metadata.get("seq_length_hours"), SEQ_LENGTH_HOURS),
+        "input_seq_length_hours": (metadata.get("input_seq_length_hours"), SEQ_LENGTH_HOURS),
+        "min_stay_hours": (metadata.get("min_stay_hours"), MIN_STAY_HOURS),
+        "label_horizon_hours": (metadata.get("label_horizon_hours"), LABEL_HORIZON_HOURS),
+    }
+    extraction_config = metadata.get("extraction_config") or {}
+    if isinstance(extraction_config, dict):
+        declared_values["extraction_config.seq_length_hours"] = (
+            extraction_config.get("seq_length_hours"),
+            SEQ_LENGTH_HOURS,
+        )
+        declared_values["extraction_config.min_stay_hours"] = (
+            extraction_config.get("min_stay_hours"),
+            MIN_STAY_HOURS,
+        )
+
+    for field_name, (observed, expected) in declared_values.items():
+        if observed is None:
+            continue
+        try:
+            observed_int = int(observed)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Processed data in {path} has non-integer benchmark invariant "
+                f"{field_name}: observed={observed!r}, expected={expected}."
+            ) from exc
+        if observed_int != expected:
+            raise RuntimeError(
+                f"Processed data in {path} violates benchmark invariant "
+                f"{field_name}: observed={observed}, expected={expected}."
+            )
+
+    feature_names = metadata.get("feature_names") or []
+    blocked = sorted(set(feature_names) & set(FEATURE_BLOCKLIST))
+    if blocked:
+        raise RuntimeError(
+            f"Processed data in {path} contains blocked leakage/future-derived "
+            f"feature(s): {blocked}."
+        )
+
+
 def validate_data_prerequisites(
     processed_dir: str,
     dataset: str,
@@ -567,7 +680,8 @@ def validate_data_prerequisites(
 
     Checks file existence and, if task definitions are provided, validates the
     label manifest in metadata.yaml to ensure labels were built with the
-    current builder version and task config.
+    current builder version and task config. When metadata declares benchmark
+    window or feature fields, those declarations must match fixed invariants.
 
     When ``task_configs`` are supplied, they are treated as the source of truth
     because they represent the active Hydra-composed task configuration for the
@@ -592,6 +706,13 @@ def validate_data_prerequisites(
             f"splits.yaml not found in {path}\n"
             f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
         )
+
+    metadata_path = path / "metadata.yaml"
+    metadata: dict[str, Any] | None = None
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f) or {}
+        _validate_benchmark_metadata(metadata, path)
 
     label_config_fields = {field.name for field in fields(LabelConfig)}
 
@@ -649,16 +770,12 @@ def validate_data_prerequisites(
 
     # Validate label manifest if task configs are provided or can be resolved.
     if resolved_task_configs:
-        metadata_path = path / "metadata.yaml"
-        if not metadata_path.exists():
+        if metadata is None:
             raise FileNotFoundError(
                 f"metadata.yaml not found in {path} — cannot validate label freshness.\n"
                 f"Re-run extraction: uv run python scripts/preprocessing/"
                 f"extract_ricu.py dataset={dataset}"
             )
-
-        with open(metadata_path) as f:
-            metadata = yaml.safe_load(f)
 
         label_manifest = metadata.get("label_manifest")
         if label_manifest is None:
