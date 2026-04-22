@@ -25,10 +25,9 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
-from xgboost import XGBClassifier, XGBRegressor
-
 from slices.data.datamodule import ICUDataModule
 from slices.eval.inference import extract_tabular_features
+from xgboost import XGBClassifier, XGBRegressor
 
 
 def _xgboost_eval_metric(task_type: str) -> str:
@@ -261,7 +260,16 @@ def main(cfg: DictConfig) -> None:
         evaluator.print_report(fairness_report)
 
     # =========================================================================
-    # 6. Log to W&B
+    # 6. Save Model
+    # =========================================================================
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_path = output_dir / "xgboost_model.json"
+    model.save_model(str(model_path))
+    print(f"\n  Model saved to: {model_path}")
+
+    # =========================================================================
+    # 7. Log to W&B
     # =========================================================================
     if cfg.logging.get("use_wandb", False):
         import wandb
@@ -278,15 +286,6 @@ def main(cfg: DictConfig) -> None:
         if fairness_report:
             run.summary.update(flatten_fairness_report(fairness_report))
         wandb.finish()
-
-    # =========================================================================
-    # 7. Save Model
-    # =========================================================================
-    output_dir = Path(cfg.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model_path = output_dir / "xgboost_model.json"
-    model.save_model(str(model_path))
-    print(f"\n  Model saved to: {model_path}")
 
     print("\n" + "=" * 80)
     print("XGBoost Baseline Complete!")

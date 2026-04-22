@@ -207,9 +207,8 @@ class TestMortalityLabelBuilder:
         labels = builder.build_labels(raw_data)
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
-        # Stay 1: died at 10h (during 48h obs window), outtime=48h (still in ICU at obs end)
-        # outtime (Jan 3 10:00) >= obs_end (Jan 3 10:00), so NOT left_icu_during_obs -> label=1
-        assert labels_dict[1] == 1  # hospital_expire_flag=1
+        # Stay 1: died at 10h, during the observation window, so excluded.
+        assert labels_dict[1] is None
         assert labels_dict[2] == 0  # Survived
         assert labels_dict[3] == 1  # Died in hospital (hospital_expire_flag=1)
         assert labels_dict[4] == 1  # Died in hospital (hospital_expire_flag=1)

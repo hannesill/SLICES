@@ -74,6 +74,9 @@ tag_args=(--project "$WANDB_PROJECT" --entity "$WANDB_ENTITY")
 run_args+=(--revision "$REVISION" --reason "$REASON")
 export_args+=(--revision "$REVISION" --output-dir "$RESULTS_DIR")
 if [[ -n "$REVISION" ]]; then
+  tag_args+=(--revision "$REVISION")
+fi
+if [[ -n "$REVISION" ]]; then
   fairness_args+=(--revision "$REVISION")
 fi
 fairness_args+=(--sprint "${fairness_sprints[@]}" --batch-size "$BATCH_SIZE_FAIRNESS" --device "$DEVICE_FAIRNESS")

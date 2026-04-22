@@ -394,6 +394,42 @@ class ContrastiveObjective(BaseSSLObjective):
         Returns:
             (loss, metrics_dict)
         """
+        valid_samples = ssl_mask_1.any(dim=1) & ssl_mask_2.any(dim=1)
+        n_valid_samples = int(valid_samples.sum().item())
+        if n_valid_samples < 2:
+            loss = (z1.sum() + z2.sum()) * 0.0
+            with torch.no_grad():
+                T = ssl_mask_1.shape[1]
+                valid_mask_1 = ssl_mask_1[valid_samples]
+                valid_mask_2 = ssl_mask_2[valid_samples]
+                metrics = {
+                    "contrastive_loss": loss.detach(),
+                    "ssl_loss": loss.detach(),
+                    "contrastive_accuracy": torch.tensor(0.0, device=z1.device),
+                    "contrastive_pos_similarity": torch.tensor(0.0, device=z1.device),
+                    "contrastive_alignment": torch.tensor(0.0, device=z1.device),
+                    "contrastive_uniformity": torch.tensor(0.0, device=z1.device),
+                    "contrastive_effective_rank": torch.tensor(0.0, device=z1.device),
+                    "contrastive_temperature": self.config.temperature,
+                    "contrastive_n_timesteps": T,
+                    "contrastive_n_visible_view1": valid_mask_1.sum().item()
+                    / max(n_valid_samples, 1),
+                    "contrastive_n_visible_view2": valid_mask_2.sum().item()
+                    / max(n_valid_samples, 1),
+                    "contrastive_n_masked_view1": (~valid_mask_1).sum().item()
+                    / max(n_valid_samples, 1),
+                    "contrastive_n_masked_view2": (~valid_mask_2).sum().item()
+                    / max(n_valid_samples, 1),
+                    "contrastive_n_samples_used": n_valid_samples,
+                    "contrastive_n_samples_skipped": z1.shape[0] - n_valid_samples,
+                }
+            return loss, metrics
+
+        z1 = z1[valid_samples]
+        z2 = z2[valid_samples]
+        ssl_mask_1 = ssl_mask_1[valid_samples]
+        ssl_mask_2 = ssl_mask_2[valid_samples]
+
         B = z1.shape[0]
         temperature = self.config.temperature
 
@@ -462,6 +498,8 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_n_visible_view2": n_vis_2 / B,
                 "contrastive_n_masked_view1": n_masked_1 / B,
                 "contrastive_n_masked_view2": n_masked_2 / B,
+                "contrastive_n_samples_used": B,
+                "contrastive_n_samples_skipped": valid_samples.numel() - B,
             }
 
         return loss, metrics

@@ -152,6 +152,10 @@ class JEPAPredictor(nn.Module):
                 device=full_tokens.device,
                 dtype=torch.bool,
             )
+            all_masked = predictor_padding_mask.all(dim=1)
+            if all_masked.any():
+                predictor_padding_mask = predictor_padding_mask.clone()
+                predictor_padding_mask[all_masked, 0] = False
 
         # Fully unobserved hours should not be available as predictor context.
         decoded = self.predictor(full_tokens, src_key_padding_mask=predictor_padding_mask)

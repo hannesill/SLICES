@@ -313,8 +313,7 @@ class TransformerEncoder(BaseEncoder):
         Returns:
             (B, N, d_model) encoded tokens.
         """
-        # Convert to PyTorch convention: True = ignore
-        key_padding_mask = ~padding_mask
+        key_padding_mask = self._key_padding_mask_for_attention(padding_mask)
 
         x = tokens
         for layer in self.layers:
@@ -378,7 +377,7 @@ class TransformerEncoder(BaseEncoder):
         # Our convention: True = valid, False = padding
         # PyTorch convention: True = padding (ignore), False = valid
         if padding_mask is not None:
-            key_padding_mask = ~padding_mask  # Invert
+            key_padding_mask = self._key_padding_mask_for_attention(padding_mask)
         else:
             key_padding_mask = None
 
@@ -408,6 +407,22 @@ class TransformerEncoder(BaseEncoder):
             Pooled tensor of shape (B, d_model) or (B, T, d_model) if no pooling.
         """
         return apply_pooling(x, self.config.pooling, padding_mask)
+
+    @staticmethod
+    def _key_padding_mask_for_attention(padding_mask: torch.Tensor) -> torch.Tensor:
+        """Convert valid-token masks to PyTorch attention masks without all-masked rows.
+
+        PyTorch attention returns NaNs when a sample has every key masked. Fully
+        unobserved ICU stays can create that case. We expose one finite dummy token
+        to attention, while downstream pooling/loss code still receives the original
+        padding mask and therefore treats the sample as having no valid timesteps.
+        """
+        key_padding_mask = ~padding_mask.to(dtype=torch.bool)
+        all_masked = key_padding_mask.all(dim=1)
+        if all_masked.any():
+            key_padding_mask = key_padding_mask.clone()
+            key_padding_mask[all_masked, 0] = False
+        return key_padding_mask
 
     def get_output_dim(self) -> int:
         """Return the output dimension of the encoder.

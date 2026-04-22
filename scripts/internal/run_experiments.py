@@ -121,10 +121,10 @@ BASELINE_SPRINTS: dict[str, list[str]] = {
     "3": [],
     "4": [],
     "5": ["1", "2", "3", "4"],
-    "6": ["1", "2", "3", "4", "5"],
-    "7": ["1", "3", "5"],
+    "6": ["1", "2", "3", "4", "5", "10"],
+    "7": ["1", "3", "5", "10"],
     "7p": ["6", "10"],
-    "8": ["1", "1b", "1c", "5"],
+    "8": ["1", "1b", "1c", "5", "10"],
 }
 
 STATE_FILE = Path("outputs/experiment_state.json")
@@ -186,6 +186,9 @@ class Run:
             f"sprint={self.sprint}",
             f"hydra.run.dir={self.output_dir}",
         ]
+        last_ckpt = Path(self.output_dir) / "checkpoints" / "last.ckpt"
+        if last_ckpt.exists():
+            cmd.append(f"ckpt_path={last_ckpt}")
         for k, v in self.extra_overrides.items():
             cmd.append(f"{k}={v}")
         return cmd
@@ -209,6 +212,9 @@ class Run:
             f"sprint={self.sprint}",
             f"hydra.run.dir={self.output_dir}",
         ]
+        last_ckpt = Path(self.output_dir) / "checkpoints" / "last.ckpt"
+        if last_ckpt.exists():
+            cmd.append(f"ckpt_path={last_ckpt}")
         if self.freeze_encoder is True:
             cmd += [
                 "training.freeze_encoder=true",
@@ -253,6 +259,9 @@ class Run:
             f"sprint={self.sprint}",
             f"hydra.run.dir={self.output_dir}",
         ]
+        last_ckpt = Path(self.output_dir) / "checkpoints" / "last.ckpt"
+        if last_ckpt.exists():
+            cmd.append(f"ckpt_path={last_ckpt}")
         if self.label_fraction < 1.0:
             cmd.append(f"label_fraction={self.label_fraction}")
         for k, v in self.extra_overrides.items():
@@ -273,6 +282,9 @@ class Run:
             f"sprint={self.sprint}",
             f"hydra.run.dir={self.output_dir}",
         ]
+        last_ckpt = Path(self.output_dir) / "checkpoints" / "last.ckpt"
+        if last_ckpt.exists():
+            cmd.append(f"ckpt_path={last_ckpt}")
         if self.label_fraction < 1.0:
             cmd.append(f"label_fraction={self.label_fraction}")
         for k, v in self.extra_overrides.items():
@@ -1048,14 +1060,43 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_matches_command(pid: int, expected_command: str | None) -> bool:
+    """Best-effort guard against PID reuse before trusting a running state."""
+    if not expected_command:
+        return True
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return True
+    if result.returncode != 0:
+        return False
+    actual_command = result.stdout.strip()
+    if not actual_command:
+        return False
+    return expected_command == actual_command or expected_command in actual_command
+
+
 def recover_stale_running(state: dict):
-    """Reset running entries whose PIDs are dead back to pending."""
+    """Reset running entries whose PIDs are dead or no longer match the run."""
     for run_id, info in state["runs"].items():
         if info.get("status") == "running":
             pid = info.get("pid")
-            if pid is None or not is_pid_alive(pid):
+            if (
+                pid is None
+                or not is_pid_alive(pid)
+                or not _pid_matches_command(
+                    int(pid),
+                    info.get("command"),
+                )
+            ):
                 info["status"] = "pending"
                 info.pop("pid", None)
+                info.pop("command", None)
                 print(f"  Recovered stale run: {run_id}")
 
 
@@ -1220,7 +1261,13 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
             proc._log_fh = log_fh  # type: ignore[attr-defined]
             active[r.id] = proc
             set_run_status(
-                state, r.id, "running", started_at=now, pid=proc.pid, log_file=str(log_file)
+                state,
+                r.id,
+                "running",
+                started_at=now,
+                pid=proc.pid,
+                log_file=str(log_file),
+                command=shlex.join(cmd),
             )
 
         # 5. Save state
@@ -1395,11 +1442,14 @@ def _scheduler_exit_code(runs: list[Run], state: dict) -> int:
     """Return nonzero when the requested run set did not complete cleanly."""
     failed = [r.id for r in runs if get_run_status(state, r.id) == "failed"]
     skipped = [r.id for r in runs if get_run_status(state, r.id) == "skipped"]
+    running = [r.id for r in runs if get_run_status(state, r.id) == "running"]
+    pending = [r.id for r in runs if get_run_status(state, r.id) == "pending"]
 
-    if failed or skipped:
+    if failed or skipped or running or pending:
         print(
             "Scheduler incomplete: "
-            f"{len(failed)} failed, {len(skipped)} skipped due to dependency failure"
+            f"{len(failed)} failed, {len(skipped)} skipped due to dependency failure, "
+            f"{len(running)} running, {len(pending)} pending"
         )
         return 1
 
@@ -1667,9 +1717,7 @@ def cmd_warmup(args):
     print(f"Warming up tensor caches for sprint(s) {', '.join(sprints)}")
     print(f"  {len(datasets)} unique datasets to cache\n")
 
-    import subprocess
-    import sys
-
+    failed = []
     for i, dataset in enumerate(datasets, 1):
         processed_dir = f"data/processed/{dataset}"
         print(f"[{i}/{len(datasets)}] {dataset}")
@@ -1679,7 +1727,9 @@ def cmd_warmup(args):
         # any task-specific filtering — this populates the raw cache.
         result = subprocess.run(
             [
-                sys.executable,
+                "uv",
+                "run",
+                "python",
                 "-c",
                 "from slices.data.dataset import ICUDataset; "
                 f"ds = ICUDataset("
@@ -1698,9 +1748,15 @@ def cmd_warmup(args):
         else:
             stderr_tail = result.stderr.strip().split("\n")[-3:]
             print(f"  -> ERROR: {' '.join(stderr_tail)}")
+            failed.append(dataset)
+
+    if failed:
+        print(f"\nWarmup failed for dataset(s): {', '.join(failed)}")
+        return 1
 
     print("\nWarmup complete. Raw tensor caches saved to data/processed/<dataset>/.tensor_cache/")
     print("You can now run experiments in parallel without OOM.")
+    return 0
 
 
 def cmd_tag(args):
@@ -1737,6 +1793,7 @@ def cmd_tag(args):
 
     sprints = [str(s) for s in args.sprint]
     dry_run = args.dry_run
+    revision_tag = f"revision:{args.revision}" if args.revision else None
 
     for target_sprint in sprints:
         source_sprints = BASELINE_SPRINTS.get(target_sprint, [])
@@ -1747,10 +1804,13 @@ def cmd_tag(args):
         target_tag = f"sprint:{target_sprint}"
         sources = ", ".join(source_sprints)
         print(f"\nSprint {target_sprint}: inheriting baselines from sprint(s) {sources}")
+        if revision_tag:
+            print(f"  Filtering source runs to {revision_tag}")
 
         # Query runs from each source sprint
         tagged = 0
         skipped = 0
+        skipped_revision = 0
         for source_sprint in source_sprints:
             source_tag = f"sprint:{source_sprint}"
             runs = api.runs(
@@ -1759,6 +1819,9 @@ def cmd_tag(args):
             )
 
             for run in runs:
+                if revision_tag and revision_tag not in run.tags:
+                    skipped_revision += 1
+                    continue
                 if target_tag in run.tags:
                     skipped += 1
                     continue
@@ -1773,6 +1836,8 @@ def cmd_tag(args):
 
         action = "would tag" if dry_run else "tagged"
         print(f"  {action} {tagged} runs, skipped {skipped} (already tagged)")
+        if skipped_revision:
+            print(f"  skipped {skipped_revision} source runs outside {revision_tag}")
 
     print("\nDone.")
 
@@ -1857,6 +1922,12 @@ def main():
         help="Sprint(s) whose baselines to tag (e.g. 2 or 2 3 5)",
     )
     p_tag.add_argument("--dry-run", action="store_true", help="Show what would be tagged")
+    p_tag.add_argument(
+        "--revision",
+        type=str,
+        default=os.environ.get("REVISION") or os.environ.get("WANDB_REVISION"),
+        help="Only inherit source runs with this revision tag (default: REVISION/WANDB_REVISION)",
+    )
     p_tag.add_argument(
         "--project",
         type=str,

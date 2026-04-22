@@ -226,6 +226,22 @@ class TestContrastiveForward:
         assert metrics["contrastive_n_visible_view1"] > 0
         assert metrics["contrastive_n_visible_view2"] > 0
 
+    def test_instance_mode_skips_all_empty_samples(self, encoder, contrastive_config):
+        """All-empty rows should be excluded from instance NT-Xent denominators."""
+        obj = ContrastiveObjective(encoder, contrastive_config)
+
+        B, T, D = 3, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[1:, 2:5, :4] = True
+
+        loss, metrics = obj(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(metrics["contrastive_loss"])
+        assert metrics["contrastive_n_samples_used"] == 2
+        assert metrics["contrastive_n_samples_skipped"] == 1
+
 
 # =============================================================================
 # NT-Xent loss tests

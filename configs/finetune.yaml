@@ -52,6 +52,9 @@ seed: 42
 checkpoint: null
 pretrain_checkpoint: null
 
+# Resume this downstream trainer from an interrupted run.
+ckpt_path: null
+
 # Output directory (Hydra will create timestamped subdirs)
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints

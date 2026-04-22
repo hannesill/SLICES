@@ -334,6 +334,20 @@ class TestJEPAForward:
         assert "src_key_padding_mask" in captured
         assert torch.equal(captured["src_key_padding_mask"], expected_padding_mask)
 
+    def test_all_empty_sample_keeps_loss_finite(self, encoder, jepa_config):
+        """A fully unobserved sample in the batch should not make JEPA loss NaN."""
+        jepa = JEPAObjective(encoder, jepa_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[1, 1:4, :3] = True
+
+        loss, metrics = jepa(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(metrics["jepa_loss"])
+
 
 # =============================================================================
 # Momentum tests

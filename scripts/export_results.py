@@ -435,6 +435,72 @@ def _is_capacity_pilot_inherited_row(row: dict) -> bool:
     )
 
 
+def _is_label_efficiency_inherited_row(row: dict) -> bool:
+    """Return True for full-label rows inherited as 100% endpoints."""
+    try:
+        label_fraction = float(row.get("label_fraction", 1.0))
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        math.isclose(label_fraction, 1.0, rel_tol=0.0, abs_tol=1e-9)
+        and row.get("phase") in {"finetune", "supervised"}
+        and row.get("paradigm") in {"mae", "jepa", "contrastive", "supervised"}
+        and row.get("model_size") == "default"
+        and row.get("source_dataset") is None
+    )
+
+
+def _is_transfer_inherited_row(row: dict) -> bool:
+    """Return True for in-domain SSL rows inherited into transfer comparisons."""
+    try:
+        label_fraction = float(row.get("label_fraction", 1.0))
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        row.get("phase") == "finetune"
+        and row.get("paradigm") in {"mae", "jepa", "contrastive"}
+        and row.get("dataset") in {"miiv", "eicu"}
+        and row.get("protocol") == "B"
+        and math.isclose(label_fraction, 1.0, rel_tol=0.0, abs_tol=1e-9)
+        and row.get("model_size") == "default"
+        and row.get("source_dataset") is None
+    )
+
+
+def _is_hp_anchor_inherited_row(row: dict) -> bool:
+    """Return True for default LR/mask rows inherited into HP ablations."""
+    try:
+        label_fraction = float(row.get("label_fraction", 1.0))
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        row.get("phase") == "finetune"
+        and row.get("paradigm") in {"mae", "jepa", "contrastive"}
+        and row.get("dataset") == "miiv"
+        and row.get("task") == "mortality_24h"
+        and row.get("protocol") == "B"
+        and math.isclose(label_fraction, 1.0, rel_tol=0.0, abs_tol=1e-9)
+        and row.get("model_size") == "default"
+        and row.get("source_dataset") is None
+    )
+
+
+def _is_inherited_export_row_for_target(row: dict, sprint: str) -> bool:
+    """Return whether a coarsely sprint-tagged source row belongs in target export."""
+    if sprint == "6":
+        return _is_label_efficiency_inherited_row(row)
+    if sprint == "7":
+        return _is_transfer_inherited_row(row)
+    if sprint in {"1b", "1c", "8"}:
+        return _is_hp_anchor_inherited_row(row)
+    if sprint == "7p":
+        return _is_capacity_pilot_inherited_row(row)
+    return False
+
+
 def _additional_inherited_export_sprints(
     row: dict,
     tags: list[str],
@@ -457,7 +523,7 @@ def _additional_inherited_export_sprints(
             continue
         if sprint in {config_sprint, current_sprint}:
             continue
-        if sprint == "7p" and _is_capacity_pilot_inherited_row(row):
+        if _is_inherited_export_row_for_target(row, sprint):
             inherited.append(sprint)
 
     return list(dict.fromkeys(inherited))
@@ -709,6 +775,7 @@ def _assert_no_ambiguous_fingerprint_collisions(df: pd.DataFrame) -> None:
 def build_per_seed_df(
     runs: list,
     requested_sprints: list[str] | None = None,
+    allow_extraction_failures: bool = False,
 ) -> pd.DataFrame:
     """Build the per-seed DataFrame from raw W&B runs.
 
@@ -744,8 +811,16 @@ def build_per_seed_df(
             f"  WARNING: {len(failed)} runs failed extraction and were skipped.",
             file=sys.stderr,
         )
+        if not allow_extraction_failures:
+            preview = ", ".join(failed[:10])
+            raise RuntimeError(
+                f"{len(failed)} W&B runs failed extraction and were skipped: {preview}. "
+                "Pass --allow-extraction-failures only for exploratory exports."
+            )
 
     df = pd.DataFrame(rows)
+    if df.empty:
+        return df
 
     # Ensure correct dtypes
     if "seed" in df.columns:
@@ -833,6 +908,7 @@ def _aggregate_group(df: pd.DataFrame, fingerprint_cols: list[str]) -> pd.DataFr
         # Metric aggregation
         for metric in metric_cols:
             values = group[metric].dropna()
+            row[f"{metric}/n"] = int(len(values))
             if len(values) > 0:
                 row[f"{metric}/mean"] = values.mean()
                 row[f"{metric}/std"] = values.std(ddof=1) if len(values) > 1 else 0.0
@@ -1357,6 +1433,35 @@ def validate(
                 "These may be pretraining runs or crashed evaluations."
             )
 
+    # Check primary metric presence for every evaluation row.
+    if not per_seed_df.empty and "task" in per_seed_df.columns:
+        missing_primary = []
+        for _, row in per_seed_df.iterrows():
+            phase = row.get("phase")
+            if phase not in EVAL_PHASES:
+                continue
+            primary_metric = _primary_metric_for_task(row.get("task"))
+            if primary_metric is None or primary_metric not in per_seed_df.columns:
+                continue
+            if pd.isna(row.get(primary_metric)):
+                missing_primary.append((row, primary_metric))
+
+        if missing_primary:
+            warnings.append(
+                f"WARNING: {len(missing_primary)} evaluation runs are missing their "
+                "primary test metric."
+            )
+            for row, primary_metric in missing_primary[:10]:
+                warnings.append(
+                    "  "
+                    + ", ".join(
+                        f"{c}={row.get(c)}"
+                        for c in ["wandb_run_id", "paradigm", "dataset", "task", "seed", "phase"]
+                        if c in row
+                    )
+                    + f" — missing {primary_metric}"
+                )
+
     # Summary by experiment type
     n_runs = len(per_seed_df)
     n_configs = len(aggregated_df)
@@ -1444,6 +1549,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exit successfully even if no runs match or validation warnings are emitted.",
     )
+    parser.add_argument(
+        "--allow-extraction-failures",
+        action="store_true",
+        help=(
+            "Skip W&B runs that fail row extraction. Use only for exploratory exports; "
+            "publication exports fail closed by default."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.revision:
@@ -1482,7 +1595,11 @@ def main():
 
     # Build DataFrames
     print(f"\nBuilding per-seed DataFrame from {len(runs)} runs...", file=sys.stderr)
-    per_seed_df = build_per_seed_df(runs, requested_sprints=args.sprint)
+    per_seed_df = build_per_seed_df(
+        runs,
+        requested_sprints=args.sprint,
+        allow_extraction_failures=args.allow_extraction_failures,
+    )
     print(f"  Shape: {per_seed_df.shape}", file=sys.stderr)
 
     print("\nBuilding aggregated DataFrame...", file=sys.stderr)

@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -149,15 +150,46 @@ def fetch_eval_runs(
     return runs
 
 
-def has_fairness_metrics(run) -> bool:
-    """Check if run summary already contains fairness/* keys.
+def _expected_fairness_attributes(run, protected_attributes: list[str]) -> list[str]:
+    """Return requested fairness attributes that are meaningful for the run dataset."""
+    dataset = str(run.config.get("dataset", "")).lower()
+    attrs = list(dict.fromkeys(protected_attributes))
+    if dataset == "eicu":
+        attrs = [attr for attr in attrs if attr != "race"]
+    return attrs
+
+
+def _has_finite_summary_value(summary: dict[str, Any], key: str) -> bool:
+    value = summary.get(key)
+    if value is None:
+        return False
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    return True
+
+
+def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
+    """Check whether all requested dataset-appropriate fairness keys exist.
 
     Uses ``summary_metrics`` (populated from the batch query) instead of
     ``summary._json_dict`` which triggers a per-run GraphQL reload.
     """
     try:
         sm = run.summary_metrics or {}
-        return any(k.startswith("fairness/") for k in sm)
+        expected_attrs = _expected_fairness_attributes(run, protected_attributes)
+        if not expected_attrs:
+            return False
+        for attr in expected_attrs:
+            prefix = f"fairness/{attr}/"
+            if not _has_finite_summary_value(sm, f"{prefix}n_valid_groups"):
+                return False
+            has_task_metric = _has_finite_summary_value(
+                sm,
+                f"{prefix}worst_group_auroc",
+            ) or _has_finite_summary_value(sm, f"{prefix}worst_group_mse")
+            if not has_task_metric:
+                return False
+        return True
     except Exception:
         return False
 
@@ -166,17 +198,32 @@ def write_fairness_to_wandb(
     run_path: str,
     fairness_flat: dict[str, Any],
     dry_run: bool = False,
+    clear_existing: bool = False,
 ) -> None:
-    """Write fairness metrics to W&B run summary (additive only)."""
+    """Write fairness metrics to W&B run summary."""
     import wandb
 
     if dry_run:
-        log.info("  [DRY RUN] Would write %d fairness keys to %s", len(fairness_flat), run_path)
+        mode = "replace" if clear_existing else "write"
+        log.info(
+            "  [DRY RUN] Would %s %d fairness keys on %s",
+            mode,
+            len(fairness_flat),
+            run_path,
+        )
         return
 
     def _do_update():
         api = wandb.Api(timeout=120)
         run = api.run(run_path)
+        if clear_existing:
+            try:
+                existing_summary = dict(run.summary)
+            except (TypeError, ValueError):
+                existing_summary = dict(getattr(run.summary, "_json_dict", {}) or {})
+            for key in existing_summary:
+                if key.startswith("fairness/") and key not in fairness_flat:
+                    run.summary[key] = None
         run.summary.update(fairness_flat)
         run.summary.save()
 
@@ -640,7 +687,7 @@ def main() -> None:
     # Filter out runs that already have fairness metrics (unless --force)
     if args.skip_existing and not args.force:
         before = len(runs)
-        runs = [r for r in runs if not has_fairness_metrics(r)]
+        runs = [r for r in runs if not has_fairness_metrics(r, args.protected_attributes)]
         skipped = before - len(runs)
         if skipped:
             log.info("Skipped %d runs with existing fairness metrics.", skipped)
@@ -758,7 +805,12 @@ def main() -> None:
                 if args.entity
                 else f"{args.project}/{run.id}"
             )
-            write_fairness_to_wandb(run_path, fairness_flat, args.dry_run)
+            write_fairness_to_wandb(
+                run_path,
+                fairness_flat,
+                args.dry_run,
+                clear_existing=args.force,
+            )
             results["processed"] += 1
 
             # Free model memory

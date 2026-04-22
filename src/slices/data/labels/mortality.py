@@ -37,7 +37,7 @@ class MortalityLabelBuilder(LabelBuilder):
         - "unknown" or missing: falls back to hospital_expire_flag
     """
 
-    SEMANTIC_VERSION = "2.1.1"
+    SEMANTIC_VERSION = "2.1.2"
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build mortality labels from stay and mortality data.
@@ -225,23 +225,26 @@ class MortalityLabelBuilder(LabelBuilder):
     ) -> pl.DataFrame:
         """Hospital mortality with observation window exclusion."""
         obs_end = pl.col("intime") + pl.duration(hours=obs_hours)
-        left_icu_during_obs = pl.col("outtime") < obs_end
 
-        # For timestamp precision: exact comparison
-        ts_died_during_obs = (
-            pl.col("death_time").is_not_null()
-            & (pl.col("death_time") <= obs_end)
-            & left_icu_during_obs
+        # Observation windows are half-open: [intime, obs_end). Deaths exactly
+        # at obs_end belong to the prediction period when gap_hours == 0.
+        ts_died_during_obs = pl.col("death_time").is_not_null() & (pl.col("death_time") < obs_end)
+
+        # For date precision: conservative interval logic. A date-only death is
+        # [00:00, 23:59:59]; if it is fully before obs_end or overlaps the
+        # boundary from the observation side, exclude.
+        date_start = pl.col("death_date").cast(pl.Datetime("us"))
+        date_end = date_start + pl.duration(hours=23, minutes=59, seconds=59)
+        date_died_during_obs = pl.col("death_date").is_not_null() & (date_end < obs_end)
+        date_obs_boundary = (
+            pl.col("death_date").is_not_null() & (date_start < obs_end) & (date_end >= obs_end)
         )
-
-        # For date precision: conservative — use outtime check
-        date_died_during_obs = left_icu_during_obs & pl.col("death_date").is_not_null()
 
         died_during_obs = (
             pl.when(pl.col("death_time_precision") == "timestamp")
             .then(ts_died_during_obs)
             .when(pl.col("death_time_precision") == "date")
-            .then(date_died_during_obs)
+            .then(date_died_during_obs | date_obs_boundary)
             .otherwise(pl.lit(False))
         )
 
@@ -356,7 +359,6 @@ class MortalityLabelBuilder(LabelBuilder):
 
         obs_end = pl.col("intime") + pl.duration(hours=obs_hours)
         pred_start = pl.col("intime") + pl.duration(hours=prediction_start_hours)
-        left_icu_during_obs = pl.col("outtime") < obs_end
 
         if until_icu_discharge:
             pred_end = pl.col("outtime")
@@ -365,11 +367,7 @@ class MortalityLabelBuilder(LabelBuilder):
             pred_end = pl.col("intime") + pl.duration(hours=prediction_end_hours)
 
         # --- Timestamp precision: exact comparisons ---
-        ts_died_during_obs = (
-            pl.col("death_time").is_not_null()
-            & (pl.col("death_time") <= obs_end)
-            & left_icu_during_obs
-        )
+        ts_died_during_obs = pl.col("death_time").is_not_null() & (pl.col("death_time") < obs_end)
         ts_died_during_gap = (
             (
                 pl.col("death_time").is_not_null()
@@ -392,17 +390,13 @@ class MortalityLabelBuilder(LabelBuilder):
         date_start = pl.col("death_date").cast(pl.Datetime("us"))
         date_end = date_start + pl.duration(hours=23, minutes=59, seconds=59)
 
-        # Died before obs_end? The entire date interval is <= obs_end
-        date_died_during_obs = (
-            pl.col("death_date").is_not_null() & (date_end <= obs_end) & left_icu_during_obs
-        )
+        # Died before obs_end? The entire date interval is strictly before the
+        # half-open observation boundary.
+        date_died_during_obs = pl.col("death_date").is_not_null() & (date_end < obs_end)
 
         # Date interval overlaps obs_end boundary (part before, part after)
         date_obs_boundary = (
-            pl.col("death_date").is_not_null()
-            & (date_start <= obs_end)
-            & (date_end > obs_end)
-            & left_icu_during_obs
+            pl.col("death_date").is_not_null() & (date_start < obs_end) & (date_end >= obs_end)
         )
 
         # Definite during prediction: entire interval within [pred_start, pred_end]

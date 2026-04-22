@@ -142,6 +142,49 @@ def test_build_per_seed_df_does_not_add_capacity_membership_for_irrelevant_tagge
     assert df["experiment_type"].tolist() == ["label_efficiency"]
 
 
+def test_build_per_seed_df_adds_unscoped_inherited_memberships_for_thesis_families():
+    mod = importlib.import_module("scripts.export_results")
+
+    base_config = {
+        "sprint": "1",
+        "dataset": "miiv",
+        "paradigm": "mae",
+        "seed": 42,
+        "encoder": {"d_model": 64, "n_layers": 2},
+        "training": {"freeze_encoder": False},
+        "task": {"task_name": "mortality_24h"},
+        "label_fraction": 1.0,
+    }
+    runs = [
+        DummyRun(base_config, ["sprint:1", "sprint:6", "phase:finetune"], name="core_for_s6"),
+        DummyRun(base_config, ["sprint:1", "sprint:7", "phase:finetune"], name="core_for_s7"),
+        DummyRun(base_config, ["sprint:1", "sprint:8", "phase:finetune"], name="core_for_s8"),
+    ]
+    for i, run in enumerate(runs):
+        run.id = f"run-{i}"
+        run.url = f"https://wandb.test/run-{i}"
+        run.created_at = f"2026-04-21T00:00:0{i}"
+
+    df = mod.build_per_seed_df(runs)
+    memberships = set(zip(df["wandb_run_id"], df["sprint"], df["experiment_type"], strict=True))
+
+    assert ("run-0", "6", "label_efficiency") in memberships
+    assert ("run-1", "7", "transfer") in memberships
+    assert ("run-2", "8", "hp_ablation") in memberships
+
+
+def test_build_per_seed_df_fails_closed_on_extraction_errors():
+    mod = importlib.import_module("scripts.export_results")
+
+    bad_run = object()
+
+    with pytest.raises(RuntimeError, match="failed extraction"):
+        mod.build_per_seed_df([bad_run])
+
+    df = mod.build_per_seed_df([bad_run], allow_extraction_failures=True)
+    assert df.empty
+
+
 def test_build_statistical_tests_df_adds_classical_context_rows():
     mod = importlib.import_module("scripts.export_results")
 
@@ -281,6 +324,76 @@ def test_validate_flags_wrong_fixed_seed_set_with_correct_count():
     assert any("unexpected=[1, 2, 3, 4, 5]" in warning for warning in warnings)
 
 
+def test_build_aggregated_df_records_per_metric_non_null_counts():
+    mod = importlib.import_module("scripts.export_results")
+
+    per_seed_df = pd.DataFrame(
+        [
+            {
+                "experiment_type": "core",
+                "sprint": "1",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 42,
+                "protocol": "B",
+                "label_fraction": 1.0,
+                "model_size": "default",
+                "source_dataset": None,
+                "phase": "finetune",
+                "test/auprc": 0.4,
+                "test/auroc": 0.7,
+                "wandb_run_id": "run-42",
+            },
+            {
+                "experiment_type": "core",
+                "sprint": "1",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 123,
+                "protocol": "B",
+                "label_fraction": 1.0,
+                "model_size": "default",
+                "source_dataset": None,
+                "phase": "finetune",
+                "test/auprc": None,
+                "test/auroc": 0.8,
+                "wandb_run_id": "run-123",
+            },
+        ]
+    )
+
+    aggregated = mod.build_aggregated_df(per_seed_df)
+
+    assert aggregated.iloc[0]["n_seeds"] == 2
+    assert aggregated.iloc[0]["test/auprc/n"] == 1
+    assert aggregated.iloc[0]["test/auroc/n"] == 2
+
+
+def test_validate_warns_when_evaluation_row_missing_primary_metric():
+    mod = importlib.import_module("scripts.export_results")
+
+    per_seed_df = pd.DataFrame(
+        [
+            {
+                "wandb_run_id": "run-1",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "task": "mortality_24h",
+                "seed": 42,
+                "phase": "finetune",
+                "test/auprc": None,
+            }
+        ]
+    )
+    aggregated_df = pd.DataFrame()
+
+    warnings = mod.validate(per_seed_df, aggregated_df)
+
+    assert any("missing their primary test metric" in warning for warning in warnings)
+
+
 def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
     mod = importlib.import_module("scripts.export_results")
 
@@ -305,6 +418,20 @@ def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
     args = mod.parse_args()
 
     assert args.allow_incomplete is True
+
+
+def test_parse_args_exposes_extraction_failure_escape_hatch(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--allow-extraction-failures"],
+    )
+
+    args = mod.parse_args()
+
+    assert args.allow_extraction_failures is True
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):
