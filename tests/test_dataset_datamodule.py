@@ -8,7 +8,6 @@ import polars as pl
 import pytest
 import torch
 import yaml
-
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.data.dataset import ICUDataset
 from slices.data.splits import compute_patient_level_splits, load_cached_splits
@@ -1116,6 +1115,50 @@ class TestICUDataModule:
         assert ssl_train_patients.isdisjoint(downstream_val_patients)
         assert ssl_train_patients.isdisjoint(downstream_test_patients)
 
+    def test_aki_normalization_uses_full_ssl_train_split(self, tmp_path):
+        """AKI normalizer should use the full SSL train cohort, not AKI-labelable train."""
+        data_dir = tmp_path / "aki_normalization"
+        _write_split_matrix_fixture(data_dir, ["aki_kdigo"])
+
+        ssl_dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name=None,
+            seed=42,
+            train_ratio=1.0,
+            val_ratio=0.0,
+            test_ratio=0.0,
+            normalize=True,
+        )
+        ssl_dm.setup()
+
+        aki_dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name="aki_kdigo",
+            seed=42,
+            train_ratio=1.0,
+            val_ratio=0.0,
+            test_ratio=0.0,
+            normalize=True,
+        )
+        aki_dm.setup()
+
+        assert len(ssl_dm.normalization_train_indices) == len(ssl_dm.train_indices)
+        assert aki_dm.normalization_train_indices == ssl_dm.normalization_train_indices
+        assert len(aki_dm.normalization_train_indices) == len(ssl_dm.train_indices)
+        assert len(aki_dm.full_train_indices) < len(aki_dm.normalization_train_indices)
+        assert len(aki_dm.full_train_indices) == len(aki_dm.dataset.train_indices)
+        assert aki_dm.dataset.normalization_train_indices == ssl_dm.normalization_train_indices
+        assert torch.allclose(aki_dm.dataset.feature_means, ssl_dm.dataset.feature_means)
+        assert torch.allclose(aki_dm.dataset.feature_stds, ssl_dm.dataset.feature_stds)
+
+        stats_counts = set()
+        for stats_path in data_dir.glob("normalization_stats_*.yaml"):
+            with open(stats_path) as f:
+                stats_counts.add(yaml.safe_load(f)["train_indices_count"])
+
+        assert len(ssl_dm.train_indices) in stats_counts
+        assert len(aki_dm.full_train_indices) not in stats_counts
+
     def test_ssl_train_disjoint_from_task_filtered_eval_splits_for_runner_matrix(self, tmp_path):
         """Every thesis dataset/task/seed should share the global patient split."""
         from scripts.internal.run_experiments import DATASETS, SEEDS_EXTENDED, TASKS
@@ -1132,6 +1175,7 @@ class TestICUDataModule:
                     ssl_static_df,
                     _,
                     ssl_stay_ids,
+                    _,
                     _,
                     _,
                 ) = compute_patient_level_splits(
@@ -1157,6 +1201,7 @@ class TestICUDataModule:
                         _,
                         _,
                         downstream_stay_ids,
+                        _,
                         _,
                     ) = compute_patient_level_splits(
                         data_dir,
@@ -1610,9 +1655,9 @@ class TestDatasetImportWarnings:
                         if child.module == "warnings":
                             inline_imports.append(node.name)
 
-        assert len(inline_imports) == 0, (
-            f"Found 'import warnings' inside functions: {inline_imports}. " "Move to module level."
-        )
+        assert (
+            len(inline_imports) == 0
+        ), f"Found 'import warnings' inside functions: {inline_imports}. Move to module level."
 
     def test_tensor_cache_has_warnings_import(self):
         """tensor_cache.py should have warnings imported at module level.

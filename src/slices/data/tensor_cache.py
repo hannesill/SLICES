@@ -20,7 +20,8 @@ import torch
 import yaml
 
 logger = logging.getLogger(__name__)
-_CACHE_FINGERPRINT_VERSION = "2026-04-07"
+_CACHE_FINGERPRINT_VERSION = "2026-04-22"
+_NORMALIZATION_STATS_VERSION = "full-cohort-train-v2"
 
 
 def _fingerprint_payload(payload: Dict[str, Any]) -> str:
@@ -112,7 +113,7 @@ def _compute_split_hash(train_indices: List[int], normalize: bool) -> str:
     Used to key normalization stats files so concurrent runs with different
     splits write to different files instead of overwriting each other.
     """
-    content = f"{sorted(train_indices)}|{normalize}"
+    content = f"{_NORMALIZATION_STATS_VERSION}|{sorted(train_indices)}|{normalize}"
     return hashlib.md5(content.encode()).hexdigest()[:12]
 
 
@@ -243,6 +244,8 @@ def save_normalization_stats(
         "feature_means": feature_means.tolist(),
         "feature_stds": feature_stds.tolist(),
         "feature_names": feature_names,
+        "normalization_stats_version": _NORMALIZATION_STATS_VERSION,
+        "normalization_index_space": "raw_full_cohort",
         "split_hash": split_hash,
         "train_indices_count": len(train_indices) if train_indices else 0,
         "train_indices": train_indices,

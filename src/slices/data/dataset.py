@@ -113,6 +113,7 @@ class ICUDataset(Dataset):
         seq_length: Optional[int] = None,  # TODO: Add support for different sequence lengths
         normalize: bool = True,  # TODO: Add support for different normalization strategies
         train_indices: Optional[List[int]] = None,
+        normalization_train_indices: Optional[List[int]] = None,
         handle_missing_labels: str = "filter",
         _excluded_stay_ids: Optional[Set[int]] = None,
     ) -> None:
@@ -127,8 +128,13 @@ class ICUDataset(Dataset):
                       data remains in original units and missing values are
                       imputed from the available feature means.
             train_indices: Optional list of indices for training set. If provided,
-                          normalization statistics are computed only on these samples.
-                          This prevents data leakage from val/test sets.
+                          records the task-filtered training split associated with this
+                          dataset. When normalization_train_indices is not provided, these
+                          indices are also used for normalization for backwards compatibility.
+            normalization_train_indices: Optional list of full raw-cohort training indices
+                          used for normalization statistics. DataModule passes this
+                          separately for task-filtered downstream runs so AKI uses the same
+                          dataset/seed normalizer as SSL pretraining.
             handle_missing_labels: How to handle stays with missing labels when task_name
                                   is specified. Options:
                                   - 'filter': Remove samples with missing labels (default)
@@ -141,6 +147,11 @@ class ICUDataset(Dataset):
         self.task_name = task_name
         self.normalize = normalize
         self.train_indices = train_indices
+        self.normalization_train_indices = (
+            normalization_train_indices
+            if normalization_train_indices is not None
+            else train_indices
+        )
         self.handle_missing_labels = handle_missing_labels
         self._excluded_stay_ids = _excluded_stay_ids or set()
 
@@ -171,6 +182,8 @@ class ICUDataset(Dataset):
         self.seq_length: int = seq_length or self.metadata["seq_length_hours"]
         self.task_names: List[str] = self.metadata.get("task_names", [])
         self.task_types: Dict[str, str] = self._resolve_task_types()
+        self._timeseries_tensor: torch.Tensor
+        self._mask_tensor: torch.Tensor
 
         # Validate task_name if provided
         if task_name is not None and task_name not in self.task_names:
@@ -246,7 +259,7 @@ class ICUDataset(Dataset):
 
         Uses a two-phase approach for efficiency:
         1. Load raw tensors from cache (or extract from parquet on cache miss)
-        2. Filter excluded stays, then normalize using run-specific train_indices
+        2. Normalize using full-cohort train indices, then filter excluded stays
 
         The raw tensor cache is shared across all runs for the same dataset,
         regardless of task, seed, or label_fraction. This reduces cache size
@@ -303,17 +316,30 @@ class ICUDataset(Dataset):
                 self.n_features,
             )
 
-        # Phase 2: Filter excluded stays, then normalize
+        # Phase 2: Normalize before any task-label filtering. This keeps
+        # downstream AKI scaling aligned with SSL pretraining because both use
+        # the same full-cohort train indices for a dataset/seed.
+        cached_stats = load_normalization_stats(
+            self.data_dir,
+            self.normalization_train_indices,
+            self.normalize,
+        )
+        self._precompute_tensors(
+            precomputed_tensors=(timeseries_tensor, masks_tensor),
+            train_indices=self.normalization_train_indices,
+            cached_stats=cached_stats,
+        )
 
-        # Apply stay exclusion filtering (task-specific, e.g. missing labels)
+        # Phase 3: Apply stay exclusion filtering (task-specific, e.g. missing labels)
+        self.stay_ids = all_stay_ids
         if self._excluded_stay_ids:
             logger.debug(f"Filtering {len(self._excluded_stay_ids):,} excluded stays")
             keep_indices = [
                 i for i, sid in enumerate(all_stay_ids) if sid not in self._excluded_stay_ids
             ]
             idx_tensor = torch.tensor(keep_indices, dtype=torch.long)
-            timeseries_tensor = timeseries_tensor[idx_tensor]
-            masks_tensor = masks_tensor[idx_tensor]
+            self._timeseries_tensor = self._timeseries_tensor[idx_tensor]
+            self._mask_tensor = self._mask_tensor[idx_tensor]
             self.stay_ids = [all_stay_ids[i] for i in keep_indices]
 
             # Filter static and labels DataFrames to match
@@ -321,23 +347,11 @@ class ICUDataset(Dataset):
             self.static_df = self.static_df.filter(~pl.col("stay_id").is_in(excluded_list))
             self.labels_df = self.labels_df.filter(~pl.col("stay_id").is_in(excluded_list))
             logger.debug(f"Filtered down to {len(self.stay_ids):,} stays")
-        else:
-            self.stay_ids = all_stay_ids
 
         # Build stay_id -> index mapping
         logger.debug("Building stay_id index mapping")
         self.stay_id_to_idx = {sid: idx for idx, sid in enumerate(self.stay_ids)}
         logger.info(f"Loaded {len(self.stay_ids):,} stays")
-
-        # Try to load existing normalization stats (for reproducibility)
-        cached_stats = load_normalization_stats(self.data_dir, self.train_indices, self.normalize)
-
-        # Apply normalization and imputation
-        self._precompute_tensors(
-            precomputed_tensors=(timeseries_tensor, masks_tensor),
-            train_indices=self.train_indices,
-            cached_stats=cached_stats,
-        )
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()

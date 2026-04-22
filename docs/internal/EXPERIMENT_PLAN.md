@@ -47,9 +47,12 @@ with ascertainable creatinine-based KDIGO labels. A stay requires non-null
 creatinine in the 0-24h baseline window and at least one creatinine measurement
 in the 24-48h prediction window; stays without an ascertainable AKI label are
 excluded from AKI supervised training/evaluation but remain available for SSL
-pretraining and non-AKI tasks. This leaves 56,403/74,829 MIIV stays,
-88,239/132,900 eICU stays, and 144,642/207,729 combined stays. Most exclusions
-are due to no 24-48h creatinine measurement.
+pretraining and non-AKI tasks. In the current 84-feature processed artifacts,
+metadata-derived counts are 56,403/74,829 MIIV stays, 88,239/132,686 eICU
+stays, and 144,642/207,515 combined stays. Final tables should derive full
+denominators from each processed `metadata.yaml` (`n_stays`) rather than
+copying static denominators into prose. Most exclusions are due to no 24-48h
+creatinine measurement.
 
 ### 1.3 Shared Encoder Architecture
 
@@ -350,14 +353,18 @@ For concrete rerun outputs, use the exported result artifacts under `results/`
 and the thesis W&B project summaries.
 
 Final thesis reruns should use the tmux launcher so W&B scoping stays
-consistent:
+consistent and launch provenance is pinned to a reviewed commit. Push the
+reviewed commit or check out that exact hash on the VM, then pass it explicitly:
 
-`WANDB_ENTITY=<entity> bash scripts/internal/launch_thesis_tmux.sh`
+`WANDB_ENTITY=<entity> LAUNCH_COMMIT=<commit> bash scripts/internal/launch_thesis_tmux.sh`
+
+The launcher validates the 84-feature processed artifacts before starting tmux
+and clears runtime tensor/hash-normalizer caches before cache warmup.
 
 If launching a sprint manually, include the thesis W&B target on every training
-command:
+command and pass the same commit hash for W&B config provenance:
 
-`--project slices-thesis --revision thesis-v1 --entity <entity>`
+`--project slices-thesis --revision thesis-v1 --entity <entity> --launch-commit <commit>`
 
 ### Upcoming: Sprint 10 — Extra Seeds 789, 1011 (630 runs)
 
