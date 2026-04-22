@@ -45,7 +45,12 @@ def bootstrap_ci(
         generator.manual_seed(seed)
 
     n = len(targets)
-    point = _compute_metric(metric_fn, preds, targets)
+    requires_class_diversity = _metric_requires_class_diversity(metric_fn)
+    point = (
+        float("nan")
+        if requires_class_diversity and not _has_class_diversity(targets)
+        else _compute_metric(metric_fn, preds, targets)
+    )
 
     scores = []
     for _ in range(n_bootstraps):
@@ -53,8 +58,10 @@ def bootstrap_ci(
         boot_preds = preds[indices]
         boot_targets = targets[indices]
 
+        if requires_class_diversity and not _has_class_diversity(boot_targets):
+            continue
         score = _compute_metric(metric_fn, boot_preds, boot_targets)
-        if score == score:  # skip NaN
+        if math.isfinite(score):
             scores.append(score)
 
     if not scores:
@@ -115,8 +122,13 @@ def paired_bootstrap_test(
         generator.manual_seed(seed)
 
     n = len(targets)
-    score_a = _compute_metric(metric_fn, preds_a, targets)
-    score_b = _compute_metric(metric_fn, preds_b, targets)
+    requires_class_diversity = _metric_requires_class_diversity(metric_fn)
+    if requires_class_diversity and not _has_class_diversity(targets):
+        score_a = float("nan")
+        score_b = float("nan")
+    else:
+        score_a = _compute_metric(metric_fn, preds_a, targets)
+        score_b = _compute_metric(metric_fn, preds_b, targets)
 
     # Observed delta: positive means A is better when higher_is_better=True
     observed_delta = score_a - score_b
@@ -130,10 +142,13 @@ def paired_bootstrap_test(
 
     for _ in range(n_bootstraps):
         indices = torch.randint(0, n, (n,), generator=generator)
-        boot_a = _compute_metric(metric_fn, preds_a[indices], targets[indices])
-        boot_b = _compute_metric(metric_fn, preds_b[indices], targets[indices])
+        boot_targets = targets[indices]
+        if requires_class_diversity and not _has_class_diversity(boot_targets):
+            continue
+        boot_a = _compute_metric(metric_fn, preds_a[indices], boot_targets)
+        boot_b = _compute_metric(metric_fn, preds_b[indices], boot_targets)
 
-        if boot_a != boot_a or boot_b != boot_b:  # skip NaN
+        if not (math.isfinite(boot_a) and math.isfinite(boot_b)):
             continue
         valid += 1
 
@@ -149,7 +164,7 @@ def paired_bootstrap_test(
             if boot_delta <= 2 * observed_delta:
                 count_extreme += 1
 
-    p_value = count_extreme / max(valid, 1)
+    p_value = count_extreme / valid if valid else float("nan")
 
     return {
         "score_a": score_a,
@@ -303,6 +318,23 @@ def _compute_metric(
         return metric_fn.compute().item()
     else:
         return metric_fn(preds, targets).item()
+
+
+def _metric_requires_class_diversity(
+    metric_fn: Union[Metric, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]],
+) -> bool:
+    """Return whether a metric is undefined for single-class target samples."""
+    if not isinstance(metric_fn, Metric):
+        return False
+    metric_name = metric_fn.__class__.__name__.lower()
+    return "auroc" in metric_name or "averageprecision" in metric_name
+
+
+def _has_class_diversity(targets: torch.Tensor) -> bool:
+    flat = targets.detach().reshape(-1)
+    if flat.numel() < 2:
+        return False
+    return torch.unique(flat).numel() >= 2
 
 
 def _finite_pairs(

@@ -47,6 +47,7 @@ import os
 import re
 import sys
 import time
+from numbers import Real
 from pathlib import Path
 from typing import Any, Optional
 
@@ -194,7 +195,7 @@ def _has_finite_summary_value(summary: dict[str, Any], key: str) -> bool:
     value = summary.get(key)
     if value is None:
         return False
-    if isinstance(value, float) and math.isnan(value):
+    if isinstance(value, Real) and not isinstance(value, bool) and not math.isfinite(float(value)):
         return False
     return True
 
@@ -239,6 +240,31 @@ def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
         return True
     except Exception:
         return False
+
+
+def missing_fairness_report_requirements(
+    run,
+    report: dict[str, Any],
+    protected_attributes: list[str],
+) -> list[str]:
+    """Return missing requested fairness attributes or required aggregate metrics."""
+    expected_attrs = _expected_fairness_attributes(run, protected_attributes)
+    required_metrics = _required_fairness_metrics_for_run(run)
+    missing: list[str] = []
+
+    for attr in expected_attrs:
+        if attr not in report:
+            missing.append(f"{attr}: no valid fairness groups")
+            continue
+
+        flat = flatten_fairness_report({attr: report[attr]})
+        prefix = f"fairness/{attr}/"
+        for metric_name in required_metrics:
+            key = f"{prefix}{metric_name}"
+            if not _has_finite_summary_value(flat, key):
+                missing.append(f"{attr}: missing {metric_name}")
+
+    return missing
 
 
 def write_fairness_to_wandb(
@@ -843,6 +869,18 @@ def main() -> None:
             if not report:
                 log.warning("  No fairness results (no valid attribute groups)")
                 results["skipped"] += 1
+                continue
+
+            missing_requirements = missing_fairness_report_requirements(
+                run,
+                report,
+                args.protected_attributes,
+            )
+            if missing_requirements:
+                message = "Incomplete fairness results: " + "; ".join(missing_requirements)
+                log.warning("  %s", message)
+                results["skipped"] += 1
+                results["errors"].append((run.id, run_desc, message))
                 continue
 
             # 4. Flatten and write back

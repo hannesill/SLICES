@@ -1719,6 +1719,47 @@ class TestExperimentRunnerWandbOverrides:
         assert state["runs"][run.id]["status"] == "pending"
         assert "launch_commit changed" in state["runs"][run.id]["reset_reason"]
 
+    def test_launch_commit_mismatch_quarantines_stale_resume_artifacts(self, tmp_path):
+        from scripts.internal.run_experiments import Run, reset_state_for_launch_commit_mismatch
+
+        output_dir = tmp_path / "supervised_mortality_24h_miiv_seed42"
+        checkpoint_dir = output_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "last.ckpt").write_text("old checkpoint")
+
+        run = Run(
+            id="core_ssl_benchmark_rev-thesis-v1_supervised_mortality_24h_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="supervised",
+            paradigm="supervised",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(output_dir),
+            task="mortality_24h",
+            extra_overrides={"+launch_commit": "newcommit"},
+        )
+        state = {
+            "version": 1,
+            "runs": {
+                run.id: {
+                    "status": "completed",
+                    "launch_commit": "oldcommit",
+                    "command": "uv run python scripts/training/supervised.py",
+                }
+            },
+        }
+
+        reset_state_for_launch_commit_mismatch([run], state)
+
+        state_entry = state["runs"][run.id]
+        quarantined_output_dir = Path(state_entry["quarantined_output_dir"])
+        assert state_entry["status"] == "pending"
+        assert not output_dir.exists()
+        assert (quarantined_output_dir / "checkpoints" / "last.ckpt").read_text() == (
+            "old checkpoint"
+        )
+        assert not any(part.startswith("ckpt_path=") for part in run.build_command({}))
+
     def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 

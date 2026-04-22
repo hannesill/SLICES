@@ -17,6 +17,7 @@ from slices.eval.statistical import (
     paired_bootstrap_test,
     paired_wilcoxon_signed_rank,
 )
+from torchmetrics import AUROC
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,18 @@ class TestBootstrapCI:
         r1 = bootstrap_ci(accuracy_metric, preds, targets, seed=123)
         r2 = bootstrap_ci(accuracy_metric, preds, targets, seed=123)
         assert r1 == r2
+
+    def test_auroc_ci_skips_single_class_resamples(self):
+        """Single-class AUROC bootstrap samples should not become artificial zeros."""
+        preds = torch.tensor([0.9] + [0.1] * 9)
+        targets = torch.tensor([1] + [0] * 9)
+
+        result = bootstrap_ci(AUROC(task="binary"), preds, targets, n_bootstraps=200, seed=0)
+
+        assert result["point"] == pytest.approx(1.0)
+        assert result["ci_lower"] == pytest.approx(1.0)
+        assert result["ci_upper"] == pytest.approx(1.0)
+        assert result["std"] == pytest.approx(0.0)
 
 
 # ── paired_bootstrap_test ────────────────────────────────────────────────────
@@ -214,6 +227,24 @@ class TestPairedBootstrapTest:
         r1 = paired_bootstrap_test(accuracy_metric, preds_a, preds_b, targets, seed=99)
         r2 = paired_bootstrap_test(accuracy_metric, preds_a, preds_b, targets, seed=99)
         assert r1 == r2
+
+    def test_auroc_paired_bootstrap_skips_single_class_resamples(self):
+        preds = torch.tensor([0.9] + [0.1] * 9)
+        targets = torch.tensor([1] + [0] * 9)
+
+        result = paired_bootstrap_test(
+            AUROC(task="binary"),
+            preds,
+            preds,
+            targets,
+            n_bootstraps=200,
+            seed=0,
+        )
+
+        assert result["score_a"] == pytest.approx(1.0)
+        assert result["score_b"] == pytest.approx(1.0)
+        assert result["delta"] == pytest.approx(0.0)
+        assert result["p_value"] == pytest.approx(1.0)
 
 
 class TestWilcoxonHelpers:
