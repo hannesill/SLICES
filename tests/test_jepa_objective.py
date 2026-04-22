@@ -14,6 +14,58 @@ from slices.models.pretraining import (
 )
 
 # =============================================================================
+# Block masking tests
+# =============================================================================
+
+
+class TestJEPABlockMasking:
+    """Tests for JEPA block-mask budgeting."""
+
+    @pytest.mark.parametrize("mask_ratio,expected_masked", [(0.3, 7), (0.5, 12), (0.75, 18)])
+    def test_block_mask_hits_requested_valid_budget(self, mask_ratio, expected_masked):
+        from slices.models.pretraining.masking import create_block_timestep_mask
+
+        B, T = 128, 24
+        valid_timestep_mask = torch.ones(B, T, dtype=torch.bool)
+
+        ssl_mask = create_block_timestep_mask(
+            B,
+            T,
+            mask_ratio,
+            torch.device("cpu"),
+            n_blocks=3,
+            valid_timestep_mask=valid_timestep_mask,
+        )
+
+        actual_masked = ((~ssl_mask) & valid_timestep_mask).sum(dim=1)
+        assert actual_masked.unique().tolist() == [expected_masked]
+
+    def test_block_mask_budgets_over_valid_timesteps_only(self):
+        from slices.models.pretraining.masking import create_block_timestep_mask
+
+        B, T = 3, 12
+        valid_timestep_mask = torch.zeros(B, T, dtype=torch.bool)
+        valid_timestep_mask[0, [0, 1, 2, 4, 5, 8, 9, 11]] = True
+        valid_timestep_mask[1, [1, 3, 5, 7, 9]] = True
+        valid_timestep_mask[2, [6]] = True
+
+        ssl_mask = create_block_timestep_mask(
+            B,
+            T,
+            0.75,
+            torch.device("cpu"),
+            n_blocks=3,
+            valid_timestep_mask=valid_timestep_mask,
+        )
+
+        actual_masked = ((~ssl_mask) & valid_timestep_mask).sum(dim=1)
+        actual_visible = (ssl_mask & valid_timestep_mask).sum(dim=1)
+        assert actual_masked.tolist() == [6, 4, 0]
+        assert actual_visible.tolist() == [2, 1, 1]
+        assert torch.all(ssl_mask[~valid_timestep_mask])
+
+
+# =============================================================================
 # Predictor tests
 # =============================================================================
 

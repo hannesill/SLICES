@@ -361,35 +361,49 @@ class FairnessEvaluator:
         per_group_auprc: Dict[str, float] = {}
         auroc_values = []
         auprc_values = []
+        metric_valid_groups = []
+        single_class_groups = []
 
         for g in valid_groups:
             group_mask = group_ids == g
             g_preds = predictions[group_mask]
             g_labels = labels[group_mask].long()
+            group_name = group_names[g]
 
             if g_labels.unique().numel() < 2:
-                per_group_auroc[group_names[g]] = float("nan")
-                per_group_auprc[group_names[g]] = float("nan")
+                per_group_auroc[group_name] = float("nan")
+                per_group_auprc[group_name] = float("nan")
+                single_class_groups.append(group_name)
                 continue
 
             auroc_metric = AUROC(task="binary")
             auroc_val = auroc_metric(g_preds, g_labels).item()
-            per_group_auroc[group_names[g]] = auroc_val
+            per_group_auroc[group_name] = auroc_val
             auroc_values.append(auroc_val)
 
             auprc_metric = BinaryAveragePrecision()
             auprc_val = auprc_metric(g_preds, g_labels).item()
-            per_group_auprc[group_names[g]] = auprc_val
+            per_group_auprc[group_name] = auprc_val
             auprc_values.append(auprc_val)
+            metric_valid_groups.append(group_name)
 
-        worst_group_auroc = min(auroc_values) if auroc_values else float("nan")
-        worst_group_auprc = min(auprc_values) if auprc_values else float("nan")
-        auroc_gap = (
-            (max(auroc_values) - min(auroc_values)) if len(auroc_values) >= 2 else float("nan")
-        )
-        auprc_gap = (
-            (max(auprc_values) - min(auprc_values)) if len(auprc_values) >= 2 else float("nan")
-        )
+        metrics_comparable = len(metric_valid_groups) >= 2
+        if metrics_comparable:
+            worst_group_auroc = min(auroc_values)
+            worst_group_auprc = min(auprc_values)
+            auroc_gap = max(auroc_values) - min(auroc_values)
+            auprc_gap = max(auprc_values) - min(auprc_values)
+        else:
+            logger.warning(
+                "Binary fairness discrimination metrics are not comparable: "
+                "%d/%d size-valid groups have both outcome classes.",
+                len(metric_valid_groups),
+                len(valid_groups),
+            )
+            worst_group_auroc = float("nan")
+            worst_group_auprc = float("nan")
+            auroc_gap = float("nan")
+            auprc_gap = float("nan")
 
         valid_mask = torch.zeros_like(group_ids, dtype=torch.bool)
         for g in valid_groups:
@@ -412,6 +426,8 @@ class FairnessEvaluator:
             "equalized_odds_diff": eo_diff,
             "disparate_impact_ratio": di_ratio,
             "n_valid_groups": len(valid_groups),
+            "n_metric_valid_groups": len(metric_valid_groups),
+            "n_single_class_groups": len(single_class_groups),
             "group_sizes": group_sizes,
             "group_sample_sizes": group_sample_sizes,
         }

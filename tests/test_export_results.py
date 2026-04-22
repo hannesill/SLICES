@@ -1,6 +1,7 @@
 """Tests for the class-based results export pipeline."""
 
 import importlib
+import json
 import sys
 
 import pandas as pd
@@ -432,6 +433,11 @@ def test_extract_run_exports_los_regression_fairness_keys():
 
 def test_validate_warns_on_missing_or_failed_checkpoint_provenance():
     mod = importlib.import_module("scripts.export_results")
+    fairness_keys = [
+        f"fairness/{attr}/{metric_name}"
+        for attr in mod.FAIRNESS_ATTRIBUTES
+        for metric_name in mod.BINARY_FAIRNESS_REQUIRED_METRICS
+    ]
 
     per_seed_df = pd.DataFrame(
         [
@@ -475,6 +481,7 @@ def test_validate_warns_on_missing_or_failed_checkpoint_provenance():
                 "seed": 42,
                 "phase": "baseline",
                 "test/auprc": 0.4,
+                mod.FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(fairness_keys),
             },
         ]
     )
@@ -488,6 +495,74 @@ def test_validate_warns_on_missing_or_failed_checkpoint_provenance():
     assert "run-failed" in joined
     assert "run-bad-load" in joined
     assert "run-xgb" not in joined
+
+
+def test_validate_warns_when_fairness_summary_metrics_are_missing():
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-no-fairness",
+        "_eval_checkpoint_source": "final",
+    }
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+    joined = "\n".join(warnings)
+
+    assert "missing required fairness summary metrics" in joined
+    assert "fairness/gender/n_metric_valid_groups" in joined
+
+
+def test_validate_accepts_written_nan_fairness_summary_metrics():
+    mod = importlib.import_module("scripts.export_results")
+
+    required_keys = [
+        f"fairness/{attr}/{metric_name}"
+        for attr in mod.FAIRNESS_ATTRIBUTES
+        for metric_name in mod.BINARY_FAIRNESS_REQUIRED_METRICS
+    ]
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-nan-fairness",
+        "_eval_checkpoint_source": "final",
+        mod.FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(required_keys),
+    }
+    for key in required_keys:
+        row[key] = float("nan")
+
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+
+    assert not any("missing required fairness summary metrics" in warning for warning in warnings)
+
+
+def test_validate_does_not_require_eicu_race_fairness():
+    mod = importlib.import_module("scripts.export_results")
+
+    attrs = ["gender", "age_group"]
+    required_keys = [
+        f"fairness/{attr}/{metric_name}"
+        for attr in attrs
+        for metric_name in mod.BINARY_FAIRNESS_REQUIRED_METRICS
+    ]
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "dataset": "eicu",
+        "wandb_run_id": "run-eicu-fairness",
+        "_eval_checkpoint_source": "final",
+        mod.FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(required_keys),
+    }
+    for key in required_keys:
+        row[key] = 0.0
+
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+
+    assert not any("missing required fairness summary metrics" in warning for warning in warnings)
 
 
 def test_filter_thesis_tasks_excludes_optional_mortality_by_default():
@@ -569,6 +644,53 @@ def test_parse_args_exposes_duplicate_fingerprint_escape_hatch(monkeypatch):
     )
 
     assert mod.parse_args().allow_duplicate_fingerprints is True
+
+
+def test_parse_args_rejects_multiple_revisions_by_default(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(sys, "argv", ["export_results.py", "--revision", "v1", "v2"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.parse_args()
+
+    assert excinfo.value.code == 2
+
+
+def test_parse_args_allows_multiple_revisions_for_exploratory_export(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "v1", "v2", "--allow-multiple-revisions"],
+    )
+
+    args = mod.parse_args()
+
+    assert args.revision == ["v1", "v2"]
+    assert args.allow_multiple_revisions is True
+
+
+def test_validate_warns_when_group_mixes_revisions():
+    mod = importlib.import_module("scripts.export_results")
+
+    rows = []
+    for seed, revision in [(42, "v1"), (123, "v2")]:
+        rows.append(
+            {
+                **_row("core_ssl_benchmark", "mae", seed),
+                "wandb_run_id": f"run-{seed}",
+                "revision": revision,
+                "_eval_checkpoint_source": "final",
+            }
+        )
+
+    per_seed_df = pd.DataFrame(rows)
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42, 123})
+
+    assert any("mixes multiple revisions" in warning for warning in warnings)
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):

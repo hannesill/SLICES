@@ -1458,6 +1458,12 @@ class TestExporterClassMetadata:
         assert _infer_model_size({"encoder": {"d_model": 64, "n_layers": 2}}) == "default"
         assert _infer_model_size({"encoder": {"d_model": 128, "n_layers": 4}}) == "medium"
         assert _infer_model_size({"encoder": {"d_model": 256, "n_layers": 4}}) == "large"
+        assert (
+            _infer_model_size(
+                {"paradigm": "smart", "encoder": {"name": "smart", "d_model": 32, "n_layers": 2}}
+            )
+            == "default"
+        )
 
     def test_extract_run_uses_experiment_class_tags(self):
         """Runs should export with explicit final experiment classes."""
@@ -3253,3 +3259,12 @@ class TestExperimentRunnerMatrix:
         assert len(pretrains) == 15
         assert sum(run.freeze_encoder is True for run in finetunes) == 60
         assert sum(run.freeze_encoder is False for run in finetunes) == 60
+
+    def test_smart_external_reference_uses_stable_default_model_size(self):
+        from scripts.internal.run_experiments import MatrixBuilder
+
+        builder = MatrixBuilder()
+        builder.build_smart_external_reference()
+
+        assert len(builder.runs) == 135
+        assert {run.model_size for run in builder.runs} == {"default"}

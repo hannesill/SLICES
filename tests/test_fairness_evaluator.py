@@ -122,6 +122,34 @@ class TestWorstGroupAUROC:
         valid_aurocs = [v for v in per_group.values() if v == v]  # Filter NaN
         assert worst == pytest.approx(min(valid_aurocs))
 
+    def test_one_class_group_makes_worst_group_discrimination_non_comparable(self):
+        """A size-valid one-class group should not be omitted from worst-group accounting."""
+        static_df = make_static_df(
+            n=6,
+            genders=["M", "M", "M", "F", "F", "F"],
+            ages=[50.0] * 6,
+        )
+        stay_ids = list(range(6))
+        labels = torch.tensor([1.0, 1.0, 1.0, 0.0, 1.0, 0.0])
+        predictions = torch.tensor([0.9, 0.8, 0.7, 0.2, 0.8, 0.3])
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=1,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+        gender_report = report["gender"]
+
+        assert gender_report["n_valid_groups"] == 2
+        assert gender_report["n_metric_valid_groups"] == 1
+        assert gender_report["n_single_class_groups"] == 1
+        assert gender_report["per_group_auroc"]["M"] != gender_report["per_group_auroc"]["M"]
+        assert gender_report["worst_group_auroc"] != gender_report["worst_group_auroc"]
+        assert gender_report["worst_group_auprc"] != gender_report["worst_group_auprc"]
+        assert gender_report["auroc_gap"] != gender_report["auroc_gap"]
+        assert gender_report["auprc_gap"] != gender_report["auprc_gap"]
+
 
 class TestRegressionFairness:
     """Tests for regression-task fairness metrics."""
@@ -355,6 +383,7 @@ class TestEvaluateStructure:
         assert "equalized_odds_diff" in gender_report
         assert "disparate_impact_ratio" in gender_report
         assert "n_valid_groups" in gender_report
+        assert "n_metric_valid_groups" in gender_report
         assert "group_sizes" in gender_report
 
     def test_multiple_attributes(self):

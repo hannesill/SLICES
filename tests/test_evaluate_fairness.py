@@ -11,6 +11,7 @@ def _binary_fairness_summary(attr: str, base: float = 0.7) -> dict[str, float]:
     prefix = f"fairness/{attr}/"
     return {
         f"{prefix}n_valid_groups": 2,
+        f"{prefix}n_metric_valid_groups": 2,
         f"{prefix}worst_group_auroc": base,
         f"{prefix}worst_group_auprc": base - 0.1,
         f"{prefix}auroc_gap": 0.05,
@@ -199,6 +200,7 @@ def test_missing_fairness_report_requirements_flags_missing_requested_attribute(
     report = {
         "gender": {
             "n_valid_groups": 2,
+            "n_metric_valid_groups": 2,
             "worst_group_auroc": 0.71,
             "worst_group_auprc": 0.61,
             "auroc_gap": 0.05,
@@ -221,6 +223,7 @@ def test_missing_fairness_report_requirements_ignores_eicu_race():
     report = {
         "gender": {
             "n_valid_groups": 2,
+            "n_metric_valid_groups": 2,
             "worst_group_auroc": 0.71,
             "worst_group_auprc": 0.61,
             "auroc_gap": 0.05,
@@ -243,6 +246,7 @@ def test_missing_fairness_report_requirements_accepts_written_nan_required_metri
     report = {
         "gender": {
             "n_valid_groups": 2,
+            "n_metric_valid_groups": 1,
             "worst_group_auroc": float("nan"),
             "worst_group_auprc": 0.61,
             "auroc_gap": 0.05,

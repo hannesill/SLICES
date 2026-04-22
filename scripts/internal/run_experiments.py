@@ -776,10 +776,16 @@ class MatrixBuilder:
         experiment_class = "smart_external_reference"
         pretrain_extra = {"model": "smart"}
         finetune_extra = {"model": "smart"}
+        model_size = "default"
         for seed in SEEDS_EXTENDED:
             for dataset in DATASETS:
                 pretrain = self._add_pretrain(
-                    experiment_class, "smart", dataset, seed, pretrain_extra
+                    experiment_class,
+                    "smart",
+                    dataset,
+                    seed,
+                    pretrain_extra,
+                    model_size=model_size,
                 )
                 for task in TASKS:
                     self._add_finetune(
@@ -791,6 +797,7 @@ class MatrixBuilder:
                         False,
                         pretrain,
                         extra=finetune_extra,
+                        model_size=model_size,
                     )
                     self._add_finetune(
                         experiment_class,
@@ -801,6 +808,7 @@ class MatrixBuilder:
                         True,
                         pretrain,
                         extra=finetune_extra,
+                        model_size=model_size,
                     )
 
     def build_all(self) -> list[Run]:
