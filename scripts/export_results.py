@@ -118,6 +118,7 @@ TEST_METRICS = [
     "fairness/gender/mse_gap",
     "fairness/gender/mae_gap",
     "fairness/gender/n_valid_groups",
+    "fairness/gender/n_metric_valid_groups",
     "fairness/age_group/worst_group_auroc",
     "fairness/age_group/worst_group_auprc",
     "fairness/age_group/auroc_gap",
@@ -130,6 +131,7 @@ TEST_METRICS = [
     "fairness/age_group/mse_gap",
     "fairness/age_group/mae_gap",
     "fairness/age_group/n_valid_groups",
+    "fairness/age_group/n_metric_valid_groups",
     "fairness/race/worst_group_auroc",
     "fairness/race/worst_group_auprc",
     "fairness/race/auroc_gap",
@@ -142,6 +144,7 @@ TEST_METRICS = [
     "fairness/race/mse_gap",
     "fairness/race/mae_gap",
     "fairness/race/n_valid_groups",
+    "fairness/race/n_metric_valid_groups",
 ]
 
 VAL_METRICS = [
@@ -173,6 +176,26 @@ LOWER_IS_BETTER_METRICS = {
 }
 
 EVAL_PHASES = ["finetune", "supervised", "baseline"]
+FAIRNESS_ATTRIBUTES = ["gender", "age_group", "race"]
+FAIRNESS_SUMMARY_KEY_COLUMN = "_fairness_summary_keys"
+BINARY_FAIRNESS_REQUIRED_METRICS = [
+    "n_valid_groups",
+    "n_metric_valid_groups",
+    "worst_group_auroc",
+    "worst_group_auprc",
+    "auroc_gap",
+    "auprc_gap",
+    "demographic_parity_diff",
+    "equalized_odds_diff",
+    "disparate_impact_ratio",
+]
+REGRESSION_FAIRNESS_REQUIRED_METRICS = [
+    "n_valid_groups",
+    "worst_group_mse",
+    "worst_group_mae",
+    "mse_gap",
+    "mae_gap",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +378,17 @@ def _infer_model_size(config: dict) -> str:
     explicit = config.get("model_size")
     if explicit:
         return explicit
+    model_markers = {
+        str(value).lower()
+        for value in [
+            config.get("paradigm"),
+            _get_nested(config, "ssl.name"),
+            _get_nested(config, "encoder.name"),
+        ]
+        if value is not None
+    }
+    if "smart" in model_markers:
+        return "default"
     d_model = _get_nested(config, "encoder.d_model")
     n_layers = _get_nested(config, "encoder.n_layers")
     if d_model is None:
@@ -415,6 +449,9 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     for key, value in summary.items():
         if key.startswith("fairness/") and isinstance(value, (int, float)):
             metrics[key] = _metric_value_or_nan(value)
+    fairness_summary_keys = sorted(
+        key for key, value in summary.items() if key.startswith("fairness/") and value is not None
+    )
 
     paradigm = config.get("paradigm") or _get_nested(config, "ssl.name")
     lr = _get_nested(config, "optimizer.lr", default=None)
@@ -447,6 +484,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "_best_ckpt_path": summary.get("_best_ckpt_path", None),
         "_best_ckpt_load_ok": summary.get("_best_ckpt_load_ok", None),
         "_best_ckpt_error": summary.get("_best_ckpt_error", None),
+        FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(fairness_summary_keys),
     }
     row.update(metrics)
     return row
@@ -1117,6 +1155,105 @@ def _checkpoint_provenance_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Se
     return issues
 
 
+def _fairness_attributes_for_row(row: pd.Series) -> list[str]:
+    """Return protected attributes expected in publication exports for a row."""
+    dataset = str(row.get("dataset", "")).lower()
+    attrs = list(FAIRNESS_ATTRIBUTES)
+    if dataset == "eicu":
+        attrs = [attr for attr in attrs if attr != "race"]
+    return attrs
+
+
+def _fairness_required_metrics_for_row(row: pd.Series) -> list[str]:
+    """Return required aggregate fairness metrics for the row's task family."""
+    task = str(row.get("task", "") or "").lower()
+    if task.startswith("los"):
+        return REGRESSION_FAIRNESS_REQUIRED_METRICS
+    return BINARY_FAIRNESS_REQUIRED_METRICS
+
+
+def _fairness_present_key_set(row: pd.Series) -> set[str] | None:
+    """Return W&B fairness summary keys known to have existed, if available."""
+    value = row.get(FAIRNESS_SUMMARY_KEY_COLUMN)
+    if _is_missing_export_value(value):
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(value, (list, tuple, set)):
+        parsed = value
+    else:
+        return None
+    return {str(key) for key in parsed}
+
+
+def _row_has_fairness_metric(row: pd.Series, key: str) -> bool:
+    """Check whether a required fairness metric was written for this row."""
+    present_keys = _fairness_present_key_set(row)
+    if present_keys is not None:
+        return key in present_keys
+    if key not in row.index:
+        return False
+    return not _is_missing_export_value(row.get(key))
+
+
+def _fairness_completeness_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Series, list[str]]]:
+    """Find evaluation rows missing dataset/task-appropriate fairness summaries."""
+    if per_seed_df.empty:
+        return []
+
+    issues = []
+    for _, row in per_seed_df.iterrows():
+        if row.get("phase") not in EVAL_PHASES:
+            continue
+        if _is_missing_export_value(row.get("task")):
+            continue
+
+        missing_keys = []
+        for attr in _fairness_attributes_for_row(row):
+            for metric_name in _fairness_required_metrics_for_row(row):
+                key = f"fairness/{attr}/{metric_name}"
+                if not _row_has_fairness_metric(row, key):
+                    missing_keys.append(key)
+
+        if missing_keys:
+            issues.append((row, missing_keys))
+
+    return issues
+
+
+def _mixed_revision_group_warnings(per_seed_df: pd.DataFrame) -> list[str]:
+    """Warn when one aggregated scientific config draws seeds from multiple revisions."""
+    if per_seed_df.empty or "revision" not in per_seed_df.columns:
+        return []
+
+    fingerprint_cols = [col for col in FINGERPRINT if col in per_seed_df.columns]
+    if not fingerprint_cols:
+        return []
+
+    warnings = []
+    work = _fillna_for_grouping(per_seed_df, fingerprint_cols + ["revision"])
+    for key, group in work.groupby(fingerprint_cols, dropna=False):
+        revisions = sorted(
+            revision
+            for revision in group["revision"].dropna().astype(str).unique().tolist()
+            if revision != "__none__"
+        )
+        if len(revisions) <= 1:
+            continue
+        if not isinstance(key, tuple):
+            key = (key,)
+        desc = _format_matrix_key(key, fingerprint_cols)
+        warnings.append(
+            "WARNING: export group mixes multiple revisions; publication exports should "
+            f"use one revision. {desc}; revisions={revisions}"
+        )
+
+    return warnings
+
+
 def _expected_row_from_run(run) -> dict:
     return {
         "experiment_class": run.experiment_class,
@@ -1335,6 +1472,36 @@ def validate(
                 + f" - {reason}"
             )
 
+    fairness_issues = _fairness_completeness_issues(per_seed_df)
+    if fairness_issues:
+        warnings.append(
+            f"WARNING: {len(fairness_issues)} evaluation runs are missing required "
+            "fairness summary metrics. Run scripts/eval/evaluate_fairness.py before "
+            "publication export; use --allow-incomplete only for exploratory exports."
+        )
+        for row, missing_keys in fairness_issues[:10]:
+            preview = ", ".join(missing_keys[:8])
+            if len(missing_keys) > 8:
+                preview += f", ... {len(missing_keys) - 8} more"
+            warnings.append(
+                "  "
+                + ", ".join(
+                    f"{col}={row.get(col)}"
+                    for col in [
+                        "wandb_run_id",
+                        "paradigm",
+                        "dataset",
+                        "task",
+                        "seed",
+                        "phase",
+                    ]
+                    if col in row
+                )
+                + f" - missing={preview}"
+            )
+
+    warnings.extend(_mixed_revision_group_warnings(per_seed_df))
+
     print("\nValidation summary:", file=sys.stderr)
     print(f"  Total runs: {len(per_seed_df)}", file=sys.stderr)
     print(f"  Unique configs: {len(aggregated_df)}", file=sys.stderr)
@@ -1384,6 +1551,14 @@ def parse_args() -> argparse.Namespace:
         help=f"Filter to specific phase(s) (default: {EVAL_PHASES})",
     )
     parser.add_argument("--revision", nargs="+", help="Filter to specific revision tag(s)")
+    parser.add_argument(
+        "--allow-multiple-revisions",
+        action="store_true",
+        help=(
+            "Permit exporting more than one revision in a single exploratory run. "
+            "Publication exports should use exactly one revision."
+        ),
+    )
     parser.add_argument("--state", default="finished", help="Run state filter (default: finished)")
     parser.add_argument("--output-dir", default="results", help="Output directory")
     parser.add_argument(
@@ -1436,6 +1611,11 @@ def parse_args() -> argparse.Namespace:
                 "--revision is required to avoid mixing reruns. "
                 "Pass --revision <name> or set REVISION/WANDB_REVISION."
             )
+    if len(args.revision) > 1 and not args.allow_multiple_revisions:
+        parser.error(
+            "Multiple --revision values are disabled for publication exports. "
+            "Run one revision at a time, or pass --allow-multiple-revisions for exploratory export."
+        )
 
     return args
 

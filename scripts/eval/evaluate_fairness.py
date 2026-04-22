@@ -78,6 +78,7 @@ THESIS_TASKS = {
 }
 BINARY_FAIRNESS_REQUIRED_METRICS = [
     "n_valid_groups",
+    "n_metric_valid_groups",
     "worst_group_auroc",
     "worst_group_auprc",
     "auroc_gap",

@@ -64,8 +64,15 @@ For binary tasks it logs:
 - `demographic_parity_diff`
 - `equalized_odds_diff`
 - `disparate_impact_ratio`
+- `n_valid_groups`
+- `n_metric_valid_groups`
 - `group_sizes`
 - `group_sample_sizes`
+
+`n_valid_groups` counts size-valid subgroups. `n_metric_valid_groups` counts
+the subset with both outcome classes, which is required for comparable
+AUROC/AUPRC. Worst-group AUROC/AUPRC and their gaps are written as `NaN` unless
+at least two size-valid groups have both classes.
 
 For regression tasks it logs:
 
@@ -97,7 +104,9 @@ For regression tasks it logs:
 - `results/statistical_tests.parquet`
 
 Those exports include fairness columns when the runs already have `fairness/*`
-summary metrics.
+summary metrics. Publication validation requires dataset/task-appropriate
+fairness summaries for downstream rows: gender and age for all datasets, and
+race for MIMIC/combined rows. eICU race is not required.
 
 ## Design Decisions
 
