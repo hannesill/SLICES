@@ -40,6 +40,39 @@ def _row(experiment_class, paradigm, seed, task="mortality_24h", offset=0.0):
     }
 
 
+def _fresh_fairness_metadata(
+    mod,
+    protected_attributes=None,
+    artifact_path="outputs/run/checkpoints/last.ckpt",
+    artifact_source="recorded_final",
+    checkpoint_source="final",
+    min_subgroup_size=50,
+):
+    protected_attributes = protected_attributes or mod.FAIRNESS_ATTRIBUTES
+    return {
+        mod.FAIRNESS_SCHEMA_VERSION_KEY: mod.FAIRNESS_SUMMARY_SCHEMA_VERSION,
+        mod.FAIRNESS_SCRIPT_VERSION_KEY: mod.FAIRNESS_SCRIPT_VERSION,
+        mod.FAIRNESS_ARTIFACT_PATH_KEY: artifact_path,
+        mod.FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
+        mod.FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
+        mod.FAIRNESS_PROTECTED_ATTRIBUTES_KEY: json.dumps(protected_attributes),
+        mod.FAIRNESS_MIN_SUBGROUP_SIZE_KEY: min_subgroup_size,
+    }
+
+
+def _add_binary_fairness_summary(row, mod, attrs=None, value=0.0):
+    attrs = attrs or mod.FAIRNESS_ATTRIBUTES
+    required_keys = [
+        f"fairness/{attr}/{metric_name}"
+        for attr in attrs
+        for metric_name in mod.BINARY_FAIRNESS_REQUIRED_METRICS
+    ]
+    row[mod.FAIRNESS_SUMMARY_KEY_COLUMN] = json.dumps(required_keys)
+    for key in required_keys:
+        row[key] = value
+    return row
+
+
 def test_build_statistical_tests_df_produces_pairwise_significance_rows():
     mod = importlib.import_module("scripts.export_results")
 
@@ -514,7 +547,14 @@ def test_validate_warns_on_missing_or_failed_checkpoint_provenance():
                 "seed": 42,
                 "phase": "baseline",
                 "test/auprc": 0.4,
+                "_output_dir": "outputs/run-xgb",
                 mod.FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(fairness_keys),
+                **_fresh_fairness_metadata(
+                    mod,
+                    artifact_path="outputs/run-xgb/xgboost_model.json",
+                    artifact_source="xgboost_model",
+                    checkpoint_source="xgboost_model",
+                ),
             },
         ]
     )
@@ -570,6 +610,53 @@ def test_validate_accepts_written_nan_fairness_summary_metrics():
     warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
 
     assert not any("missing required fairness summary metrics" in warning for warning in warnings)
+
+
+def test_validate_warns_when_fairness_summary_metadata_is_missing_or_stale():
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-stale-fairness",
+        "_eval_checkpoint_source": "final",
+        "_output_dir": "outputs/run-stale-fairness",
+        **_fresh_fairness_metadata(
+            mod,
+            artifact_path="outputs/old-run/checkpoints/last.ckpt",
+        ),
+    }
+    _add_binary_fairness_summary(row, mod, value=0.0)
+
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+    joined = "\n".join(warnings)
+
+    assert "missing or stale fairness summary metadata" in joined
+    assert "artifact path mismatch" in joined
+    assert "run-stale-fairness" in joined
+
+
+def test_validate_accepts_fresh_fairness_summary_metadata():
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-fresh-fairness",
+        "_eval_checkpoint_source": "final",
+        "_output_dir": "outputs/run-fresh-fairness",
+        **_fresh_fairness_metadata(
+            mod,
+            artifact_path="outputs/run-fresh-fairness/checkpoints/last.ckpt",
+        ),
+    }
+    _add_binary_fairness_summary(row, mod, value=0.0)
+
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+
+    assert not warnings
 
 
 def test_validate_does_not_require_eicu_race_fairness():

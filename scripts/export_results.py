@@ -37,6 +37,23 @@ from pathlib import Path
 import pandas as pd
 import wandb
 from scipy import stats as scipy_stats
+from slices.eval.fairness_metadata import (
+    FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SOURCE_KEY,
+    FAIRNESS_CHECKPOINT_SOURCE_KEY,
+    FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
+    FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES,
+    FAIRNESS_METADATA_COLUMNS,
+    FAIRNESS_MIN_SUBGROUP_SIZE_KEY,
+    FAIRNESS_PROTECTED_ATTRIBUTES_KEY,
+    FAIRNESS_SCHEMA_VERSION_KEY,
+    FAIRNESS_SCRIPT_VERSION,
+    FAIRNESS_SCRIPT_VERSION_KEY,
+    FAIRNESS_SUMMARY_SCHEMA_VERSION,
+    canonical_artifact_id,
+    decode_protected_attributes,
+    normalize_protected_attributes,
+)
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
@@ -180,7 +197,7 @@ LOWER_IS_BETTER_METRICS = {
 }
 
 EVAL_PHASES = ["finetune", "supervised", "baseline"]
-FAIRNESS_ATTRIBUTES = ["gender", "age_group", "race"]
+FAIRNESS_ATTRIBUTES = FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES
 FAIRNESS_SUMMARY_KEY_COLUMN = "_fairness_summary_keys"
 BINARY_FAIRNESS_REQUIRED_METRICS = [
     "n_valid_groups",
@@ -489,12 +506,15 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "phase": phase,
         "upstream_pretrain_lr": up_lr,
         "upstream_pretrain_mask_ratio": up_mr,
+        "_output_dir": config.get("output_dir", None),
         "_eval_checkpoint_source": summary.get("_eval_checkpoint_source", None),
         "_best_ckpt_path": summary.get("_best_ckpt_path", None),
         "_best_ckpt_load_ok": summary.get("_best_ckpt_load_ok", None),
         "_best_ckpt_error": summary.get("_best_ckpt_error", None),
         FAIRNESS_SUMMARY_KEY_COLUMN: json.dumps(fairness_summary_keys),
     }
+    for key in FAIRNESS_METADATA_COLUMNS:
+        row[key] = summary.get(key, None)
     row.update(metrics)
     return row
 
@@ -1255,6 +1275,131 @@ def _fairness_completeness_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Se
     return issues
 
 
+def _expected_fairness_checkpoint_source_for_row(row: pd.Series) -> str | None:
+    """Return checkpoint provenance expected by fairness metadata for a row."""
+    if str(row.get("paradigm", "")).lower() == "xgboost":
+        return "xgboost_model"
+
+    source = row.get("_eval_checkpoint_source")
+    return str(source) if source in {"best", "final"} else None
+
+
+def _expected_fairness_artifact_source_for_row(row: pd.Series) -> str | None:
+    """Return evaluated artifact source expected by fairness metadata for a row."""
+    if str(row.get("paradigm", "")).lower() == "xgboost":
+        return "xgboost_model"
+
+    source = row.get("_eval_checkpoint_source")
+    if source == "best":
+        return "recorded_best"
+    if source == "final":
+        return "recorded_final"
+    return None
+
+
+def _expected_fairness_artifact_id_for_row(row: pd.Series) -> str | None:
+    """Return expected artifact identity when export metadata makes it knowable."""
+    output_dir = row.get("_output_dir")
+    paradigm = str(row.get("paradigm", "")).lower()
+
+    if paradigm == "xgboost":
+        if _is_missing_export_value(output_dir):
+            return None
+        return canonical_artifact_id(Path(str(output_dir)) / "xgboost_model.json")
+
+    source = row.get("_eval_checkpoint_source")
+    if source == "best":
+        best_path = row.get("_best_ckpt_path")
+        if _is_missing_export_value(best_path):
+            return None
+        return canonical_artifact_id(best_path)
+    if source == "final" and not _is_missing_export_value(output_dir):
+        return canonical_artifact_id(Path(str(output_dir)) / "checkpoints" / "last.ckpt")
+    return None
+
+
+def _coerce_int_metadata(value) -> int | None:
+    if _is_missing_export_value(value):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fairness_metadata_staleness_issues(
+    per_seed_df: pd.DataFrame,
+) -> list[tuple[pd.Series, list[str]]]:
+    """Find evaluation rows whose fairness summaries lack current provenance metadata."""
+    if per_seed_df.empty:
+        return []
+
+    issues = []
+    for _, row in per_seed_df.iterrows():
+        if row.get("phase") not in EVAL_PHASES:
+            continue
+        if _is_missing_export_value(row.get("task")):
+            continue
+
+        row_issues: list[str] = []
+        if row.get(FAIRNESS_SCHEMA_VERSION_KEY) != FAIRNESS_SUMMARY_SCHEMA_VERSION:
+            row_issues.append("missing or stale fairness schema version")
+        if row.get(FAIRNESS_SCRIPT_VERSION_KEY) != FAIRNESS_SCRIPT_VERSION:
+            row_issues.append("missing or stale fairness script version")
+
+        actual_attrs = decode_protected_attributes(row.get(FAIRNESS_PROTECTED_ATTRIBUTES_KEY))
+        expected_attrs = normalize_protected_attributes(FAIRNESS_ATTRIBUTES)
+        if actual_attrs != expected_attrs:
+            row_issues.append(
+                f"protected attributes mismatch: expected={expected_attrs}, actual={actual_attrs}"
+            )
+
+        actual_min_subgroup_size = _coerce_int_metadata(row.get(FAIRNESS_MIN_SUBGROUP_SIZE_KEY))
+        if actual_min_subgroup_size != FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE:
+            row_issues.append(
+                "min subgroup size mismatch: "
+                f"expected={FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE}, "
+                f"actual={actual_min_subgroup_size}"
+            )
+
+        expected_artifact_source = _expected_fairness_artifact_source_for_row(row)
+        actual_artifact_source = row.get(FAIRNESS_ARTIFACT_SOURCE_KEY)
+        if (
+            expected_artifact_source is not None
+            and actual_artifact_source != expected_artifact_source
+        ):
+            row_issues.append(
+                "artifact source mismatch: "
+                f"expected={expected_artifact_source}, actual={actual_artifact_source}"
+            )
+
+        expected_checkpoint_source = _expected_fairness_checkpoint_source_for_row(row)
+        actual_checkpoint_source = row.get(FAIRNESS_CHECKPOINT_SOURCE_KEY)
+        if (
+            expected_checkpoint_source is not None
+            and actual_checkpoint_source != expected_checkpoint_source
+        ):
+            row_issues.append(
+                "checkpoint source mismatch: "
+                f"expected={expected_checkpoint_source}, actual={actual_checkpoint_source}"
+            )
+
+        actual_artifact_id = canonical_artifact_id(row.get(FAIRNESS_ARTIFACT_PATH_KEY))
+        expected_artifact_id = _expected_fairness_artifact_id_for_row(row)
+        if not actual_artifact_id:
+            row_issues.append("missing fairness artifact path")
+        elif expected_artifact_id is not None and actual_artifact_id != expected_artifact_id:
+            row_issues.append(
+                "artifact path mismatch: "
+                f"expected={expected_artifact_id}, actual={actual_artifact_id}"
+            )
+
+        if row_issues:
+            issues.append((row, row_issues))
+
+    return issues
+
+
 def _mixed_revision_group_warnings(per_seed_df: pd.DataFrame) -> list[str]:
     """Warn when one aggregated scientific config draws seeds from multiple revisions."""
     if per_seed_df.empty or "revision" not in per_seed_df.columns:
@@ -1578,6 +1723,35 @@ def validate(
                     if col in row
                 )
                 + f" - missing={preview}"
+            )
+
+    fairness_metadata_issues = _fairness_metadata_staleness_issues(per_seed_df)
+    if fairness_metadata_issues:
+        warnings.append(
+            f"WARNING: {len(fairness_metadata_issues)} evaluation runs have missing or "
+            "stale fairness summary metadata. Re-run scripts/eval/evaluate_fairness.py "
+            "with the publication defaults before export; use --allow-incomplete only "
+            "for exploratory exports."
+        )
+        for row, row_issues in fairness_metadata_issues[:10]:
+            preview = "; ".join(row_issues[:6])
+            if len(row_issues) > 6:
+                preview += f"; ... {len(row_issues) - 6} more"
+            warnings.append(
+                "  "
+                + ", ".join(
+                    f"{col}={row.get(col)}"
+                    for col in [
+                        "wandb_run_id",
+                        "paradigm",
+                        "dataset",
+                        "task",
+                        "seed",
+                        "phase",
+                    ]
+                    if col in row
+                )
+                + f" - {preview}"
             )
 
     warnings.extend(_mixed_revision_group_warnings(per_seed_df))

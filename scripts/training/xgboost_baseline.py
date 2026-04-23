@@ -20,9 +20,13 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     brier_score_loss,
+    confusion_matrix,
+    f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_score,
     r2_score,
+    recall_score,
     roc_auc_score,
 )
 from slices.data.datamodule import ICUDataModule
@@ -80,6 +84,29 @@ def _binary_ece(y_true, y_pred_proba, n_bins: int = 15) -> float:
         accuracy = y_true[in_bin].mean()
         ece += bin_weight * abs(confidence - accuracy)
     return float(ece)
+
+
+def _binary_classification_metrics(
+    y_true,
+    y_pred_proba,
+    threshold: float = 0.5,
+) -> dict[str, float]:
+    """Compute binary publication metrics for XGBoost test predictions."""
+    y_pred_class = (np.asarray(y_pred_proba) >= threshold).astype(int)
+    tn, fp, _, _ = confusion_matrix(y_true, y_pred_class, labels=[0, 1]).ravel()
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+
+    return {
+        "test/auroc": roc_auc_score(y_true, y_pred_proba),
+        "test/auprc": average_precision_score(y_true, y_pred_proba),
+        "test/accuracy": accuracy_score(y_true, y_pred_class),
+        "test/f1": f1_score(y_true, y_pred_class, zero_division=0),
+        "test/precision": precision_score(y_true, y_pred_class, zero_division=0),
+        "test/recall": recall_score(y_true, y_pred_class, zero_division=0),
+        "test/specificity": specificity,
+        "test/brier_score": brier_score_loss(y_true, y_pred_proba),
+        "test/ece": _binary_ece(y_true, y_pred_proba),
+    }
 
 
 def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
@@ -295,13 +322,7 @@ def main(cfg: DictConfig) -> None:
         metrics["test/r2"] = r2_score(y_test, y_pred)
     else:
         y_pred_proba = model.predict_proba(X_test)[:, 1]
-        y_pred_class = (y_pred_proba >= 0.5).astype(int)
-
-        metrics["test/auroc"] = roc_auc_score(y_test, y_pred_proba)
-        metrics["test/auprc"] = average_precision_score(y_test, y_pred_proba)
-        metrics["test/accuracy"] = accuracy_score(y_test, y_pred_class)
-        metrics["test/brier_score"] = brier_score_loss(y_test, y_pred_proba)
-        metrics["test/ece"] = _binary_ece(y_test, y_pred_proba)
+        metrics.update(_binary_classification_metrics(y_test, y_pred_proba))
         if resolved_scale_pos_weight is not None:
             metrics["xgboost/scale_pos_weight"] = resolved_scale_pos_weight
 
