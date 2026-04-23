@@ -14,7 +14,7 @@ repos:
         args: [--line-length=100, --target-version=py312]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.4
+    rev: v0.14.8
     hooks:
       - id: ruff
         args: [--fix]

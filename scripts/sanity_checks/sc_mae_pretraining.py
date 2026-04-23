@@ -35,11 +35,12 @@ import polars as pl
 import torch
 import torch.nn as nn
 import yaml
+from torch.utils.data import DataLoader, TensorDataset
+
 from slices.data.transforms import create_ssl_mask
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective
 from slices.models.pretraining.mae import MAEConfig
-from torch.utils.data import DataLoader, TensorDataset
 
 SEED = 42
 

@@ -15,6 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective, get_ssl_config_class
 from slices.training.config_schemas import OptimizerConfig as OptimizerConfigSchema
+from slices.training.config_schemas import PretrainTrainingConfig as PretrainTrainingConfigSchema
 from slices.training.config_schemas import SchedulerConfig as SchedulerConfigSchema
 from slices.training.utils import build_optimizer, build_scheduler, save_encoder_checkpoint
 
@@ -77,6 +78,10 @@ class SSLPretrainModule(pl.LightningModule):
         self.ssl_objective = build_ssl_objective(self.encoder, ssl_config)
 
         # Validate and store config for optimizer
+        if config.get("training") is not None:
+            training_dict = OmegaConf.to_container(config.training, resolve=True)
+            PretrainTrainingConfigSchema(**training_dict)
+
         optimizer_dict = OmegaConf.to_container(config.optimizer, resolve=True)
         OptimizerConfigSchema(**optimizer_dict)
 

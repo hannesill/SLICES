@@ -234,6 +234,10 @@ class TransformerEncoder(BaseEncoder):
         else:
             self.final_norm = nn.Identity()
 
+    def handles_missingness_intrinsically(self) -> bool:
+        """Observation-aware transformers consume masks in the input projection."""
+        return self.config.obs_aware
+
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
         if self.config.d_model % self.config.n_heads != 0:

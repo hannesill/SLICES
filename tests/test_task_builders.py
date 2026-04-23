@@ -7,6 +7,7 @@ from datetime import date, datetime
 
 import polars as pl
 import pytest
+
 from slices.data.labels import LabelBuilderFactory, LabelConfig
 from slices.data.labels.mortality import MortalityLabelBuilder
 

@@ -21,6 +21,7 @@ import pytest
 import torch
 import yaml
 from omegaconf import OmegaConf
+
 from slices.constants import THESIS_TASKS
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.labels.aki import AKILabelBuilder
@@ -2559,8 +2560,9 @@ class TestExperimentRunnerWandbOverrides:
         assert "ablation:transfer" in captured["kwargs"]["tags"]
 
     def test_setup_wandb_logger_raises_clear_error_for_missing_entity(self, monkeypatch):
-        import slices.training.utils as training_utils
         import wandb
+
+        import slices.training.utils as training_utils
 
         class DummyWandbLogger:
             def __init__(self, **kwargs):
@@ -2687,11 +2689,11 @@ class TestExperimentRunnerWandbOverrides:
 
         cmd = probe.build_command({pretrain.id: pretrain, probe.id: probe})
 
-        assert "training.freeze_encoder=true" in cmd
-        assert "task.head_type=linear" in cmd
-        assert "task.hidden_dims=[]" in cmd
-        assert "task.dropout=0.0" in cmd
         assert "protocol=linear_probe" in cmd
+        assert "training.freeze_encoder=true" not in cmd
+        assert "task.head_type=linear" not in cmd
+        assert "task.hidden_dims=[]" not in cmd
+        assert "task.dropout=0.0" not in cmd
         assert "protocol=a" not in cmd
         assert "protocol=A" not in cmd
         assert "+protocol=A" not in cmd
@@ -2723,9 +2725,9 @@ class TestExperimentRunnerWandbOverrides:
 
         cmd = finetune.build_command({pretrain.id: pretrain, finetune.id: finetune})
 
-        assert "training.freeze_encoder=false" in cmd
-        assert "task.head_type=linear" not in cmd
         assert "protocol=full_finetune" in cmd
+        assert "training.freeze_encoder=false" not in cmd
+        assert "task.head_type=linear" not in cmd
         assert "protocol=b" not in cmd
         assert "protocol=B" not in cmd
         assert "+protocol=B" not in cmd

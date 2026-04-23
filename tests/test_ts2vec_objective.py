@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+
 from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.pretraining import TS2VecConfig, TS2VecObjective
 

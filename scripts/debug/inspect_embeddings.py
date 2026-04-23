@@ -26,6 +26,7 @@ import hydra
 import numpy as np
 import polars as pl
 from omegaconf import DictConfig
+
 from slices.debug import (
     EmbeddingQualityReport,
     analyze_embeddings,
@@ -89,6 +90,7 @@ def extract_embeddings_from_checkpoint(
         Tuple of (embeddings, stay_ids, labels).
     """
     import torch
+
     from slices.data.datamodule import ICUDataModule
     from slices.models.encoders import build_encoder
 

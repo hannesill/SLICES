@@ -9,6 +9,7 @@ import gzip
 import polars as pl
 import pytest
 import torch
+
 from slices.constants import SEQ_LENGTH_HOURS
 
 

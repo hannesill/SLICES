@@ -225,7 +225,7 @@ if [ "$SKIP_DEPS" = false ]; then
 
     # Python dependencies
     section "Installing Python dependencies"
-    uv sync --dev
+    uv sync --dev --frozen
 else
     info "Skipping dependency installation (--skip-deps)"
 fi

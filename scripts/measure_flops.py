@@ -13,77 +13,46 @@ Usage:
 
 import argparse
 import os
+from pathlib import Path
 from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
+from omegaconf import OmegaConf
+from torch.utils.flop_counter import FlopCounterMode
+
 from slices.constants import SEQ_LENGTH_HOURS
 from slices.models.encoders.factory import build_encoder
 from slices.models.pretraining.factory import build_ssl_objective, get_ssl_config_class
-from torch.utils.flop_counter import FlopCounterMode
 
 # ---------------------------------------------------------------------------
-# Paradigm configs — mirror the YAML defaults used in actual runs
+# Paradigm configs — loaded from the YAML defaults used in actual runs
 # ---------------------------------------------------------------------------
 
 DEFAULT_N_FEATURES = 84
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+PARADIGMS = ["mae", "jepa", "contrastive", "ts2vec"]
+
+
+def load_yaml_config(path: Path) -> dict:
+    """Load a Hydra YAML file as a plain dict without the config-group name."""
+    cfg = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+    if not isinstance(cfg, dict):
+        raise TypeError(f"Expected mapping in {path}")
+    cfg.pop("name", None)
+    return cfg
+
 
 ENCODER_CONFIG = {
+    **load_yaml_config(CONFIG_DIR / "model" / "transformer.yaml"),
     "d_input": DEFAULT_N_FEATURES,
-    "d_model": 64,
     "max_seq_length": SEQ_LENGTH_HOURS,
-    "n_layers": 2,
-    "n_heads": 4,
-    "d_ff": 256,
-    "dropout": 0.1,
-    "activation": "gelu",
-    "prenorm": True,
-    "layer_norm_eps": 1e-5,
-    "use_positional_encoding": True,
     "pooling": "none",  # Required for SSL pretraining
-    "obs_aware": True,  # All SSL paradigms use obs-aware tokenization
+    "obs_aware": True,  # All controlled SSL paradigms use obs-aware tokenization
 }
 
-# SSL configs — exact values from configs/ssl/*.yaml
 SSL_CONFIGS: Dict[str, dict] = {
-    "mae": {
-        "mask_ratio": 0.5,
-        "decoder_d_model": 64,
-        "decoder_n_layers": 2,
-        "decoder_n_heads": 4,
-        "decoder_d_ff": 256,
-        "decoder_dropout": 0.1,
-    },
-    "jepa": {
-        "mask_ratio": 0.5,
-        "mask_strategy": "block",
-        "mask_n_blocks": 3,
-        "predictor_d_model": 32,
-        "predictor_n_layers": 2,
-        "predictor_n_heads": 4,
-        "predictor_d_ff": 128,
-        "predictor_dropout": 0.1,
-        "momentum_base": 0.999,
-        "momentum_final": 1.0,
-        "loss_type": "mse",
-    },
-    "contrastive": {
-        "mode": "instance",
-        "mask_ratio": 0.5,
-        "proj_hidden_dim": 256,
-        "proj_output_dim": 64,
-        "temperature": 0.07,
-        "complementary_masks": True,
-    },
-    "ts2vec": {
-        "mask_ratio": 0.5,
-        "noise_scale": 0.01,
-        "crop_ratio": 1.0,
-        "proj_hidden_dim": 256,
-        "proj_output_dim": 64,
-        "temperature": 0.05,
-        "n_hierarchical_scales": 4,
-    },
+    name: load_yaml_config(CONFIG_DIR / "ssl" / f"{name}.yaml") for name in PARADIGMS
 }
 
 
@@ -243,8 +212,6 @@ def main():
             if not obs_mask[b, t].any():
                 obs_mask[b, t, 0] = True
 
-    paradigms = ["mae", "jepa", "contrastive", "ts2vec"]
-
     print(f"Input shape: ({B}, {T}, {D}), sparsity: {args.sparsity:.0%}")
     print(f"Avg observations per sample: {obs_mask.float().sum() / B:.0f} / {T * D}")
     print()
@@ -268,7 +235,7 @@ def main():
 
     # Measure each paradigm
     rows = []
-    for name in paradigms:
+    for name in PARADIGMS:
         objective = build_objective(name, encoder_config)
         trainable, total = count_parameters(objective)
 

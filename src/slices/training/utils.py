@@ -11,8 +11,8 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 
 import torch
 import torch.nn as nn
-import yaml
 import wandb
+import yaml
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -34,6 +34,7 @@ from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
 class WandbEntityNotFoundError(ValueError):
     """Raised when an explicit W&B entity does not exist."""
+
 
 # =============================================================================
 # Optimizer / Scheduler

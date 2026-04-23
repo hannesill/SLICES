@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_PATH_KEY,

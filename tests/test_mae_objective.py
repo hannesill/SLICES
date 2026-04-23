@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+
 from slices.data.transforms import (
     MaskingStrategy,
     apply_mask,

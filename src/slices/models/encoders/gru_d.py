@@ -66,6 +66,10 @@ class GRUDEncoder(BaseEncoder):
 
         self._reset_parameters()
 
+    def handles_missingness_intrinsically(self) -> bool:
+        """GRU-D models missingness via input and hidden-state decay."""
+        return True
+
     def _reset_parameters(self) -> None:
         nn.init.uniform_(self.W_gamma_x, -0.1, 0.1)
         nn.init.zeros_(self.b_gamma_x)

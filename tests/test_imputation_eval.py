@@ -15,8 +15,9 @@ import pytest
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
-from slices.eval.imputation import ImputationEvaluator
 from torch.utils.data import DataLoader
+
+from slices.eval.imputation import ImputationEvaluator
 
 
 class SimpleEncoder(nn.Module):
@@ -525,6 +526,7 @@ class TestEvaluateImputationScript:
         dummy_evaluator = DummyEvaluator()
 
         monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "validate_data_prerequisites", lambda *args, **kwargs: None)
         monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
         monkeypatch.setattr(module, "DataLoader", lambda dataset, **kwargs: "train_stats_loader")
         monkeypatch.setattr(module, "Subset", lambda dataset, indices: dataset)
@@ -536,6 +538,7 @@ class TestEvaluateImputationScript:
 
         cfg = OmegaConf.create(
             {
+                "dataset": "miiv",
                 "seed": 42,
                 "data": {
                     "processed_dir": "data/processed/miiv",

@@ -27,9 +27,11 @@ import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader, Subset
+
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.eval.imputation import ImputationEvaluator
-from torch.utils.data import DataLoader, Subset
+from slices.training.utils import validate_data_prerequisites
 
 
 @hydra.main(
@@ -49,6 +51,8 @@ def main(cfg: DictConfig) -> None:
 
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
+
+    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
 
     # Set random seed
     pl.seed_everything(cfg.seed, workers=True)

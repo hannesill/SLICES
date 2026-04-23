@@ -9,10 +9,12 @@ Tests cover:
 import pytest
 import yaml
 from pydantic import ValidationError
+
 from slices.constants import THESIS_TASKS
 from slices.data.config_schemas import DataConfig
 from slices.training.config_schemas import (
     OptimizerConfig,
+    PretrainTrainingConfig,
     SchedulerConfig,
     TaskConfig,
     TrainingConfig,
@@ -133,6 +135,24 @@ class TestDataConfigValidation:
                 test_ratio=0.3,
             )
 
+    def test_known_hydra_data_fields_pass(self):
+        cfg = DataConfig(
+            processed_dir="data/processed/miiv",
+            ricu_output_dir="data/ricu_output/miiv",
+            enable_sliding_windows=True,
+            window_size=24,
+            window_stride=12,
+        )
+
+        assert cfg.ricu_output_dir == "data/ricu_output/miiv"
+        assert cfg.enable_sliding_windows is True
+        assert cfg.window_size == 24
+        assert cfg.window_stride == 12
+
+    def test_unknown_data_key_rejected(self):
+        with pytest.raises(ValidationError, match="procesed_dir"):
+            DataConfig(processed_dir="data/processed/miiv", procesed_dir="typo")
+
 
 class TestTrainingConfigValidation:
     """Tests that TrainingConfig catches invalid/misspelled keys."""
@@ -179,6 +199,20 @@ class TestTrainingConfigValidation:
         """allow_best_ckpt_fallback should be accepted as a validated training flag."""
         cfg = TrainingConfig(allow_best_ckpt_fallback=True)
         assert cfg.allow_best_ckpt_fallback is True
+
+
+class TestPretrainTrainingConfigValidation:
+    """Tests that pretraining config typos are rejected."""
+
+    def test_valid_config_passes(self):
+        cfg = PretrainTrainingConfig(max_epochs=100, batch_size=256)
+
+        assert cfg.max_epochs == 100
+        assert cfg.batch_size == 256
+
+    def test_extra_key_rejected(self):
+        with pytest.raises(ValidationError, match="max_epoch"):
+            PretrainTrainingConfig(max_epoch=100)
 
 
 class TestOptimizerConfigValidation:

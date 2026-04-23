@@ -19,9 +19,10 @@ import polars as pl
 import torch
 import torch.nn as nn
 import yaml
+from torch.utils.data import DataLoader, TensorDataset
+
 from slices.models.encoders import build_encoder
 from slices.models.heads import TaskHeadConfig, build_task_head
-from torch.utils.data import DataLoader, TensorDataset
 
 SEED = 42
 

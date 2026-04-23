@@ -12,6 +12,7 @@ Tests cover:
 
 import pytest
 import torch
+
 from slices.models.encoders.smart import SMARTEncoder, SMARTEncoderConfig
 from slices.models.encoders.transformer import TransformerConfig, TransformerEncoder
 from slices.models.pretraining.factory import (

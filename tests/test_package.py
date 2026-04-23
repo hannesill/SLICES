@@ -76,14 +76,16 @@ class TestPackageStructure:
     def test_datamodule_inherits_lightning(self) -> None:
         """Test that ICUDataModule inherits from LightningDataModule."""
         import lightning.pytorch as L
+
         from slices.data.datamodule import ICUDataModule
 
         assert issubclass(ICUDataModule, L.LightningDataModule)
 
     def test_dataset_inherits_torch_dataset(self) -> None:
         """Test that ICUDataset inherits from torch Dataset."""
-        from slices.data.dataset import ICUDataset
         from torch.utils.data import Dataset
+
+        from slices.data.dataset import ICUDataset
 
         assert issubclass(ICUDataset, Dataset)
 

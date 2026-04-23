@@ -163,11 +163,12 @@ contrastive SSL under the shared RICU pipeline, canonical obs-aware
 metadata. TS2Vec is a temporal-contrastive extension, and SMART is an external
 reference because it changes the encoder/tokenization contract.
 
-For thesis-scale reruns, use the class-based launcher with an explicit
-`--revision`, `--project`, and `--launch-commit`. Downstream SSL runs consume
-`encoder.pt`, the last encoder from the fixed pretraining schedule, not
-`encoder_best_val.pt`; downstream task evaluation still records the exact
-finetune checkpoint used for test metrics and post-hoc fairness.
+For thesis-scale reruns, use `scripts/internal/run_experiments.py` or
+`scripts/internal/launch_thesis_tmux.sh` with an explicit `--revision`,
+`--project`, and `--launch-commit`. Downstream SSL runs consume `encoder.pt`,
+the last encoder from the fixed pretraining schedule, not `encoder_best_val.pt`;
+downstream task evaluation still records the exact finetune checkpoint used for
+test metrics and post-hoc fairness.
 
 Final publication export expects post-hoc fairness metrics to be written first
 with `scripts/eval/evaluate_fairness.py`. The export emits per-seed rows,
@@ -248,9 +249,11 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfi
 | Group | Options | Purpose |
 |---|---|---|
 | `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` | SSL objective hyperparameters |
-| `model/` | `transformer`, `observation_transformer`, `smart` | Encoder architecture |
+| `model/` | `transformer`, `transformer_medium`, `transformer_large`, `observation_transformer`, `smart`, `gru_d`, `linear` | Encoder architecture |
 | `data/` | `ricu` | Dataset and paths |
 | `tasks/` | `mortality`, `mortality_24h`, `mortality_hospital`, `los_remaining`, `aki_kdigo` | Downstream task definitions |
+| `protocol/` | `linear_probe`, `full_finetune` | Downstream evaluation protocol overrides |
+| `eval/` | `default` | Evaluation metric defaults |
 
 ## Data Format
 
@@ -302,7 +305,8 @@ The framework uses factory patterns throughout, making it straightforward to add
 - `src/slices/models/encoders/factory.py` and `configs/model/`
 - `src/slices/models/pretraining/factory.py` and `configs/ssl/`
 - `src/slices/models/heads/factory.py`
-- `src/slices/data/tasks/` for task definitions
+- `src/slices/data/tasks/` for package label semantics used during extraction
+- `configs/tasks/` for Hydra task configs used during training/evaluation
 
 ## References
 

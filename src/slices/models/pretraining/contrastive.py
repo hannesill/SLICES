@@ -37,7 +37,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base import BaseSSLObjective, SSLConfig
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import (
     create_complementary_timestep_masks,
     create_timestep_mask,
@@ -128,22 +128,7 @@ class ContrastiveObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: ContrastiveConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "Contrastive requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "Contrastive requires encoder with pooling='none' to get "
-                "per-token representations for mean-pooling, but got "
-                f"pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "Contrastive")
 
         d_encoder = encoder.get_output_dim()
 

@@ -29,6 +29,8 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from xgboost import XGBClassifier, XGBRegressor
+
 from slices.constants import canonical_downstream_protocol
 from slices.data.datamodule import ICUDataModule
 from slices.eval.fairness_metadata import (
@@ -37,7 +39,6 @@ from slices.eval.fairness_metadata import (
     file_sha256,
 )
 from slices.eval.inference import extract_tabular_features
-from xgboost import XGBClassifier, XGBRegressor
 
 
 def _xgboost_eval_metric(task_type: str) -> str:

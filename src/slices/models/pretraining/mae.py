@@ -19,7 +19,7 @@ import torch.nn as nn
 
 from slices.models.common import build_sinusoidal_pe
 
-from .base import BaseSSLObjective, SSLConfig
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import create_timestep_mask, extract_visible_timesteps, scatter_visible_timesteps
 
 
@@ -177,21 +177,7 @@ class MAEObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: MAEConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "MAE requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "MAE requires encoder with pooling='none' to get per-token "
-                f"representations, but got pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "MAE")
 
         d_encoder = encoder.get_output_dim()
         n_features = encoder.config.d_input

@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 import torch
 import torch.nn as nn
@@ -61,3 +61,39 @@ class BaseEncoder(ABC, nn.Module):
             Output dimension (typically d_model).
         """
         return self.config.d_model
+
+    def handles_missingness_intrinsically(self) -> bool:
+        """Return whether the encoder consumes observation masks natively.
+
+        Downstream checkpoint loading uses this capability to decide whether an
+        encoder still needs EncoderWithMissingToken wrapping.
+        """
+        return False
+
+
+class SSLTokenizingEncoder(Protocol):
+    """Protocol for encoders that expose the SSL timestep-token interface.
+
+    Controlled SSL objectives operate on timestep tokens directly. Keeping this
+    as a protocol makes the required encoder capability explicit without forcing
+    every baseline encoder to inherit a second abstract base class.
+    """
+
+    config: EncoderConfig
+
+    def tokenize(
+        self,
+        x: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
+        """Convert dense values and observation masks into timestep tokens."""
+
+    def encode(
+        self,
+        tokens: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Encode prebuilt timestep tokens."""
+
+    def get_output_dim(self) -> int:
+        """Return the encoder output dimension."""

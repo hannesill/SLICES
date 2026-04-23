@@ -8,7 +8,7 @@
 #               brier_score, ece (expected calibration error)
 #   multiclass: auroc, auprc, accuracy, f1, precision, recall
 #   multilabel: auroc, auprc, accuracy, f1
-#   regression: (not yet implemented)
+#   regression: mse, mae, r2
 #
 # Clinical metrics explanation:
 #   - auroc: Area under ROC curve (discrimination)
