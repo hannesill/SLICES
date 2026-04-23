@@ -222,7 +222,7 @@ def main(cfg: DictConfig) -> None:
         wandb_module, wandb_run = _init_wandb_run(cfg, task_name)
     except WandbEntityNotFoundError as exc:
         print(f"\nError: {exc}")
-        return
+        raise SystemExit(1) from exc
 
     # Validate data prerequisites including label freshness
     validate_data_prerequisites(

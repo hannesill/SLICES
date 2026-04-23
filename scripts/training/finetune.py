@@ -42,6 +42,7 @@ from slices.eval.fairness_metadata import (
 )
 from slices.training import FineTuneModule
 from slices.training.utils import (
+    WandbEntityNotFoundError,
     report_and_validate_train_label_support,
     resolve_balanced_class_weights,
     run_fairness_evaluation,
@@ -49,7 +50,6 @@ from slices.training.utils import (
     setup_wandb_logger,
     train_label_support_summary,
     validate_data_prerequisites,
-    WandbEntityNotFoundError,
 )
 
 
@@ -294,7 +294,7 @@ def main(cfg: DictConfig) -> None:
         logger = setup_wandb_logger(cfg)
     except WandbEntityNotFoundError as exc:
         print(f"\nError: {exc}")
-        return
+        raise SystemExit(1) from exc
     if logger:
         logger.experiment.summary.update(train_label_support_summary(train_support_stats))
 

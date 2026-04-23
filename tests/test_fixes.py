@@ -1045,6 +1045,7 @@ class TestFairnessRevisionScoping:
         assert "--entity test-entity" in runner_text
         assert "--force" in runner_text
         assert "uv sync --dev --locked" in runner_text
+        assert "export SLICES_SKIP_LAUNCH_GIT_CHECK=1" in runner_text
 
     def test_auto_shutdown_counts_fairness_and_export_processes(self):
         """Fairness and export jobs should keep final-run VMs alive."""
@@ -2236,6 +2237,41 @@ class TestExperimentRunnerWandbOverrides:
 
         assert excinfo.value.code == 2
 
+    def test_main_run_skip_git_check_accepts_unchecked_launch_commit(
+        self,
+        monkeypatch,
+        capsys,
+    ):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.setenv("SLICES_SKIP_LAUNCH_GIT_CHECK", "1")
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "thesis-v1",
+                "--project",
+                "slices-thesis",
+                "--entity",
+                "hannes-ill",
+                "--launch-commit",
+                "unchecked",
+            ],
+        )
+        monkeypatch.setattr(runner, "cmd_run", lambda args: 0)
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 0
+        assert "skipping final launch git provenance validation" in capsys.readouterr().err
+
     def test_cmd_run_respects_requested_class_order(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
@@ -2434,9 +2470,8 @@ class TestExperimentRunnerWandbOverrides:
         assert "ablation:transfer" in captured["kwargs"]["tags"]
 
     def test_setup_wandb_logger_raises_clear_error_for_missing_entity(self, monkeypatch):
-        import wandb
-
         import slices.training.utils as training_utils
+        import wandb
 
         class DummyWandbLogger:
             def __init__(self, **kwargs):
@@ -2445,7 +2480,9 @@ class TestExperimentRunnerWandbOverrides:
             @property
             def experiment(self):
                 if self._entity == "missing-team":
-                    raise wandb.errors.CommError("entity missing-team not found during upsertBucket")
+                    raise wandb.errors.CommError(
+                        "entity missing-team not found during upsertBucket"
+                    )
                 raise AssertionError("unexpected entity")
 
         monkeypatch.setattr(training_utils, "WandbLogger", DummyWandbLogger)
@@ -2465,8 +2502,45 @@ class TestExperimentRunnerWandbOverrides:
             }
         )
 
-        with pytest.raises(training_utils.WandbEntityNotFoundError, match="W&B entity 'missing-team' could not be found"):
+        with pytest.raises(
+            training_utils.WandbEntityNotFoundError,
+            match="W&B entity 'missing-team' could not be found",
+        ):
             training_utils.setup_wandb_logger(cfg)
+
+    def test_training_entrypoints_exit_nonzero_on_wandb_entity_error(self):
+        import ast
+
+        scripts = [
+            Path("scripts/training/pretrain.py"),
+            Path("scripts/training/finetune.py"),
+            Path("scripts/training/supervised.py"),
+            Path("scripts/training/xgboost_baseline.py"),
+        ]
+
+        for script in scripts:
+            tree = ast.parse(script.read_text())
+            handlers = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ExceptHandler)
+                and isinstance(node.type, ast.Name)
+                and node.type.id == "WandbEntityNotFoundError"
+            ]
+            assert handlers, f"{script} does not catch WandbEntityNotFoundError"
+
+            for handler in handlers:
+                assert not any(isinstance(node, ast.Return) for node in ast.walk(handler))
+                assert any(
+                    isinstance(node, ast.Raise)
+                    and isinstance(node.exc, ast.Call)
+                    and isinstance(node.exc.func, ast.Name)
+                    and node.exc.func.id == "SystemExit"
+                    and len(node.exc.args) == 1
+                    and isinstance(node.exc.args[0], ast.Constant)
+                    and node.exc.args[0].value == 1
+                    for node in ast.walk(handler)
+                ), f"{script} must exit nonzero on W&B entity errors"
 
     def test_transfer_finetune_command_propagates_source_dataset(self):
         from scripts.internal.run_experiments import Run
