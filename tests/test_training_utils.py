@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import yaml
 from omegaconf import OmegaConf
+
 from slices.data.labels import LabelBuilder, LabelConfig
 from slices.training import FineTuneModule
 from slices.training.utils import (

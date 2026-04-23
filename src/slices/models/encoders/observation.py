@@ -97,6 +97,10 @@ class ObservationTransformerEncoder(BaseEncoder):
         else:
             self.final_norm = nn.Identity()
 
+    def handles_missingness_intrinsically(self) -> bool:
+        """Observation tokenization only materializes observed measurements."""
+        return True
+
     def _validate_config(self) -> None:
         if self.config.d_model % self.config.n_heads != 0:
             raise ValueError(

@@ -36,7 +36,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base import BaseSSLObjective, SSLConfig
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import create_timestep_mask, extract_visible_timesteps, scatter_visible_timesteps
 
 
@@ -110,17 +110,7 @@ class TS2VecObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: TS2VecConfig = config
 
-        # Validate encoder
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "TS2Vec requires an encoder with obs_aware=True. " f"Got: {type(encoder).__name__}"
-            )
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "TS2Vec requires encoder with pooling='none' for per-token "
-                f"representations, but got pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "TS2Vec")
 
         d_encoder = encoder.get_output_dim()
         self.missing_token = None

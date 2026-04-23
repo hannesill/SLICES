@@ -11,6 +11,8 @@ Tests cover:
 import numpy as np
 import pytest
 import torch
+from torchmetrics import MetricCollection
+
 from slices.eval.metrics import (
     AVAILABLE_METRICS,
     DEFAULT_METRICS,
@@ -19,7 +21,6 @@ from slices.eval.metrics import (
     build_metrics,
     get_default_metrics,
 )
-from torchmetrics import MetricCollection
 
 
 class TestMetricConfig:

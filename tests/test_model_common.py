@@ -11,6 +11,7 @@ Tests cover:
 import pytest
 import torch
 import torch.nn as nn
+
 from slices.models.common import PositionalEncoding, apply_pooling, get_activation
 from slices.models.encoders import (
     LinearConfig,

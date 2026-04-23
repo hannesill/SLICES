@@ -433,6 +433,10 @@ class SMARTEncoder(BaseEncoder):
             ]
         )
 
+    def handles_missingness_intrinsically(self) -> bool:
+        """SMART embeds value and mask pairs jointly at the input layer."""
+        return True
+
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
         if self.config.d_model % self.config.n_heads != 0:

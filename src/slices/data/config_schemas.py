@@ -181,6 +181,7 @@ class DataConfig(BaseModel):
     # Data Paths
     # ==========================================================================
     csv_root: Optional[str] = None  # Raw CSV path (only for convert_csv_to_parquet)
+    ricu_output_dir: Optional[str] = None  # RICU parquet output path
     parquet_root: Optional[str] = None  # Parquet files (input for extraction)
     processed_dir: str  # Extracted features (output of extraction, input for training)
 
@@ -211,7 +212,12 @@ class DataConfig(BaseModel):
     # Preprocessing applied during training
     normalize: bool = NORMALIZE
 
-    model_config = {"extra": "allow"}  # Allow additional fields from Hydra
+    # Optional pretraining windowing controls
+    enable_sliding_windows: bool = False
+    window_size: Optional[int] = None
+    window_stride: Optional[int] = None
+
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_split_ratios(self) -> "DataConfig":
@@ -234,5 +240,13 @@ class DataConfig(BaseModel):
     def validate_positive_int(cls, v: int) -> int:
         """Validate that value is positive."""
         if v <= 0:
+            raise ValueError("Value must be positive")
+        return v
+
+    @field_validator("window_size", "window_stride")
+    @classmethod
+    def validate_optional_positive_int(cls, v: Optional[int]) -> Optional[int]:
+        """Validate optional window dimensions when configured."""
+        if v is not None and v <= 0:
             raise ValueError("Value must be positive")
         return v

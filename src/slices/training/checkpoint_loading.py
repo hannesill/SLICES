@@ -14,14 +14,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from slices.models.encoders import (
-    EncoderWithMissingToken,
-    GRUDEncoder,
-    ObservationTransformerEncoder,
-    SMARTEncoder,
-    TransformerEncoder,
-    build_encoder,
-)
+from slices.models.encoders.factory import build_encoder
+from slices.models.encoders.wrapper import EncoderWithMissingToken
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +71,12 @@ def wrap_encoder_with_missing_token(
     Returns:
         The encoder, possibly wrapped with EncoderWithMissingToken.
     """
-    # Skip for encoders that handle missingness intrinsically
-    if isinstance(encoder, (ObservationTransformerEncoder, SMARTEncoder, GRUDEncoder)):
+    handles_missingness = getattr(encoder, "handles_missingness_intrinsically", None)
+    if callable(handles_missingness) and handles_missingness():
         logger.info(
             "Skipping EncoderWithMissingToken wrapper for %s "
             "(handles missingness intrinsically)",
             type(encoder).__name__,
-        )
-        return encoder
-
-    if isinstance(encoder, TransformerEncoder) and getattr(encoder.config, "obs_aware", False):
-        logger.info(
-            "Skipping EncoderWithMissingToken wrapper for obs_aware "
-            "TransformerEncoder (forward() handles mask via obs_proj)"
         )
         return encoder
 

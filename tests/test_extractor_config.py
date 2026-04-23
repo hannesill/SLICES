@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+
 from slices.constants import THESIS_TASKS
 from slices.data.extractors.base import ExtractorConfig
 

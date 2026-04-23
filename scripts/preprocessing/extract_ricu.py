@@ -21,6 +21,7 @@ from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
+
 from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 from slices.data.extractors.base import ExtractorConfig
 from slices.data.extractors.ricu import RicuExtractor

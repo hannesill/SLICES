@@ -8,6 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 from pydantic import ValidationError
+
 from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.heads import (
     LinearTaskHead,
@@ -690,6 +691,7 @@ class TestIntrinsicMissingnessEncodersNotWrapped:
 
         # Encoder should be ObservationTransformerEncoder directly, not wrapped
         assert isinstance(module.encoder, ObservationTransformerEncoder)
+        assert module.encoder.handles_missingness_intrinsically()
 
     def test_smart_encoder_not_wrapped(self):
         """SMARTEncoder should not be wrapped (handles missingness via MLPEmbedder)."""
@@ -733,6 +735,7 @@ class TestIntrinsicMissingnessEncodersNotWrapped:
 
         # SMART encoder should NOT be wrapped
         assert isinstance(module.encoder, SMARTEncoder)
+        assert module.encoder.handles_missingness_intrinsically()
 
 
 class TestFineTuneModuleGradualUnfreeze:

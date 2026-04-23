@@ -12,6 +12,7 @@ Tests cover:
 import pytest
 import torch
 from omegaconf import OmegaConf
+
 from slices.training.pretrain_module import SSLPretrainModule
 
 
@@ -517,6 +518,14 @@ class TestPretrainModuleConfigValidation:
         cfg = OmegaConf.to_container(minimal_config, resolve=True)
         cfg["scheduler"] = {"name": "cosine", "t_max": 100}
         with pytest.raises(ValidationError, match="t_max"):
+            SSLPretrainModule(OmegaConf.create(cfg))
+
+    def test_typo_in_training_config_rejected(self, minimal_config):
+        from pydantic import ValidationError
+
+        cfg = OmegaConf.to_container(minimal_config, resolve=True)
+        cfg["training"] = {"max_epoch": 100}
+        with pytest.raises(ValidationError, match="max_epoch"):
             SSLPretrainModule(OmegaConf.create(cfg))
 
     def test_no_scheduler_passes(self, minimal_config):

@@ -8,6 +8,7 @@ import numpy as np
 import polars as pl
 import pytest
 import yaml
+
 from slices.data.extractors.base import BaseExtractor, ExtractorConfig
 
 

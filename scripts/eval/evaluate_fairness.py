@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
+
 from slices.constants import (
     FULL_FINETUNE_PROTOCOL,
     canonical_downstream_protocol,
@@ -878,6 +879,7 @@ def build_datamodule(
 def build_model(wandb_config: dict, checkpoint_path: Path, datamodule):
     """Build FineTuneModule from W&B config and load checkpoint weights."""
     from omegaconf import OmegaConf
+
     from slices.training import FineTuneModule
 
     cfg = OmegaConf.create(wandb_config)

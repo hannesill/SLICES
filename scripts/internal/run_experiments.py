@@ -124,15 +124,6 @@ LOG_DIR = Path("logs/runner")
 LAUNCH_IDENTITY_FILE = ".runner_launch_identity.json"
 LAUNCH_IDENTITY_KEYS = ("revision", "wandb_project", "wandb_entity", "launch_commit")
 
-LINEAR_PROBE_SETTINGS = {"freeze_encoder": True, "max_epochs": 50, "patience": 10, "lr": 1e-4}
-FULL_FINETUNE_SETTINGS = {
-    "freeze_encoder": False,
-    "max_epochs": 100,
-    "patience": 10,
-    "lr": 3e-4,
-}
-
-
 # ---------------------------------------------------------------------------
 # Data Model
 # ---------------------------------------------------------------------------
@@ -253,27 +244,6 @@ class Run:
             f"hydra.run.dir={self.output_dir}",
         ]
         self._append_resume(cmd)
-        if self.freeze_encoder is True:
-            cmd.extend(
-                [
-                    "training.freeze_encoder=true",
-                    f"training.max_epochs={LINEAR_PROBE_SETTINGS['max_epochs']}",
-                    f"training.early_stopping_patience={LINEAR_PROBE_SETTINGS['patience']}",
-                    f"optimizer.lr={LINEAR_PROBE_SETTINGS['lr']}",
-                    "task.head_type=linear",
-                    "task.hidden_dims=[]",
-                    "task.dropout=0.0",
-                ]
-            )
-        elif self.freeze_encoder is False:
-            cmd.extend(
-                [
-                    "training.freeze_encoder=false",
-                    f"training.max_epochs={FULL_FINETUNE_SETTINGS['max_epochs']}",
-                    f"training.early_stopping_patience={FULL_FINETUNE_SETTINGS['patience']}",
-                    f"optimizer.lr={FULL_FINETUNE_SETTINGS['lr']}",
-                ]
-            )
         if self.label_fraction < 1.0:
             cmd.append(f"label_fraction={self.label_fraction}")
         if self.source_dataset is not None:

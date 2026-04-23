@@ -131,8 +131,4 @@ Relevant test coverage lives in:
 - `tests/test_smart_encoder.py`
 - `tests/test_factories.py`
 
-Example script:
-
-```bash
-uv run python examples/transformer_encoder_example.py
-```
+Small executable examples live in the focused encoder tests above.

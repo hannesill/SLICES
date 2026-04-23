@@ -102,6 +102,22 @@ class TrainingConfig(BaseModel):
     allow_best_ckpt_fallback: bool = False
 
 
+class PretrainTrainingConfig(BaseModel):
+    """Validated training configuration for SSL pretraining."""
+
+    model_config = {"extra": "forbid"}
+
+    max_epochs: int = 100
+    batch_size: int = 256
+    accelerator: str = "auto"
+    devices: Any = "auto"
+    precision: Any = 32
+    gradient_clip_val: Optional[float] = 1.0
+    accumulate_grad_batches: int = 1
+    early_stopping_patience: Optional[int] = None
+    overfit_batches: Union[int, float] = 0
+
+
 class OptimizerConfig(BaseModel):
     """Validated optimizer configuration."""
 

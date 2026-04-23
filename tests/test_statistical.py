@@ -10,6 +10,8 @@ Tests cover:
 import pandas as pd
 import pytest
 import torch
+from torchmetrics import AUROC
+
 from slices.eval.statistical import (
     bonferroni_correction,
     bootstrap_ci,
@@ -17,7 +19,6 @@ from slices.eval.statistical import (
     paired_bootstrap_test,
     paired_wilcoxon_signed_rank,
 )
-from torchmetrics import AUROC
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

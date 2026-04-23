@@ -1,6 +1,7 @@
 """Tests for shared inference utilities."""
 
 import torch
+
 from slices.eval.inference import run_inference
 
 

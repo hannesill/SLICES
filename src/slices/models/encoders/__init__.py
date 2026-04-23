@@ -1,6 +1,6 @@
 """Encoder architectures for time-series data."""
 
-from .base import BaseEncoder, EncoderConfig
+from .base import BaseEncoder, EncoderConfig, SSLTokenizingEncoder
 from .factory import build_encoder, get_encoder_config_class
 from .gru_d import GRUDConfig, GRUDEncoder
 from .linear import LinearConfig, LinearEncoder
@@ -21,6 +21,7 @@ __all__ = [
     "ObservationTransformerEncoder",
     "SMARTEncoder",
     "SMARTEncoderConfig",
+    "SSLTokenizingEncoder",
     "TransformerConfig",
     "TransformerEncoder",
     "build_encoder",

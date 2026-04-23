@@ -6,6 +6,7 @@ Tests embedding quality analysis, collapse detection, and dimensionality metrics
 import numpy as np
 import pytest
 import torch
+
 from slices.debug.embeddings import (
     CollapseMetrics,
     DimensionalityMetrics,

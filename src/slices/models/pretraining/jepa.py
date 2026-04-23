@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 from slices.models.common import build_sinusoidal_pe
 
-from .base import BaseSSLObjective, SSLConfig
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import (
     create_block_timestep_mask,
     create_timestep_mask,
@@ -184,21 +184,7 @@ class JEPAObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: JEPAConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "JEPA requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "JEPA requires encoder with pooling='none' to get per-token "
-                f"representations, but got pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "JEPA")
 
         d_encoder = encoder.get_output_dim()
         self.d_encoder = d_encoder

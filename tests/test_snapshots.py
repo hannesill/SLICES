@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import polars as pl
+
 from slices.debug.snapshots import (
     LegacyPipelineStage,
     capture_dense_snapshot,

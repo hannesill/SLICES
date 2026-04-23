@@ -3,6 +3,7 @@
 import math
 
 import torch
+
 from slices.models.encoders.gru_d import GRUDConfig, GRUDEncoder
 
 

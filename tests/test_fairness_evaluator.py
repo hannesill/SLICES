@@ -13,6 +13,7 @@ Tests cover:
 import polars as pl
 import pytest
 import torch
+
 from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
 
 

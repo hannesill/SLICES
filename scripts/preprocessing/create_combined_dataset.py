@@ -23,6 +23,7 @@ from pathlib import Path
 
 import polars as pl
 import yaml
+
 from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS, THESIS_TASKS
 from slices.data.preparation import prepare_processed_dataset
 
