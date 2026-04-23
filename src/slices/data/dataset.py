@@ -552,8 +552,10 @@ class ICUDataset(Dataset):
             self._labels_tensor = None
             indices_to_keep = list(range(len(self.stay_ids)))
 
-        # Pre-compute static features using vectorized Polars operations
-        logger.debug("Extracting static features")
+        # Pre-compute safe static features for batch payloads. Future-derived
+        # fields such as los_days stay available on static_df for cohort/fairness
+        # analysis but are intentionally not exposed to model-facing batches.
+        logger.debug("Extracting safe static features")
         self._static_data = []
         for stay_id in self.stay_ids:
             static_row = static_by_stay.get(stay_id, {})
@@ -561,7 +563,6 @@ class ICUDataset(Dataset):
                 {
                     "age": static_row.get("age"),
                     "gender": static_row.get("gender"),
-                    "los_days": static_row.get("los_days"),
                 }
             )
         logger.info(f"Pre-computed {len(self._static_data):,} static feature records")

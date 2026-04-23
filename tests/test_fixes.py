@@ -1152,6 +1152,48 @@ class TestFairnessRevisionScoping:
         assert "classical_baselines" in runner_text
         assert "core_ssl_benchmark" in runner_text
 
+    def test_tmux_launcher_rejects_partial_final_corpus(self, tmp_path):
+        """Final thesis launch should fail closed when INCLUDE_* drops planned runs."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            repo_root / "scripts" / "internal" / "launch_thesis_tmux.sh",
+            temp_repo / "scripts" / "internal",
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux_script = bin_dir / "tmux"
+        tmux_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "has-session" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        tmux_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["WANDB_ENTITY"] = "test-entity"
+        env["RUN_EXPORT"] = "0"
+        env["SKIP_LAUNCH_GIT_CHECK"] = "1"
+        env["VALIDATE_PROCESSED_ARTIFACTS"] = "0"
+        env["PURGE_RUNTIME_CACHES"] = "0"
+        env["INCLUDE_CAPACITY_STUDY"] = "0"
+
+        result = subprocess.run(
+            ["bash", "scripts/internal/launch_thesis_tmux.sh"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "Final corpus preflight failed: selected 2490 runs, expected 2590" in result.stderr
+
     def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
         """The status pane should use uv-managed Python."""
         repo_root = Path(__file__).resolve().parents[1]
@@ -2182,6 +2224,53 @@ class TestExperimentRunnerWandbOverrides:
             runner.main()
 
         assert excinfo.value.code == 2
+
+    def test_main_run_resolves_symbolic_launch_commit_before_execution(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        resolved_commit = "a" * 40
+        captured = {}
+
+        def fake_git_stdout(args):
+            if args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                return resolved_commit
+            if args == ["rev-parse", "--verify", "HEAD"]:
+                return resolved_commit
+            raise AssertionError(f"unexpected git command: {args}")
+
+        def fake_cmd_run(args):
+            captured["launch_commit"] = args.launch_commit
+            return 0
+
+        monkeypatch.delenv("WANDB_MODE", raising=False)
+        monkeypatch.delenv("SLICES_SKIP_LAUNCH_GIT_CHECK", raising=False)
+        monkeypatch.setattr(runner, "_git_stdout", fake_git_stdout)
+        monkeypatch.setattr(runner, "_git_quiet", lambda args: True)
+        monkeypatch.setattr(runner, "cmd_run", fake_cmd_run)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "thesis-v1",
+                "--project",
+                "slices-thesis",
+                "--entity",
+                "hannes-ill",
+                "--launch-commit",
+                "HEAD",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 0
+        assert captured["launch_commit"] == resolved_commit
 
     def test_main_run_requires_wandb_entity_for_final_launch(self, monkeypatch):
         import scripts.internal.run_experiments as runner

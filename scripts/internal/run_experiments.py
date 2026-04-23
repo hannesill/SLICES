@@ -956,26 +956,37 @@ def _git_quiet(args: list[str]) -> bool:
     raise RuntimeError(message)
 
 
-def _validate_clean_final_launch_state(launch_commit: str) -> str | None:
-    """Return an error string if a final launch would have ambiguous provenance."""
+def _resolve_launch_commit(launch_commit: str) -> str:
+    """Resolve a user-provided commit-ish to an immutable git commit hash."""
+    return _git_stdout(["rev-parse", "--verify", f"{launch_commit}^{{commit}}"])
+
+
+def _validated_final_launch_commit(launch_commit: str) -> tuple[str | None, str | None]:
+    """Return (resolved_commit, error) for final launch provenance checks."""
     try:
-        resolved_launch_commit = _git_stdout(
-            ["rev-parse", "--verify", f"{launch_commit}^{{commit}}"]
-        )
+        resolved_launch_commit = _resolve_launch_commit(launch_commit)
         current_commit = _git_stdout(["rev-parse", "--verify", "HEAD"])
         if current_commit != resolved_launch_commit:
             return (
+                None,
                 "final launch commit does not match the current checkout "
-                f"(current={current_commit}, launch_commit={resolved_launch_commit})"
+                f"(current={current_commit}, launch_commit={resolved_launch_commit})",
             )
         if not _git_quiet(["diff", "--quiet"]) or not _git_quiet(["diff", "--cached", "--quiet"]):
             return (
+                None,
                 "final run/retry requires a clean tracked worktree. "
-                "Commit or stash tracked changes first; dry runs may be used for local audits."
+                "Commit or stash tracked changes first; dry runs may be used for local audits.",
             )
     except RuntimeError as exc:
-        return f"could not validate final launch git provenance: {exc}"
-    return None
+        return None, f"could not validate final launch git provenance: {exc}"
+    return resolved_launch_commit, None
+
+
+def _validate_clean_final_launch_state(launch_commit: str) -> str | None:
+    """Return an error string if a final launch would have ambiguous provenance."""
+    _, error = _validated_final_launch_commit(launch_commit)
+    return error
 
 
 def _validate_wandb_online_mode() -> str | None:
@@ -1027,9 +1038,10 @@ def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -
         )
         return
 
-    error = _validate_clean_final_launch_state(str(launch_commit))
+    resolved_launch_commit, error = _validated_final_launch_commit(str(launch_commit))
     if error:
         parser.error(error)
+    args.launch_commit = resolved_launch_commit
 
 
 # ---------------------------------------------------------------------------
