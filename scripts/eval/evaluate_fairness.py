@@ -50,9 +50,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
+from slices.constants import THESIS_TASKS as BENCHMARK_THESIS_TASKS
 from slices.eval.fairness_evaluator import flatten_fairness_report
 from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_SOURCE_KEY,
     FAIRNESS_CHECKPOINT_SOURCE_KEY,
     FAIRNESS_CLEAR_PREFIXES,
@@ -67,6 +70,7 @@ from slices.eval.fairness_metadata import (
     canonical_artifact_id,
     decode_protected_attributes,
     encode_protected_attributes,
+    file_sha256,
     normalize_protected_attributes,
 )
 
@@ -88,12 +92,7 @@ DEFAULT_EXPERIMENT_CLASSES = [
 ]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES
-THESIS_TASKS = {
-    "mortality_24h",
-    "mortality_hospital",
-    "aki_kdigo",
-    "los_remaining",
-}
+THESIS_TASKS = set(BENCHMARK_THESIS_TASKS)
 BINARY_FAIRNESS_REQUIRED_METRICS = [
     "n_valid_groups",
     "n_metric_valid_groups",
@@ -289,6 +288,7 @@ def build_fairness_summary_metadata(
         FAIRNESS_SCHEMA_VERSION_KEY: FAIRNESS_SUMMARY_SCHEMA_VERSION,
         FAIRNESS_SCRIPT_VERSION_KEY: FAIRNESS_SCRIPT_VERSION,
         FAIRNESS_ARTIFACT_PATH_KEY: str(artifact_path),
+        FAIRNESS_ARTIFACT_SHA256_KEY: file_sha256(artifact_path),
         FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
         FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
         FAIRNESS_PROTECTED_ATTRIBUTES_KEY: encode_protected_attributes(protected_attributes),
@@ -355,6 +355,18 @@ def fairness_summary_metadata_issues(
             "artifact path mismatch: "
             f"expected={expected_artifact_id}, actual={actual_artifact_id}"
         )
+
+    actual_artifact_sha256 = summary.get(FAIRNESS_ARTIFACT_SHA256_KEY)
+    expected_artifact_sha256 = summary.get(EVAL_ARTIFACT_SHA256_KEY)
+    if not actual_artifact_sha256:
+        issues.append("missing fairness artifact sha256")
+    elif expected_artifact_sha256 and actual_artifact_sha256 != expected_artifact_sha256:
+        issues.append(
+            "artifact sha256 mismatch: "
+            f"expected={expected_artifact_sha256}, actual={actual_artifact_sha256}"
+        )
+    elif expected_artifact_id is not None and not expected_artifact_sha256:
+        issues.append("missing evaluation artifact sha256")
 
     return issues
 

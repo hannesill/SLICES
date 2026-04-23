@@ -30,6 +30,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from slices.data.datamodule import ICUDataModule
+from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_PATH_KEY,
+    EVAL_ARTIFACT_SHA256_KEY,
+    file_sha256,
+)
 from slices.eval.inference import extract_tabular_features
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -379,6 +384,12 @@ def main(cfg: DictConfig) -> None:
     if wandb_run is not None:
         wandb_run.summary.update(train_label_support_summary(train_support_stats))
         wandb_run.summary.update(metrics)
+        wandb_run.summary.update(
+            {
+                EVAL_ARTIFACT_PATH_KEY: str(model_path),
+                EVAL_ARTIFACT_SHA256_KEY: file_sha256(model_path),
+            }
+        )
         if fairness_report:
             wandb_run.summary.update(flatten_fairness_report(fairness_report))
         wandb_module.finish()

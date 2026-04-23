@@ -19,7 +19,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
 
-from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS
+from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS, THESIS_TASKS
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.utils import get_package_data_dir
 
@@ -47,7 +47,7 @@ class ExtractorConfig(BaseModel):
     seq_length_hours: int = Field(default=SEQ_LENGTH_HOURS, gt=0)
     feature_set: str = "core"  # core | extended
     tasks_dir: Optional[str] = None
-    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h", "mortality_hospital"])
+    tasks: List[str] = Field(default_factory=lambda: list(THESIS_TASKS))
     min_stay_hours: int = Field(default=MIN_STAY_HOURS, ge=0)
     batch_size: int = Field(default=EXTRACTION_BATCH_SIZE, gt=0)
     categories: Optional[List[str]] = None  # e.g., ["vitals_dense"] for subset extraction

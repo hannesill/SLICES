@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
-FAIRNESS_SUMMARY_SCHEMA_VERSION = "2026-04-23.v1"
-FAIRNESS_SCRIPT_VERSION = "evaluate_fairness.py:2026-04-23.v1"
+FAIRNESS_SUMMARY_SCHEMA_VERSION = "2026-04-23.v2"
+FAIRNESS_SCRIPT_VERSION = "evaluate_fairness.py:2026-04-23.v2"
 FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
 FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE = 50
 
+EVAL_ARTIFACT_PATH_KEY = "_eval_artifact_path"
+EVAL_ARTIFACT_SHA256_KEY = "_eval_artifact_sha256"
 FAIRNESS_SCHEMA_VERSION_KEY = "_fairness_summary_schema_version"
 FAIRNESS_SCRIPT_VERSION_KEY = "_fairness_script_version"
 FAIRNESS_ARTIFACT_PATH_KEY = "_fairness_artifact_path"
+FAIRNESS_ARTIFACT_SHA256_KEY = "_fairness_artifact_sha256"
 FAIRNESS_ARTIFACT_SOURCE_KEY = "_fairness_artifact_source"
 FAIRNESS_CHECKPOINT_SOURCE_KEY = "_fairness_checkpoint_source"
 FAIRNESS_PROTECTED_ATTRIBUTES_KEY = "_fairness_protected_attributes"
@@ -22,6 +27,7 @@ FAIRNESS_METADATA_COLUMNS = [
     FAIRNESS_SCHEMA_VERSION_KEY,
     FAIRNESS_SCRIPT_VERSION_KEY,
     FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_SOURCE_KEY,
     FAIRNESS_CHECKPOINT_SOURCE_KEY,
     FAIRNESS_PROTECTED_ATTRIBUTES_KEY,
@@ -78,3 +84,12 @@ def canonical_artifact_id(path_value: Any) -> str:
     if index >= 0:
         return text[index:].strip("/")
     return text.strip("/")
+
+
+def file_sha256(path: str | Path) -> str:
+    """Return the SHA256 digest for a local artifact file."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

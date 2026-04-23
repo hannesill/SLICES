@@ -1000,6 +1000,7 @@ class TestAtomicWriteAndFileLocking:
         config = ExtractorConfig(
             parquet_root=str(parquet_root),
             output_dir=str(output_dir),
+            tasks=["mortality_hospital"],
         )
         extractor = MockExtractor(config)
 

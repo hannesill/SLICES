@@ -51,7 +51,7 @@ def main(cfg: DictConfig) -> None:
         sys.exit(1)
 
     # Build config kwargs, only overriding tasks if explicitly specified
-    # so that ExtractorConfig defaults (mortality_24h, mortality_hospital) are used
+    # so that ExtractorConfig defaults cover the fixed thesis task surface.
     config_kwargs: dict = {
         "parquet_root": str(cfg.data.ricu_output_dir),
         "output_dir": str(cfg.data.processed_dir),

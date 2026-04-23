@@ -37,8 +37,12 @@ from pathlib import Path
 import pandas as pd
 import wandb
 from scipy import stats as scipy_stats
+from slices.constants import THESIS_TASKS as BENCHMARK_THESIS_TASKS
 from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_PATH_KEY,
+    EVAL_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_SOURCE_KEY,
     FAIRNESS_CHECKPOINT_SOURCE_KEY,
     FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
@@ -84,12 +88,7 @@ FIXED_SEED_EXPERIMENT_CLASSES = set(EXPERIMENT_CLASSES)
 EXPECTED_FIXED_SEEDS = {42, 123, 456, 789, 1011}
 CAPACITY_LABEL_FRACTIONS = {0.05, 0.1, 0.5}
 CAPACITY_PARADIGMS = {"mae", "supervised"}
-THESIS_TASKS = {
-    "mortality_24h",
-    "mortality_hospital",
-    "aki_kdigo",
-    "los_remaining",
-}
+THESIS_TASKS = set(BENCHMARK_THESIS_TASKS)
 
 FINGERPRINT = [
     "experiment_class",
@@ -514,6 +513,8 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "upstream_pretrain_mask_ratio": up_mr,
         "_output_dir": config.get("output_dir", None),
         "_eval_checkpoint_source": summary.get("_eval_checkpoint_source", None),
+        EVAL_ARTIFACT_PATH_KEY: summary.get(EVAL_ARTIFACT_PATH_KEY, None),
+        EVAL_ARTIFACT_SHA256_KEY: summary.get(EVAL_ARTIFACT_SHA256_KEY, None),
         "_best_ckpt_path": summary.get("_best_ckpt_path", None),
         "_best_ckpt_load_ok": summary.get("_best_ckpt_load_ok", None),
         "_best_ckpt_error": summary.get("_best_ckpt_error", None),
@@ -1202,6 +1203,10 @@ def _checkpoint_provenance_issues(per_seed_df: pd.DataFrame) -> list[tuple[pd.Se
             issues.append((row, f"unrecognized _eval_checkpoint_source={source!r}"))
             continue
 
+        if _is_missing_export_value(row.get(EVAL_ARTIFACT_SHA256_KEY)):
+            issues.append((row, f"missing {EVAL_ARTIFACT_SHA256_KEY}"))
+            continue
+
         if source == "best":
             if _is_missing_export_value(row.get("_best_ckpt_path")):
                 issues.append((row, "best-checkpoint evaluation missing _best_ckpt_path"))
@@ -1399,6 +1404,23 @@ def _fairness_metadata_staleness_issues(
                 "artifact path mismatch: "
                 f"expected={expected_artifact_id}, actual={actual_artifact_id}"
             )
+
+        actual_artifact_sha256 = row.get(FAIRNESS_ARTIFACT_SHA256_KEY)
+        expected_artifact_sha256 = row.get(EVAL_ARTIFACT_SHA256_KEY)
+        if _is_missing_export_value(actual_artifact_sha256):
+            row_issues.append("missing fairness artifact sha256")
+        elif (
+            not _is_missing_export_value(expected_artifact_sha256)
+            and actual_artifact_sha256 != expected_artifact_sha256
+        ):
+            row_issues.append(
+                "artifact sha256 mismatch: "
+                f"expected={expected_artifact_sha256}, actual={actual_artifact_sha256}"
+            )
+        elif expected_artifact_id is not None and _is_missing_export_value(
+            expected_artifact_sha256
+        ):
+            row_issues.append("missing evaluation artifact sha256")
 
         if row_issues:
             issues.append((row, row_issues))

@@ -17,6 +17,14 @@ MIN_STAY_HOURS: int = 24
 # (e.g. mortality_24h / AKI from hours 24-48).
 LABEL_HORIZON_HOURS: int = 48
 
+# Thesis task surface. These are fixed benchmark labels, not sweep knobs.
+THESIS_TASKS: tuple[str, ...] = (
+    "mortality_24h",
+    "mortality_hospital",
+    "aki_kdigo",
+    "los_remaining",
+)
+
 # =============================================================================
 # Extraction
 # =============================================================================

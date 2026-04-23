@@ -21,6 +21,7 @@ from slices.constants import (
     PIN_MEMORY,
     SEQ_LENGTH_HOURS,
     TEST_RATIO,
+    THESIS_TASKS,
     TRAIN_RATIO,
     VAL_RATIO,
 )
@@ -191,7 +192,7 @@ class DataConfig(BaseModel):
     feature_set: Literal["core", "extended"] = "core"  # Feature set to extract
     categories: Optional[List[str]] = None  # Feature categories (null = all)
     extraction_batch_size: int = EXTRACTION_BATCH_SIZE
-    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h", "mortality_hospital"])
+    tasks: List[str] = Field(default_factory=lambda: list(THESIS_TASKS))
 
     # Config directory paths (auto-detected if null)
     tasks_dir: Optional[str] = None

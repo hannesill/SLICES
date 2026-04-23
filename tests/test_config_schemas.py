@@ -9,6 +9,7 @@ Tests cover:
 import pytest
 import yaml
 from pydantic import ValidationError
+from slices.constants import THESIS_TASKS
 from slices.data.config_schemas import DataConfig
 from slices.training.config_schemas import (
     OptimizerConfig,
@@ -108,6 +109,11 @@ class TestTaskConfigValidation:
 
 class TestDataConfigValidation:
     """Tests for data loading config bounds."""
+
+    def test_default_tasks_are_thesis_tasks(self):
+        cfg = DataConfig(processed_dir="data/processed/miiv")
+
+        assert cfg.tasks == list(THESIS_TASKS)
 
     def test_split_ratios_must_be_bounded(self):
         with pytest.raises(ValidationError, match="train_ratio"):

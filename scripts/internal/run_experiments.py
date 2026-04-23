@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from slices.constants import THESIS_TASKS
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -76,7 +78,7 @@ EXPECTED_CLASS_COUNTS = {
 
 SSL_PARADIGMS = ["mae", "jepa", "contrastive"]
 DATASETS = ["miiv", "eicu", "combined"]
-TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
+TASKS = list(THESIS_TASKS)
 SEEDS_EXTENDED = [42, 123, 456, 789, 1011]
 LABEL_FRACTIONS_FULL = [0.01, 0.05, 0.1, 0.25, 0.5]
 LABEL_FRACTIONS_MORTALITY_24H = [0.05, 0.1, 0.25, 0.5]
@@ -170,6 +172,11 @@ class Run:
             return "B"
         return None
 
+    @property
+    def protocol_selector(self) -> str | None:
+        protocol = self.protocol
+        return protocol.lower() if protocol is not None else None
+
     def build_command(self, runs_by_id: dict[str, "Run"]) -> list[str]:
         """Build the subprocess command for this run."""
         if self.run_type == "pretrain":
@@ -191,8 +198,8 @@ class Run:
         ]
         if self.experiment_subtype is not None:
             overrides.append(f"experiment_subtype={self.experiment_subtype}")
-        if self.protocol is not None and self.run_type == "finetune":
-            overrides.append(f"protocol={self.protocol}")
+        if self.protocol_selector is not None and self.run_type == "finetune":
+            overrides.append(f"protocol={self.protocol_selector}")
         if self.model_size is not None:
             overrides.append(f"+model_size={self.model_size}")
         for k, v in self.extra_overrides.items():
@@ -1182,6 +1189,52 @@ def set_run_status(state: dict, run_id: str, status: str, **kwargs) -> None:
     state["runs"][run_id].update(kwargs)
 
 
+def _completed_pretrain_missing_encoder(run: Run) -> bool:
+    """Return whether a supposedly completed pretrain lacks its encoder artifact."""
+    return run.run_type == "pretrain" and not (Path(run.output_dir) / "encoder.pt").exists()
+
+
+def _mark_completed_pretrain_missing_encoder(
+    run: Run,
+    runs: list[Run],
+    state: dict,
+    required_by: str | None = None,
+) -> None:
+    encoder_path = Path(run.output_dir) / "encoder.pt"
+    reason = f"completed pretrain missing encoder.pt at {encoder_path}"
+    now = datetime.now(timezone.utc).isoformat()
+    suffix = f"; required by {required_by}" if required_by else ""
+    print(f"  FAILED {run.id}: {reason}{suffix}")
+    set_run_status(state, run.id, "failed", finished_at=now, exit_code=None, reason=reason)
+    _propagate_failure(run.id, runs, state)
+
+
+def _revalidate_completed_pretrain_artifacts(runs: list[Run], state: dict) -> None:
+    """Fail stale completed pretrains whose encoder artifact is no longer present."""
+    for run in runs:
+        if get_run_status(state, run.id) == "completed" and _completed_pretrain_missing_encoder(
+            run
+        ):
+            _mark_completed_pretrain_missing_encoder(run, runs, state)
+
+
+def _dependencies_ready(
+    run: Run,
+    runs: list[Run],
+    runs_by_id: dict[str, Run],
+    state: dict,
+) -> bool:
+    """Check dependency state and revalidate completed pretrain artifacts."""
+    for dep_id in run.depends_on:
+        if get_run_status(state, dep_id) != "completed":
+            return False
+        dep = runs_by_id.get(dep_id)
+        if dep is not None and _completed_pretrain_missing_encoder(dep):
+            _mark_completed_pretrain_missing_encoder(dep, runs, state, required_by=run.id)
+            return False
+    return True
+
+
 def _run_launch_commit(run: Run) -> str | None:
     commit = run.extra_overrides.get("+launch_commit")
     return str(commit) if commit else None
@@ -1425,6 +1478,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
         return 0
 
     reset_state_for_launch_identity_mismatch(runs, state)
+    _revalidate_completed_pretrain_artifacts(runs, state)
 
     print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}\n")
@@ -1467,7 +1521,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
                 continue
             if run.id in active:
                 continue
-            if all(get_run_status(state, dep_id) == "completed" for dep_id in run.depends_on):
+            if _dependencies_ready(run, runs, runs_by_id, state):
                 ready.append(run)
 
         launch_batch = _select_ready_runs(ready, set(active), runs_by_id, parallel)
@@ -2058,6 +2112,8 @@ def main() -> None:
             parser.error(
                 "run requires --project or WANDB_PROJECT to avoid logging to config defaults"
             )
+        if not args.entity:
+            parser.error("run requires --entity or WANDB_ENTITY to make W&B ownership explicit")
     if args.command == "retry":
         if not args.revision:
             parser.error("retry requires --revision to select the revisioned state namespace")
@@ -2067,6 +2123,8 @@ def main() -> None:
             parser.error(
                 "retry requires --project or WANDB_PROJECT to avoid logging to config defaults"
             )
+        if not args.entity:
+            parser.error("retry requires --entity or WANDB_ENTITY to make W&B ownership explicit")
         if not args.failed and not args.skipped:
             parser.error("retry requires --failed and/or --skipped")
 
