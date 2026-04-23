@@ -8,8 +8,8 @@ set -euo pipefail
 IDLE_THRESHOLD_MIN=59
 STAMP_FILE="/tmp/slices_last_training_activity"
 
-# Check if any training process or Claude Code session is running
-if pgrep -f "scripts/(training/(pretrain|finetune|supervised)|internal/run_experiments|preprocessing/prepare_dataset)\.py" > /dev/null 2>&1 \
+# Check if any final-run process or Claude Code session is running
+if pgrep -f "scripts/(training/(pretrain|finetune|supervised|xgboost_baseline)|internal/run_experiments|preprocessing/prepare_dataset|eval/evaluate_fairness|export_results)\.py" > /dev/null 2>&1 \
    || pgrep -f "claude" > /dev/null 2>&1; then
     # Activity detected — update timestamp and exit
     date +%s > "$STAMP_FILE"

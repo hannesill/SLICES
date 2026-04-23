@@ -15,9 +15,9 @@ Usage:
         --project slices-thesis --revision thesis-v1 --entity <entity>
     uv run python scripts/internal/run_experiments.py status \
         --experiment-class core_ssl_benchmark --revision thesis-v1
-    uv run python scripts/internal/run_experiments.py retry --failed \
+    uv run python scripts/internal/run_experiments.py retry --failed --skipped \
         --experiment-class core_ssl_benchmark --revision thesis-v1 \
-        --project slices-thesis --entity <entity>
+        --project slices-thesis --entity <entity> --launch-commit <commit>
 """
 from __future__ import annotations
 
@@ -902,6 +902,81 @@ def apply_launch_commit(runs: list[Run], launch_commit: str | None = None) -> li
     return runs
 
 
+def _git_stdout(args: list[str]) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or shlex.join(["git", *args])
+        raise RuntimeError(message)
+    return result.stdout.strip()
+
+
+def _git_quiet(args: list[str]) -> bool:
+    result = subprocess.run(
+        ["git", *args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode in {0, 1}:
+        return result.returncode == 0
+    message = result.stderr.strip() or shlex.join(["git", *args])
+    raise RuntimeError(message)
+
+
+def _validate_clean_final_launch_state(launch_commit: str) -> str | None:
+    """Return an error string if a final launch would have ambiguous provenance."""
+    try:
+        resolved_launch_commit = _git_stdout(
+            ["rev-parse", "--verify", f"{launch_commit}^{{commit}}"]
+        )
+        current_commit = _git_stdout(["rev-parse", "--verify", "HEAD"])
+        if current_commit != resolved_launch_commit:
+            return (
+                "final launch commit does not match the current checkout "
+                f"(current={current_commit}, launch_commit={resolved_launch_commit})"
+            )
+        if not _git_quiet(["diff", "--quiet"]) or not _git_quiet(["diff", "--cached", "--quiet"]):
+            return (
+                "final run/retry requires a clean tracked worktree. "
+                "Commit or stash tracked changes first; dry runs may be used for local audits."
+            )
+    except RuntimeError as exc:
+        return f"could not validate final launch git provenance: {exc}"
+    return None
+
+
+def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -> None:
+    """Require auditable provenance for direct final run/retry invocations."""
+    if args.command not in {"run", "retry"}:
+        return
+
+    launch_commit = getattr(args, "launch_commit", None)
+    is_run_dry_run = args.command == "run" and getattr(args, "dry_run", False)
+    if is_run_dry_run:
+        if not launch_commit:
+            print(
+                "WARNING: dry run has no launch provenance. Final run/retry requires "
+                "--launch-commit or SLICES_LAUNCH_COMMIT.",
+                file=sys.stderr,
+            )
+        return
+
+    if not launch_commit:
+        parser.error(
+            "final run/retry requires --launch-commit or SLICES_LAUNCH_COMMIT " "for W&B provenance"
+        )
+
+    error = _validate_clean_final_launch_state(str(launch_commit))
+    if error:
+        parser.error(error)
+
+
 # ---------------------------------------------------------------------------
 # State Management
 # ---------------------------------------------------------------------------
@@ -1602,6 +1677,33 @@ def _collect_dependency_closure(
     return deps, required_by, missing
 
 
+def _collect_skipped_dependent_closure(
+    runs: list[Run],
+    all_runs: list[Run],
+    state: dict,
+) -> list[Run]:
+    """Find skipped downstream runs that will remain skipped after retry --failed."""
+    downstream: dict[str, list[Run]] = {}
+    for run in all_runs:
+        for dep_id in run.depends_on:
+            downstream.setdefault(dep_id, []).append(run)
+
+    start_ids = {run.id for run in runs}
+    queue = list(start_ids)
+    seen: set[str] = set()
+    skipped_dependents: list[Run] = []
+    while queue:
+        dep_id = queue.pop(0)
+        for run in downstream.get(dep_id, []):
+            if run.id in seen or run.id in start_ids:
+                continue
+            seen.add(run.id)
+            if get_run_status(state, run.id) == "skipped":
+                skipped_dependents.append(run)
+                queue.append(run.id)
+    return skipped_dependents
+
+
 def _retry_command_suggestion(args, *, include_failed: bool, include_skipped: bool) -> str:
     cmd = ["uv", "run", "python", "scripts/internal/run_experiments.py", "retry"]
     if include_failed:
@@ -1654,6 +1756,34 @@ def _fail_for_blocked_retry_dependencies(
     print("\nSuggested command:")
     print(f"  {suggested}")
     raise SystemExit(1)
+
+
+def _warn_for_skipped_dependents_after_failed_retry(
+    runs_to_retry: list[Run],
+    all_runs: list[Run],
+    state: dict,
+    args,
+) -> list[Run]:
+    if not args.failed or args.skipped:
+        return []
+
+    skipped_dependents = _collect_skipped_dependent_closure(runs_to_retry, all_runs, state)
+    if not skipped_dependents:
+        return []
+
+    print(
+        "WARNING: retry --failed will leave skipped downstream runs selected for "
+        "accounting only. Prefer retry --failed --skipped for final recovery."
+    )
+    print("\nSkipped dependents:")
+    for run in skipped_dependents[:20]:
+        print(f"  {run.id} [skipped]")
+    if len(skipped_dependents) > 20:
+        print(f"  ... {len(skipped_dependents) - 20} more")
+    suggested = _retry_command_suggestion(args, include_failed=True, include_skipped=True)
+    print("\nSuggested command:")
+    print(f"  {suggested}")
+    return skipped_dependents
 
 
 def _filter_requested_runs(
@@ -1756,10 +1886,17 @@ def cmd_retry(args):
     if blocked or unresolved_missing:
         _fail_for_blocked_retry_dependencies(blocked, unresolved_missing, state, required_by, args)
 
+    accounting_only = _warn_for_skipped_dependents_after_failed_retry(
+        runs_to_retry,
+        all_runs,
+        state,
+        args,
+    )
+
     runs_by_id: dict[str, Run] = {}
-    for run in dependencies + runs_to_retry:
+    for run in dependencies + runs_to_retry + accounting_only:
         runs_by_id.setdefault(run.id, run)
-    for run in runs_by_id.values():
+    for run in dependencies + runs_to_retry:
         if get_run_status(state, run.id) in {"failed", "skipped"}:
             set_run_status(state, run.id, "pending")
 
@@ -1855,7 +1992,11 @@ def main() -> None:
 
     p_retry = sub.add_parser("retry", help="Retry failed/skipped runs")
     p_retry.add_argument("--failed", action="store_true", help="Retry failed runs")
-    p_retry.add_argument("--skipped", action="store_true", help="Retry skipped runs")
+    p_retry.add_argument(
+        "--skipped",
+        action="store_true",
+        help="Retry dependency-skipped runs; prefer with --failed for final recovery",
+    )
     p_retry.add_argument(
         "--parallel",
         type=int,
@@ -1917,6 +2058,8 @@ def main() -> None:
             )
         if not args.failed and not args.skipped:
             parser.error("retry requires --failed and/or --skipped")
+
+    validate_direct_final_launch_policy(args, parser)
 
     if args.command == "run":
         exit_code = cmd_run(args)

@@ -117,6 +117,36 @@ def test_extract_run_uses_class_metadata_from_config_or_tags():
     assert tag_row["protocol"] == "B"
 
 
+def test_extract_run_exports_launch_commit_from_config_or_tags():
+    mod = importlib.import_module("scripts.export_results")
+
+    config_run = DummyRun(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "launch_commit": "abcdef1234567890",
+            "training": {"freeze_encoder": False},
+            "task": {"task_name": "mortality_24h"},
+        },
+        tags=["phase:finetune", "commit:tag-commit"],
+    )
+    tag_run = DummyRun(
+        config={
+            "experiment_class": "classical_baselines",
+            "dataset": "miiv",
+            "paradigm": "xgboost",
+            "seed": 42,
+            "task": {"task_name": "mortality_24h"},
+        },
+        tags=["phase:baseline", "commit:tag-commit"],
+    )
+
+    assert mod.extract_run(config_run, [])["launch_commit"] == "abcdef1234567890"
+    assert mod.extract_run(tag_run, [])["launch_commit"] == "tag-commit"
+
+
 def test_fetch_all_runs_single_class_adds_server_side_filter(monkeypatch):
     mod = importlib.import_module("scripts.export_results")
     captured = {}
@@ -694,6 +724,52 @@ def test_validate_warns_when_group_mixes_revisions():
     warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42, 123})
 
     assert any("mixes multiple revisions" in warning for warning in warnings)
+
+
+def test_validate_warns_when_revision_mixes_launch_commits():
+    mod = importlib.import_module("scripts.export_results")
+
+    rows = []
+    for seed, launch_commit in [(42, "commit-a"), (123, "commit-b")]:
+        rows.append(
+            {
+                **_row("core_ssl_benchmark", "mae", seed),
+                "wandb_run_id": f"run-{seed}",
+                "revision": "thesis-v1",
+                "launch_commit": launch_commit,
+                "_eval_checkpoint_source": "final",
+            }
+        )
+
+    per_seed_df = pd.DataFrame(rows)
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42, 123})
+
+    assert any(
+        "revision=thesis-v1 mixes multiple launch commits" in warning for warning in warnings
+    )
+
+
+def test_validate_warns_when_revision_lacks_launch_commit():
+    mod = importlib.import_module("scripts.export_results")
+
+    per_seed_df = pd.DataFrame(
+        [
+            {
+                **_row("core_ssl_benchmark", "mae", 42),
+                "wandb_run_id": "run-42",
+                "revision": "thesis-v1",
+                "launch_commit": None,
+                "_eval_checkpoint_source": "final",
+            }
+        ]
+    )
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+
+    assert any(
+        "revision=thesis-v1 has 1 runs missing launch_commit" in warning for warning in warnings
+    )
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):
