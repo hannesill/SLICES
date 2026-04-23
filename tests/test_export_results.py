@@ -29,7 +29,7 @@ def _row(experiment_class, paradigm, seed, task="mortality_24h", offset=0.0):
         "dataset": "miiv",
         "task": task,
         "seed": seed,
-        "protocol": "B",
+        "protocol": "full_finetune",
         "label_fraction": 1.0,
         "model_size": "default",
         "source_dataset": None,
@@ -150,7 +150,7 @@ def test_extract_run_uses_class_metadata_from_config_or_tags():
     assert mod.extract_run(config_run, [])["experiment_class"] == "core_ssl_benchmark"
     tag_row = mod.extract_run(tag_run, [])
     assert tag_row["experiment_class"] == "classical_baselines"
-    assert tag_row["protocol"] == "B"
+    assert tag_row["protocol"] == "full_finetune"
 
 
 def test_extract_run_exports_launch_commit_from_config_or_tags():
@@ -327,7 +327,7 @@ def test_extract_run_uses_xgboost_learning_rate_for_lr_metadata():
             "dataset": "miiv",
             "paradigm": "xgboost",
             "seed": 42,
-            "protocol": "B",
+            "protocol": "full_finetune",
             "optimizer": {"lr": 3e-4},
             "xgboost": {"learning_rate": 0.1},
             "task": {"task_name": "mortality_24h"},
@@ -410,7 +410,7 @@ def test_validate_flags_wrong_fixed_seed_set_with_correct_count():
                 "paradigm": "mae",
                 "dataset": "miiv",
                 "task": "mortality_24h",
-                "protocol": "B",
+                "protocol": "full_finetune",
                 "n_seeds": 5,
                 "seed_list": "[1, 2, 3, 4, 5]",
             }
@@ -431,7 +431,9 @@ def test_validate_flags_absent_expected_matrix_rows():
         dataset=["miiv"],
         phase=["finetune"],
     )
-    present = expected[(expected["task"] == "mortality_24h") & (expected["protocol"] == "B")].copy()
+    present = expected[
+        (expected["task"] == "mortality_24h") & (expected["protocol"] == "full_finetune")
+    ].copy()
     present["wandb_run_id"] = [f"run-{seed}" for seed in present["seed"]]
     present["test/auprc"] = 0.5
     aggregated = mod.build_aggregated_df(present)

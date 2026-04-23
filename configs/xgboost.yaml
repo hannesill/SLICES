@@ -21,7 +21,7 @@ dataset: miiv
 
 # Paradigm
 paradigm: xgboost
-protocol: B
+protocol: full_finetune
 
 # Final rerun corpus metadata
 experiment_class: null

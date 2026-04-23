@@ -29,6 +29,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from slices.constants import canonical_downstream_protocol
 from slices.data.datamodule import ICUDataModule
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_PATH_KEY,
@@ -142,7 +143,7 @@ def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
     if cfg.get("seed") is not None:
         _add_wandb_tag(tags, f"seed:{cfg.seed}")
     if cfg.get("protocol") is not None:
-        _add_wandb_tag(tags, f"protocol:{cfg.protocol}")
+        _add_wandb_tag(tags, f"protocol:{canonical_downstream_protocol(cfg.protocol)}")
     if cfg.get("label_fraction", 1.0) < 1.0:
         _add_wandb_tag(tags, f"label_fraction:{cfg.label_fraction}")
         _add_wandb_tag(tags, "ablation:label-efficiency")

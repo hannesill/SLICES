@@ -32,7 +32,7 @@ dataset: miiv  # miiv | eicu | combined
 
 # Paradigm — always "supervised" for this config
 paradigm: supervised
-protocol: B
+protocol: full_finetune
 
 # Final rerun corpus metadata
 experiment_class: null

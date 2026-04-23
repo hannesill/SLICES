@@ -50,7 +50,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
-from slices.constants import THESIS_TASKS as BENCHMARK_THESIS_TASKS
+from slices.constants import (
+    FULL_FINETUNE_PROTOCOL,
+    canonical_downstream_protocol,
+    downstream_protocol_from_freeze,
+)
+from slices.constants import (
+    THESIS_TASKS as BENCHMARK_THESIS_TASKS,
+)
 from slices.eval.fairness_evaluator import flatten_fairness_report
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_SHA256_KEY,
@@ -263,12 +270,11 @@ def _run_matrix_row(run) -> dict[str, Any]:
             phase = "finetune"
 
     freeze = _get_nested(config, "training.freeze_encoder")
-    protocol = config.get("protocol") or _tag_value(tags, "protocol")
+    protocol = canonical_downstream_protocol(config.get("protocol") or _tag_value(tags, "protocol"))
     if protocol is None:
-        if freeze is True:
-            protocol = "A"
-        elif freeze is False or phase == "baseline":
-            protocol = "B"
+        protocol = downstream_protocol_from_freeze(freeze)
+        if protocol is None and phase == "baseline":
+            protocol = FULL_FINETUNE_PROTOCOL
 
     experiment_class = config.get("experiment_class") or _tag_value(tags, "experiment_class")
     return {

@@ -25,6 +25,48 @@ THESIS_TASKS: tuple[str, ...] = (
     "los_remaining",
 )
 
+# Public downstream evaluation regimes. Legacy "A"/"B" values are normalized
+# at export/evaluation boundaries so historical W&B runs remain comparable.
+LINEAR_PROBE_PROTOCOL: str = "linear_probe"
+FULL_FINETUNE_PROTOCOL: str = "full_finetune"
+DOWNSTREAM_PROTOCOLS: tuple[str, str] = (
+    LINEAR_PROBE_PROTOCOL,
+    FULL_FINETUNE_PROTOCOL,
+)
+
+
+def canonical_downstream_protocol(value: object) -> str | None:
+    """Return the public downstream protocol name for current or legacy values."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    key = text.lower().replace("-", "_")
+    if key in {"a", "protocol_a", "probe", "linear_probe"}:
+        return LINEAR_PROBE_PROTOCOL
+    if key in {
+        "b",
+        "protocol_b",
+        "finetune",
+        "fine_tune",
+        "full_finetune",
+        "full_fine_tune",
+        "fully_finetuned",
+    }:
+        return FULL_FINETUNE_PROTOCOL
+    return key
+
+
+def downstream_protocol_from_freeze(freeze_encoder: object) -> str | None:
+    """Infer the downstream protocol from the encoder freeze setting."""
+    if freeze_encoder is True:
+        return LINEAR_PROBE_PROTOCOL
+    if freeze_encoder is False:
+        return FULL_FINETUNE_PROTOCOL
+    return None
+
+
 # =============================================================================
 # Extraction
 # =============================================================================
