@@ -3028,6 +3028,79 @@ class TestExperimentRunnerRetry:
         assert scheduled_by_id[revised_dep_id].extra_overrides["revision"] == "thesis-v1"
         assert scheduled_by_id[revised_target_id].extra_overrides["revision"] == "thesis-v1"
 
+    def test_cmd_retry_revision_scoped_failed_skipped_includes_cross_class_dependents(
+        self,
+        monkeypatch,
+        capsys,
+    ):
+        import scripts.internal.run_experiments as runner
+
+        dependency = runner.Run(
+            id="core_ssl_benchmark_pretrain_mae_miiv_seed42",
+            run_key="pretrain_mae_miiv_seed42",
+            experiment_class="core_ssl_benchmark",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="label_efficiency_finetune_mae_mortality_24h_miiv_seed42",
+            run_key="finetune_mae_mortality_24h_miiv_seed42",
+            experiment_class="label_efficiency",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/label_efficiency/finetune_mae_mortality_24h_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+
+        revised_dep_id = "core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42"
+        revised_target_id = "label_efficiency_rev-thesis-v1_finetune_mae_mortality_24h_miiv_seed42"
+        state = {
+            "version": 1,
+            "runs": {
+                revised_dep_id: {"status": "failed"},
+                revised_target_id: {"status": "skipped"},
+            },
+        }
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            experiment_class=["core_ssl_benchmark"],
+            failed=True,
+            skipped=True,
+            revision="thesis-v1",
+            reason="retry upstream failure",
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        runner.cmd_retry(args)
+
+        output = capsys.readouterr().out
+        scheduled_by_id = {run.id: run for run in scheduled["runs"]}
+        assert revised_dep_id in scheduled_by_id
+        assert revised_target_id in scheduled_by_id
+        assert scheduled_by_id[revised_target_id].depends_on == [revised_dep_id]
+        assert state["runs"][revised_dep_id]["status"] == "pending"
+        assert state["runs"][revised_target_id]["status"] == "pending"
+        assert "Including skipped downstream dependents" in output
+
     def test_select_ready_runs_prioritizes_pretrains_with_slot_budget(self):
         import scripts.internal.run_experiments as runner
 
