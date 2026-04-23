@@ -111,6 +111,22 @@ REGRESSION_FAIRNESS_REQUIRED_METRICS = [
     "mse_gap",
     "mae_gap",
 ]
+FAIRNESS_MATRIX_KEY_COLUMNS = [
+    "experiment_class",
+    "experiment_type",
+    "experiment_subtype",
+    "paradigm",
+    "dataset",
+    "task",
+    "protocol",
+    "label_fraction",
+    "model_size",
+    "source_dataset",
+    "phase",
+    "upstream_pretrain_lr",
+    "upstream_pretrain_mask_ratio",
+    "seed",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +211,137 @@ def fetch_eval_runs(
 
     log.info("Fetched %d runs.", len(runs))
     return runs
+
+
+def _tag_value(tags: list[str], prefix: str) -> str | None:
+    full_prefix = f"{prefix}:"
+    for tag in tags:
+        if tag.startswith(full_prefix):
+            return tag.split(":", 1)[1]
+    return None
+
+
+def _matrix_key_value(column: str, value):
+    if value is None or value == "":
+        return "__none__"
+    try:
+        if value != value:
+            return "__none__"
+    except Exception:
+        pass
+    if column == "seed":
+        return int(value)
+    if column in {"label_fraction", "upstream_pretrain_lr", "upstream_pretrain_mask_ratio"}:
+        return round(float(value), 12)
+    return str(value)
+
+
+def _matrix_key(row: dict) -> tuple:
+    return tuple(
+        _matrix_key_value(column, row.get(column)) for column in FAIRNESS_MATRIX_KEY_COLUMNS
+    )
+
+
+def _format_matrix_key(key: tuple) -> str:
+    return ", ".join(
+        f"{column}={value}" for column, value in zip(FAIRNESS_MATRIX_KEY_COLUMNS, key, strict=True)
+    )
+
+
+def _run_matrix_row(run) -> dict[str, Any]:
+    """Extract the expected-matrix identity columns from a W&B run."""
+    config = dict(getattr(run, "config", {}) or {})
+    tags = list(getattr(run, "tags", []) or [])
+    phase = config.get("phase") or _tag_value(tags, "phase")
+    paradigm = config.get("paradigm") or _get_nested(config, "ssl.name")
+    if phase is None:
+        if paradigm in {"gru_d", "xgboost"}:
+            phase = "baseline"
+        elif paradigm == "supervised":
+            phase = "supervised"
+        else:
+            phase = "finetune"
+
+    freeze = _get_nested(config, "training.freeze_encoder")
+    protocol = config.get("protocol") or _tag_value(tags, "protocol")
+    if protocol is None:
+        if freeze is True:
+            protocol = "A"
+        elif freeze is False or phase == "baseline":
+            protocol = "B"
+
+    experiment_class = config.get("experiment_class") or _tag_value(tags, "experiment_class")
+    return {
+        "experiment_class": experiment_class,
+        "experiment_type": experiment_class,
+        "experiment_subtype": config.get("experiment_subtype"),
+        "paradigm": paradigm,
+        "dataset": config.get("dataset"),
+        "task": _get_nested(config, "task.task_name"),
+        "protocol": protocol,
+        "label_fraction": config.get("label_fraction", 1.0),
+        "model_size": config.get("model_size") or "default",
+        "source_dataset": config.get("source_dataset"),
+        "phase": phase,
+        "upstream_pretrain_lr": config.get("upstream_pretrain_lr"),
+        "upstream_pretrain_mask_ratio": config.get("upstream_pretrain_mask_ratio"),
+        "seed": config.get("seed"),
+    }
+
+
+def fairness_matrix_coverage_issues(
+    runs: list,
+    experiment_classes: list[str] | None,
+    paradigms: list[str] | None,
+    datasets: list[str] | None,
+    phases: list[str] | None,
+    include_extension_tasks: bool = False,
+) -> list[str]:
+    """Return missing/unexpected matrix identities in the fairness input corpus."""
+    if include_extension_tasks:
+        return []
+
+    from scripts.export_results import build_expected_matrix_df
+
+    expected_df = build_expected_matrix_df(
+        experiment_class=experiment_classes,
+        paradigm=paradigms,
+        dataset=datasets,
+        phase=phases,
+    )
+    if not expected_df.empty and "task" in expected_df.columns:
+        expected_df = expected_df[expected_df["task"].isin(THESIS_TASKS)]
+    if expected_df.empty:
+        return []
+
+    expected_keys = {_matrix_key(row.to_dict()) for _, row in expected_df.iterrows()}
+    observed_rows = [_run_matrix_row(run) for run in runs]
+    observed_rows = [row for row in observed_rows if row.get("task") in THESIS_TASKS]
+    observed_keys = {_matrix_key(row) for row in observed_rows}
+
+    missing = sorted(expected_keys - observed_keys)
+    unexpected = sorted(observed_keys - expected_keys)
+    issues: list[str] = []
+    if missing:
+        issues.append(
+            f"fairness input is missing {len(missing)}/{len(expected_keys)} expected "
+            "downstream matrix rows"
+        )
+        for key in missing[:20]:
+            issues.append(f"  missing {_format_matrix_key(key)}")
+        if len(missing) > 20:
+            issues.append(f"  ... {len(missing) - 20} more missing rows")
+
+    if unexpected:
+        issues.append(
+            f"fairness input has {len(unexpected)} downstream rows outside the expected matrix"
+        )
+        for key in unexpected[:20]:
+            issues.append(f"  unexpected {_format_matrix_key(key)}")
+        if len(unexpected) > 20:
+            issues.append(f"  ... {len(unexpected) - 20} more unexpected rows")
+
+    return issues
 
 
 def _expected_fairness_attributes(run, protected_attributes: list[str]) -> list[str]:
@@ -642,6 +789,28 @@ def resolve_evaluation_artifact(
     return ckpt_path, ckpt_source
 
 
+def validate_evaluation_artifact_digest(run, artifact_path: Path) -> None:
+    """Fail before inference when the local artifact differs from logged test metadata."""
+    summary = dict(run.summary_metrics or {})
+    expected_id = _expected_fairness_artifact_id(run)
+    expected_sha256 = summary.get(EVAL_ARTIFACT_SHA256_KEY)
+    if expected_id is not None and not expected_sha256:
+        raise RuntimeError(
+            f"Run {run.id} is missing {EVAL_ARTIFACT_SHA256_KEY}; cannot verify "
+            "that fairness inference uses the artifact evaluated for test metrics."
+        )
+
+    if not expected_sha256:
+        return
+
+    actual_sha256 = file_sha256(artifact_path)
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            "Evaluation artifact sha256 mismatch before fairness inference: "
+            f"expected={expected_sha256}, actual={actual_sha256}, path={artifact_path}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Model + data reconstruction
 # ---------------------------------------------------------------------------
@@ -938,6 +1107,21 @@ def main() -> None:
         print("No runs found matching filters.", file=sys.stderr)
         sys.exit(0 if args.allow_incomplete else 1)
 
+    coverage_issues = fairness_matrix_coverage_issues(
+        runs,
+        experiment_classes=experiment_classes,
+        paradigms=args.paradigm,
+        datasets=args.dataset,
+        phases=args.phase,
+        include_extension_tasks=args.include_extension_tasks,
+    )
+    if coverage_issues:
+        print("Fairness matrix coverage validation failed:", file=sys.stderr)
+        for issue in coverage_issues:
+            print(issue, file=sys.stderr)
+        if not args.allow_incomplete:
+            sys.exit(1)
+
     # Filter out runs that already have fairness metrics (unless --force)
     if args.skip_existing and not args.force:
         before = len(runs)
@@ -1012,6 +1196,7 @@ def main() -> None:
             artifact_path, artifact_source = resolve_evaluation_artifact(
                 run, args.outputs_root, task_type
             )
+            validate_evaluation_artifact_digest(run, artifact_path)
             log.info("  Evaluation artifact: %s (%s)", artifact_path, artifact_source)
 
             # 2. Reconstruct model + data (reuse datamodule if same dataset/task/seed)

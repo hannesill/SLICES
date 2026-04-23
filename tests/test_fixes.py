@@ -974,6 +974,23 @@ class TestFairnessRevisionScoping:
                 task_type="binary",
             )
 
+    def test_checkpoint_loader_rejects_cls_pooling_override(self):
+        """CLS pooling changes learned parameters and must not be treated as aggregation-only."""
+        from slices.training.checkpoint_loading import _apply_finetune_pooling_override
+
+        cfg = OmegaConf.create({"encoder": {"pooling": "cls"}})
+        encoder_config = {
+            "d_input": 4,
+            "d_model": 8,
+            "n_layers": 1,
+            "n_heads": 2,
+            "d_ff": 16,
+            "pooling": "none",
+        }
+
+        with pytest.raises(RuntimeError, match="CLS pooling adds learned parameters"):
+            _apply_finetune_pooling_override(encoder_config, cfg)
+
     def test_tmux_launcher_passes_revision_to_fairness(self, tmp_path):
         """The thesis launcher should thread revision tags through the fairness sweep."""
         repo_root = Path(__file__).resolve().parents[1]
@@ -1042,6 +1059,46 @@ class TestFairnessRevisionScoping:
             pattern,
             "uv run python scripts/export_results.py --revision thesis-v1",
         )
+
+    def test_tmux_launcher_rejects_offline_wandb_mode(self, tmp_path):
+        """Final thesis launcher should not silently create offline W&B runs."""
+        repo_root = Path(__file__).resolve().parents[1]
+        temp_repo = tmp_path / "repo"
+        (temp_repo / "scripts" / "internal").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            repo_root / "scripts" / "internal" / "launch_thesis_tmux.sh",
+            temp_repo / "scripts" / "internal",
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tmux_script = bin_dir / "tmux"
+        tmux_script.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "has-session" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        tmux_script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["WANDB_ENTITY"] = "test-entity"
+        env["WANDB_MODE"] = "offline"
+        env["SKIP_LAUNCH_GIT_CHECK"] = "1"
+        env["VALIDATE_PROCESSED_ARTIFACTS"] = "0"
+
+        result = subprocess.run(
+            ["bash", "scripts/internal/launch_thesis_tmux.sh"],
+            cwd=temp_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "WANDB_MODE must be unset or 'online'" in result.stderr
 
     def test_tmux_launcher_includes_classical_baselines_in_fairness(self, tmp_path):
         """The fairness sweep should include the canonical baseline class by default."""
@@ -2141,6 +2198,34 @@ class TestExperimentRunnerWandbOverrides:
                 "thesis-v1",
                 "--project",
                 "slices-thesis",
+                "--launch-commit",
+                "dummy",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
+    def test_main_run_rejects_offline_wandb_mode_for_final_launch(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.setenv("WANDB_MODE", "offline")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "thesis-v1",
+                "--project",
+                "slices-thesis",
+                "--entity",
+                "hannes-ill",
                 "--launch-commit",
                 "dummy",
             ],

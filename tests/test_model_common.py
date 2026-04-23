@@ -15,6 +15,8 @@ from slices.models.common import PositionalEncoding, apply_pooling, get_activati
 from slices.models.encoders import (
     LinearConfig,
     LinearEncoder,
+    ObservationTransformerConfig,
+    ObservationTransformerEncoder,
     TransformerConfig,
     TransformerEncoder,
 )
@@ -56,6 +58,12 @@ class TestApplyPooling:
         out = apply_pooling(x, "max", padding_mask=mask)
         assert torch.allclose(out, torch.tensor([[3.0, 4.0]]))
 
+    def test_max_pooling_all_empty_mask_returns_zero(self):
+        x = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])
+        mask = torch.tensor([[False, False]])
+        out = apply_pooling(x, "max", padding_mask=mask)
+        assert torch.allclose(out, torch.zeros(1, 2))
+
     def test_last_pooling_without_mask(self):
         x = torch.tensor([[[1.0], [2.0], [3.0]]])
         out = apply_pooling(x, "last")
@@ -66,6 +74,12 @@ class TestApplyPooling:
         mask = torch.tensor([[True, True, False]])
         out = apply_pooling(x, "last", padding_mask=mask)
         assert torch.allclose(out, torch.tensor([[2.0]]))
+
+    def test_last_pooling_all_empty_mask_returns_zero(self):
+        x = torch.tensor([[[99.0], [100.0]]])
+        mask = torch.tensor([[False, False]])
+        out = apply_pooling(x, "last", padding_mask=mask)
+        assert torch.allclose(out, torch.zeros(1, 1))
 
     def test_cls_pooling(self):
         x = torch.tensor([[[10.0, 20.0], [1.0, 2.0]]])
@@ -86,6 +100,27 @@ class TestApplyPooling:
         with torch.no_grad():
             out = encoder(x)
         assert out.shape == (2, 8)
+
+    def test_observation_transformer_all_empty_row_is_finite(self):
+        config = ObservationTransformerConfig(
+            d_input=4,
+            d_model=8,
+            n_layers=1,
+            n_heads=2,
+            d_ff=16,
+            pooling="mean",
+        )
+        encoder = ObservationTransformerEncoder(config)
+        encoder.eval()
+        x = torch.zeros(2, 5, 4)
+        mask = torch.zeros(2, 5, 4, dtype=torch.bool)
+        mask[1, 0, 0] = True
+
+        with torch.no_grad():
+            out = encoder(x, mask=mask)
+
+        assert out.shape == (2, 8)
+        assert torch.isfinite(out).all()
 
     def test_linear_uses_shared_pooling(self):
         """Verify LinearEncoder._apply_pooling delegates to shared utility."""

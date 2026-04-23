@@ -40,6 +40,14 @@ if [[ -z "$WANDB_ENTITY" ]]; then
   exit 1
 fi
 
+WANDB_MODE_VALUE="${WANDB_MODE:-online}"
+WANDB_MODE_LC="$(printf '%s' "$WANDB_MODE_VALUE" | tr '[:upper:]' '[:lower:]')"
+if [[ "$WANDB_MODE_LC" != "online" ]]; then
+  echo "WANDB_MODE must be unset or 'online' for thesis runs; got '$WANDB_MODE_VALUE'." >&2
+  exit 1
+fi
+export WANDB_MODE=online
+
 if [[ "$SKIP_LAUNCH_GIT_CHECK" == "1" ]]; then
   LAUNCH_COMMIT="${LAUNCH_COMMIT:-unchecked}"
 else
