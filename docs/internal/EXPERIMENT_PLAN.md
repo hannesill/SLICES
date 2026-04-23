@@ -101,7 +101,7 @@ thesis matrix.
 | `core_ssl_benchmark` | MAE, JEPA, contrastive, supervised Transformer; 3 datasets; 4 tasks; 5 seeds; Protocol A/B for SSL | 465 |
 | `label_efficiency` | SSL Protocol A/B plus supervised Transformer at low-label fractions; 5 seeds | 840 |
 | `cross_dataset_transfer` | MIMIC-IV to eICU and eICU to MIMIC-IV; SSL Protocol B; 5 seeds | 120 |
-| `hp_robustness` | LR and mask-ratio robustness on MIMIC-IV `mortality_24h`; 5 seeds | 150 |
+| `hp_robustness` | LR robustness plus MAE/JEPA mask-ratio and contrastive view/mask sensitivity on MIMIC-IV `mortality_24h`; 5 seeds | 150 |
 | `capacity_study` | Larger MAE and supervised Transformer encoders on MIIV `mortality_24h`; 5 seeds | 100 |
 | `classical_baselines` | XGBoost and GRU-D full-label plus label-efficiency context; 5 seeds | 360 |
 | `ts2vec_extension` | TS2Vec temporal contrastive extension; 3 datasets; 4 tasks; 5 seeds; Protocol A/B | 135 |
@@ -143,8 +143,14 @@ uv run python scripts/internal/run_experiments.py run \
     smart_external_reference \
   --project slices-thesis \
   --revision thesis-v1 \
+  --launch-commit <reviewed-git-commit> \
   --entity <entity>
 ```
+
+Use the reviewed git commit hash for `--launch-commit`. The tmux launcher fills
+this from `HEAD` and refuses tracked dirty launches by default; direct launcher
+invocations should be equally explicit so retries cannot mix same-revision
+artifacts produced by different code.
 
 Dry-run count check:
 
@@ -161,6 +167,7 @@ uv run python scripts/internal/run_experiments.py run \
     smart_external_reference \
   --project slices-thesis \
   --revision thesis-v1 \
+  --launch-commit <reviewed-git-commit> \
   --entity dummy \
   --dry-run
 ```
@@ -207,6 +214,21 @@ uv run python scripts/export_results.py \
 
 The export writes canonical per-run/aggregated tables plus derived comparison
 views for label efficiency, capacity, classical context, and TS2Vec comparison.
+Aggregated metric columns include seed mean, standard deviation, min/max, and
+95% confidence intervals for finite seed values.
+
+Do not use publication escape hatches such as `--allow-incomplete`,
+`--allow-extraction-failures`, or `--allow-duplicate-fingerprints` for final
+tables.
+
+## Checkpoint Policy
+
+SSL downstream runs use `encoder.pt`, the last encoder from the fixed pretraining
+schedule. They intentionally do not use `encoder_best_val.pt`, because SSL
+validation loss is not a reliable early-stopping criterion for every paradigm.
+Downstream finetune and supervised runs still evaluate their best downstream
+checkpoint when reporting test metrics, and record checkpoint provenance for
+post-hoc fairness evaluation.
 
 ## Validation Checklist
 
@@ -225,6 +247,7 @@ Before launching final runs:
 - export groups by `experiment_class`
 - fairness defaults are class-based and do not fetch pretraining runs
 - final launch/export/fairness commands target the final W&B project
+- final launch/retry commands include `--launch-commit`
 
 Focused regression suite:
 

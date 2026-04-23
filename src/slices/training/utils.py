@@ -309,7 +309,7 @@ def append_wandb_identity_suffixes(name: str | None, cfg: DictConfig) -> str | N
     upstream_mask_ratio = cfg.get("upstream_pretrain_mask_ratio")
     if upstream_mask_ratio is not None:
         suffixes.append(f"upmr{_short_wandb_value(upstream_mask_ratio)}")
-    elif experiment_subtype == "mask_ratio_sensitivity":
+    elif experiment_subtype in {"mask_ratio_sensitivity", "view_mask_sensitivity"}:
         ssl_cfg = cfg.get("ssl", {})
         mask_ratio = ssl_cfg.get("mask_ratio") if ssl_cfg else None
         if mask_ratio is not None:

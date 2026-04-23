@@ -368,6 +368,9 @@ def test_build_aggregated_df_records_per_metric_non_null_counts():
     assert aggregated.iloc[0]["n_seeds"] == 2
     assert aggregated.iloc[0]["test/auprc/n"] == 1
     assert aggregated.iloc[0]["test/auroc/n"] == 2
+    assert aggregated.iloc[0]["test/auroc/ci95_lower"] < aggregated.iloc[0]["test/auroc/mean"]
+    assert aggregated.iloc[0]["test/auroc/ci95_upper"] > aggregated.iloc[0]["test/auroc/mean"]
+    assert pd.isna(aggregated.iloc[0]["test/auprc/ci95_lower"])
 
 
 def test_validate_warns_when_evaluation_row_missing_primary_metric():

@@ -155,6 +155,26 @@ uv run python scripts/training/supervised.py dataset=miiv
 uv run pytest tests/ -q
 ```
 
+## Benchmark Release Notes
+
+The public benchmark contract is the controlled comparison of MAE, JEPA, and
+contrastive SSL under the shared RICU pipeline, canonical obs-aware
+`TransformerEncoder`, fixed downstream tasks, and class-based experiment
+metadata. TS2Vec is a temporal-contrastive extension, and SMART is an external
+reference because it changes the encoder/tokenization contract.
+
+For thesis-scale reruns, use the class-based launcher with an explicit
+`--revision`, `--project`, and `--launch-commit`. Downstream SSL runs consume
+`encoder.pt`, the last encoder from the fixed pretraining schedule, not
+`encoder_best_val.pt`; downstream task evaluation still records the exact
+finetune checkpoint used for test metrics and post-hoc fairness.
+
+Final publication export expects post-hoc fairness metrics to be written first
+with `scripts/eval/evaluate_fairness.py`. The export emits per-seed rows,
+aggregate mean/std/min/max/95% CI columns, derived comparison views, and
+pairwise statistical tests. Do not use export or fairness escape hatches for
+final benchmark tables.
+
 ## Project Structure
 
 ```
@@ -271,6 +291,7 @@ uv run mypy src/
 - **Normalize-then-zero-fill**: Single imputation strategy (z-normalize, fill missing with 0). Eliminates imputation as a confound.
 - **Observation masks**: Missingness tracked separately; SSL objectives use this for masking.
 - **Controlled masking budget**: MAE, JEPA, and Contrastive share the same default mask ratio through the common `masking.py` infrastructure; objective-specific masking strategies are reported explicitly.
+- **Reported HP sensitivity**: Contrastive robustness rows that disable complementary masks are labeled as view/mask sensitivity, not pure mask-ratio sensitivity.
 - **Patient-level splits**: No data leakage between train/val/test.
 - **Config-driven ablations**: Change one YAML default to switch paradigm, encoder, or task.
 

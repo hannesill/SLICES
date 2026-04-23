@@ -12,6 +12,9 @@ publication-oriented parquet files:
   - results/classical_context.parquet
   - results/ts2vec_vs_core_contrastive.parquet
 
+Aggregated metric columns include mean, standard deviation, min/max, and 95%
+confidence intervals across finite seed values.
+
 Usage:
     uv run python scripts/export_results.py \
         --project slices-thesis --revision thesis-v1 --entity <entity>
@@ -33,6 +36,7 @@ from pathlib import Path
 
 import pandas as pd
 import wandb
+from scipy import stats as scipy_stats
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
@@ -353,7 +357,11 @@ def _recover_pretrain_metadata(
 
     if up_lr is None and subtype in {"lr_sensitivity", "lr_ablation"}:
         up_lr = _get_nested(config, "optimizer.lr")
-    if up_mr is None and subtype in {"mask_ratio_sensitivity", "mask_ablation"}:
+    if up_mr is None and subtype in {
+        "mask_ratio_sensitivity",
+        "view_mask_sensitivity",
+        "mask_ablation",
+    }:
         up_mr = _get_nested(config, "ssl.mask_ratio")
     if up_lr is not None or up_mr is not None:
         return up_lr, up_mr, subtype
@@ -629,6 +637,23 @@ def filter_thesis_tasks(
     return per_seed_df.loc[task_mask].reset_index(drop=True)
 
 
+def _mean_ci95(values: pd.Series) -> tuple[float, float]:
+    """Return a two-sided 95% CI for a seed mean using Student's t interval."""
+    n = len(values)
+    if n < 2:
+        return float("nan"), float("nan")
+    std = values.std(ddof=1)
+    if pd.isna(std):
+        return float("nan"), float("nan")
+    if std == 0:
+        mean = float(values.mean())
+        return mean, mean
+
+    mean = float(values.mean())
+    half_width = float(scipy_stats.t.ppf(0.975, df=n - 1) * std / math.sqrt(n))
+    return mean - half_width, mean + half_width
+
+
 def _aggregate_group(df: pd.DataFrame, fingerprint_cols: list[str]) -> pd.DataFrame:
     metric_cols = [
         col
@@ -662,11 +687,16 @@ def _aggregate_group(df: pd.DataFrame, fingerprint_cols: list[str]) -> pd.DataFr
                 row[f"{metric}/std"] = values.std(ddof=1) if len(values) > 1 else 0.0
                 row[f"{metric}/min"] = values.min()
                 row[f"{metric}/max"] = values.max()
+                ci_lower, ci_upper = _mean_ci95(values)
+                row[f"{metric}/ci95_lower"] = ci_lower
+                row[f"{metric}/ci95_upper"] = ci_upper
             else:
                 row[f"{metric}/mean"] = float("nan")
                 row[f"{metric}/std"] = float("nan")
                 row[f"{metric}/min"] = float("nan")
                 row[f"{metric}/max"] = float("nan")
+                row[f"{metric}/ci95_lower"] = float("nan")
+                row[f"{metric}/ci95_upper"] = float("nan")
         rows.append(row)
 
     return pd.DataFrame(rows)

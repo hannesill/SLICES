@@ -1441,6 +1441,20 @@ class TestExporterClassMetadata:
         assert up_lr == 5e-4
         assert subtype == "lr_sensitivity"
 
+    def test_view_mask_subtype_recovers_nested_mask_ratio(self):
+        """Contrastive view/mask sensitivity rows should preserve the upstream ratio."""
+        from scripts.export_results import _recover_pretrain_metadata
+
+        config = {
+            "experiment_subtype": "view_mask_sensitivity",
+            "ssl": {"mask_ratio": 0.75},
+        }
+        up_lr, up_mr, subtype = _recover_pretrain_metadata("irrelevant_name", config)
+
+        assert up_lr is None
+        assert up_mr == 0.75
+        assert subtype == "view_mask_sensitivity"
+
     def test_core_run_returns_none(self):
         """Core runs (no HP ablation) return None for all fields."""
         from scripts.export_results import _recover_pretrain_metadata
@@ -3227,7 +3241,7 @@ class TestExperimentRunnerMatrix:
             for run in runs
             if run.experiment_class == "hp_robustness"
             and run.paradigm == "contrastive"
-            and run.experiment_subtype == "mask_ratio_sensitivity"
+            and run.experiment_subtype == "view_mask_sensitivity"
             and run.run_type == "pretrain"
         ]
         assert contrastive_mask_sweep

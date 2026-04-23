@@ -52,9 +52,19 @@ AVAILABLE_METRICS = {
     "regression": ["mse", "mae", "rmse", "r2"],
 }
 
-# Default metrics per task type (minimal set for clinical tasks)
+# Default metrics per task type for benchmark exports.
 DEFAULT_METRICS = {
-    "binary": ["auroc", "auprc", "brier_score", "ece"],
+    "binary": [
+        "auroc",
+        "auprc",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "specificity",
+        "brier_score",
+        "ece",
+    ],
     "multiclass": ["auroc", "accuracy"],
     "multilabel": ["auroc"],
     "regression": ["mse", "mae", "r2"],
