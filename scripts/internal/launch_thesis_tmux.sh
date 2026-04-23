@@ -249,7 +249,7 @@ if [[ "$(printf "%q" "$SKIP_LAUNCH_GIT_CHECK")" != "1" ]]; then
   fi
 fi
 
-uv sync --dev
+uv sync --dev --locked
 ${warmup_line}
 ${main_line}
 ${appendix_block}${fairness_line}

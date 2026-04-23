@@ -7,6 +7,7 @@ and exporter dedup logic.
 
 import importlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -963,6 +964,21 @@ class TestFairnessRevisionScoping:
         assert "--revision thesis-v2" in runner_text
         assert "--project slices-thesis" in runner_text
         assert "--entity test-entity" in runner_text
+        assert "uv sync --dev --locked" in runner_text
+
+    def test_auto_shutdown_counts_fairness_and_export_processes(self):
+        """Fairness and export jobs should keep final-run VMs alive."""
+        script = Path("scripts/internal/auto_shutdown.sh").read_text()
+        pattern = re.search(r'pgrep -f "([^"]+)"', script).group(1)
+
+        assert re.search(
+            pattern,
+            "uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1",
+        )
+        assert re.search(
+            pattern,
+            "uv run python scripts/export_results.py --revision thesis-v1",
+        )
 
     def test_tmux_launcher_includes_classical_baselines_in_fairness(self, tmp_path):
         """The fairness sweep should include the canonical baseline class by default."""
@@ -1585,6 +1601,14 @@ class TestExporterClassMetadata:
         assert "ablation:label-efficiency" in tags
         assert any(tag.startswith("rerun-reason:") and len(tag) <= 64 for tag in tags)
 
+    def test_xgboost_initializes_wandb_before_data_validation(self):
+        """Failed XGBoost jobs should appear in final W&B run accounting."""
+        script = Path("scripts/training/xgboost_baseline.py").read_text()
+
+        assert script.index("wandb_module, wandb_run = _init_wandb_run") < script.index(
+            "validate_data_prerequisites("
+        )
+
     def test_build_per_seed_df_keeps_distinct_hp_ablation_configs(self):
         """Distinct upstream HP-ablation configs must not deduplicate together."""
         from scripts.export_results import build_per_seed_df
@@ -1977,6 +2001,57 @@ class TestExperimentRunnerWandbOverrides:
 
         monkeypatch.delenv("WANDB_PROJECT", raising=False)
         monkeypatch.setattr(sys, "argv", ["run_experiments.py", "retry", "--failed"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
+    def test_main_run_dry_run_warns_without_launch_commit(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.delenv("SLICES_LAUNCH_COMMIT", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "dryrun-audit",
+                "--project",
+                "slices-thesis",
+                "--dry-run",
+            ],
+        )
+        monkeypatch.setattr(runner, "cmd_run", lambda args: 0)
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 0
+        assert "dry run has no launch provenance" in capsys.readouterr().err
+
+    def test_main_run_requires_launch_commit_for_final_launch(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.delenv("SLICES_LAUNCH_COMMIT", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "thesis-v1",
+                "--project",
+                "slices-thesis",
+            ],
+        )
 
         with pytest.raises(SystemExit) as excinfo:
             runner.main()
@@ -2516,6 +2591,71 @@ class TestExperimentRunnerRetry:
         assert target.id in scheduled_ids
         assert state["runs"][dependency.id]["status"] == "pending"
         assert state["runs"][target.id]["status"] == "pending"
+
+    def test_cmd_retry_failed_surfaces_skipped_dependents_for_accounting(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        dependency = runner.Run(
+            id="dep_pretrain",
+            experiment_class="core_ssl_benchmark",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/core_ssl_benchmark/pretrain_mae_miiv_seed42",
+        )
+        target = runner.Run(
+            id="target_finetune",
+            experiment_class="label_efficiency",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir="outputs/label_efficiency/finetune_mae_miiv_seed42",
+            depends_on=[dependency.id],
+            task="mortality_24h",
+        )
+
+        state = {
+            "version": 1,
+            "runs": {
+                dependency.id: {"status": "failed"},
+                target.id: {"status": "skipped"},
+            },
+        }
+        scheduled = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [dependency, target])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(runner, "recover_stale_running", lambda state: None)
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+        monkeypatch.setattr(
+            runner,
+            "run_scheduler",
+            lambda runs, state, parallel, dry_run: scheduled.setdefault("runs", runs),
+        )
+
+        args = SimpleNamespace(
+            experiment_class=["core_ssl_benchmark"],
+            failed=True,
+            skipped=False,
+            revision=None,
+            reason=None,
+            project=None,
+            entity=None,
+            parallel=1,
+        )
+
+        runner.cmd_retry(args)
+
+        output = capsys.readouterr().out
+        scheduled_ids = [run.id for run in scheduled["runs"]]
+        assert dependency.id in scheduled_ids
+        assert target.id in scheduled_ids
+        assert state["runs"][dependency.id]["status"] == "pending"
+        assert state["runs"][target.id]["status"] == "skipped"
+        assert "target_finetune [skipped]" in output
+        assert "retry --failed --skipped" in output
 
     def test_cmd_retry_revises_dependencies_for_revision_scoped_retry(self, monkeypatch):
         import scripts.internal.run_experiments as runner

@@ -117,6 +117,35 @@ def _build_wandb_tags(cfg: DictConfig) -> list[str] | None:
     return tags or None
 
 
+def _wandb_run_name_and_group(cfg: DictConfig, task_name: str) -> tuple[str, str]:
+    run_name = cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}")
+    group_name = cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}")
+    if cfg.get("label_fraction", 1.0) < 1.0:
+        frac_str = str(cfg.label_fraction).replace(".", "")
+        run_name += f"_frac{frac_str}"
+        group_name += f"_frac{frac_str}"
+    return run_name, group_name
+
+
+def _init_wandb_run(cfg: DictConfig, task_name: str):
+    """Initialize W&B before expensive baseline setup so early failures are visible."""
+    if not cfg.logging.get("use_wandb", False):
+        return None, None
+
+    import wandb
+
+    run_name, group_name = _wandb_run_name_and_group(cfg, task_name)
+    run = wandb.init(
+        project=cfg.logging.wandb_project,
+        entity=cfg.logging.get("wandb_entity", None),
+        name=run_name,
+        group=group_name,
+        tags=_build_wandb_tags(cfg),
+        config=OmegaConf.to_container(cfg, resolve=True),
+    )
+    return wandb, run
+
+
 @hydra.main(version_base=None, config_path="../../configs", config_name="xgboost")
 def main(cfg: DictConfig) -> None:
     """Train XGBoost baseline."""
@@ -142,6 +171,7 @@ def main(cfg: DictConfig) -> None:
 
     task_name = cfg.task.get("task_name", "mortality_24h")
     task_type = cfg.task.get("task_type", "binary")
+    wandb_module, wandb_run = _init_wandb_run(cfg, task_name)
 
     # Validate data prerequisites including label freshness
     validate_data_prerequisites(
@@ -325,29 +355,12 @@ def main(cfg: DictConfig) -> None:
     # =========================================================================
     # 7. Log to W&B
     # =========================================================================
-    if cfg.logging.get("use_wandb", False):
-        import wandb
-
-        run_name = cfg.logging.get("run_name", f"xgboost_{cfg.dataset}_{task_name}")
-        group_name = cfg.logging.get("wandb_group", f"xgboost_{cfg.dataset}_{task_name}")
-        if cfg.get("label_fraction", 1.0) < 1.0:
-            frac_str = str(cfg.label_fraction).replace(".", "")
-            run_name += f"_frac{frac_str}"
-            group_name += f"_frac{frac_str}"
-
-        run = wandb.init(
-            project=cfg.logging.wandb_project,
-            entity=cfg.logging.get("wandb_entity", None),
-            name=run_name,
-            group=group_name,
-            tags=_build_wandb_tags(cfg),
-            config=OmegaConf.to_container(cfg, resolve=True),
-        )
-        run.summary.update(train_label_support_summary(train_support_stats))
-        run.summary.update(metrics)
+    if wandb_run is not None:
+        wandb_run.summary.update(train_label_support_summary(train_support_stats))
+        wandb_run.summary.update(metrics)
         if fairness_report:
-            run.summary.update(flatten_fairness_report(fairness_report))
-        wandb.finish()
+            wandb_run.summary.update(flatten_fairness_report(fairness_report))
+        wandb_module.finish()
 
     print("\n" + "=" * 80)
     print("XGBoost Baseline Complete!")

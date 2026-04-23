@@ -485,6 +485,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
         "model_size": _infer_model_size(config),
         "source_dataset": source_dataset,
         "revision": config.get("revision", None) or _tag_value(tags, "revision"),
+        "launch_commit": config.get("launch_commit", None) or _tag_value(tags, "commit"),
         "phase": phase,
         "upstream_pretrain_lr": up_lr,
         "upstream_pretrain_mask_ratio": up_mr,
@@ -1284,6 +1285,55 @@ def _mixed_revision_group_warnings(per_seed_df: pd.DataFrame) -> list[str]:
     return warnings
 
 
+def _export_text_or_none(value) -> str | None:
+    if _is_missing_export_value(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _launch_commit_homogeneity_warnings(per_seed_df: pd.DataFrame) -> list[str]:
+    """Warn when one revision is exported from missing or mixed launch commits."""
+    if per_seed_df.empty or "revision" not in per_seed_df.columns:
+        return []
+
+    if "launch_commit" not in per_seed_df.columns:
+        return [
+            "WARNING: export rows lack launch_commit metadata; final revision provenance "
+            "cannot be audited."
+        ]
+
+    warnings = []
+    for revision_value, group in per_seed_df.groupby("revision", dropna=False):
+        revision = _export_text_or_none(revision_value)
+        if revision is None:
+            warnings.append(
+                f"WARNING: {len(group)} exported rows are missing revision metadata; "
+                "launch-commit homogeneity cannot be scoped."
+            )
+            continue
+
+        commits = sorted(
+            {
+                commit
+                for commit in (_export_text_or_none(value) for value in group["launch_commit"])
+                if commit is not None
+            }
+        )
+        missing = int(group["launch_commit"].map(_export_text_or_none).isna().sum())
+        if missing:
+            warnings.append(
+                f"WARNING: revision={revision} has {missing} runs missing launch_commit; "
+                "final provenance cannot be audited."
+            )
+        if len(commits) > 1:
+            warnings.append(
+                f"WARNING: revision={revision} mixes multiple launch commits; " f"commits={commits}"
+            )
+
+    return warnings
+
+
 def _expected_row_from_run(run) -> dict:
     return {
         "experiment_class": run.experiment_class,
@@ -1531,6 +1581,7 @@ def validate(
             )
 
     warnings.extend(_mixed_revision_group_warnings(per_seed_df))
+    warnings.extend(_launch_commit_homogeneity_warnings(per_seed_df))
 
     print("\nValidation summary:", file=sys.stderr)
     print(f"  Total runs: {len(per_seed_df)}", file=sys.stderr)
