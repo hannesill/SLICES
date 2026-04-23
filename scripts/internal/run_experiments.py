@@ -1888,6 +1888,20 @@ def _warn_for_skipped_dependents_after_failed_retry(
     return skipped_dependents
 
 
+def _expand_retry_with_skipped_dependents(
+    runs_to_retry: list[Run],
+    all_runs: list[Run],
+    state: dict,
+) -> list[Run]:
+    """Include downstream skipped runs that were blocked by the selected retry roots."""
+    selected_ids = {run.id for run in runs_to_retry}
+    return [
+        run
+        for run in _collect_skipped_dependent_closure(runs_to_retry, all_runs, state)
+        if run.id not in selected_ids
+    ]
+
+
 def _filter_requested_runs(
     all_runs: list[Run],
     experiment_classes: list[str],
@@ -1947,11 +1961,7 @@ def cmd_retry(args):
     class_filter = set(args.experiment_class) if args.experiment_class else None
 
     if args.revision:
-        revised = _filter_requested_runs(all_runs, args.experiment_class)
-        revised_ids = {run.id for run in revised}
-        rest = [run for run in all_runs if run.id not in revised_ids]
-        revised = apply_revision(revised, args.revision, args.reason)
-        all_runs = rest + revised
+        all_runs = apply_revision(all_runs, args.revision, args.reason)
 
     all_runs = apply_wandb_target(all_runs, args.project, args.entity)
     launch_commit = getattr(args, "launch_commit", None)
@@ -1973,6 +1983,20 @@ def cmd_retry(args):
     if not runs_to_retry:
         print("No runs to retry.")
         return 0
+
+    if args.skipped:
+        skipped_dependents = _expand_retry_with_skipped_dependents(
+            runs_to_retry,
+            all_runs,
+            state,
+        )
+        if skipped_dependents:
+            print("Including skipped downstream dependents required by the selected retry roots:")
+            for run in skipped_dependents[:20]:
+                print(f"  {run.id} [skipped]")
+            if len(skipped_dependents) > 20:
+                print(f"  ... {len(skipped_dependents) - 20} more")
+            runs_to_retry.extend(skipped_dependents)
 
     all_by_id = {run.id: run for run in all_runs}
     dependencies, required_by, missing = _collect_dependency_closure(runs_to_retry, all_by_id)
