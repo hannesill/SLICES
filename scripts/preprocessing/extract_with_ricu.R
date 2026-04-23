@@ -775,54 +775,125 @@ extract_mortality_eicu <- function(dataset, dict) {
     names(pat)[1]
   }
 
-  # eICU uses status strings and offsets rather than timestamps.
-  # We derive date_of_death from hospitaldischargeoffset for expired patients,
-  # using the same synthetic epoch as the stays extraction so timelines are
-  # consistent (intime = epoch, outtime = epoch + unitdischargeoffset*60).
-  hosp_flag <- if ("hospitaldischargestatus" %in% names(pat)) {
-    as.integer(tolower(pat$hospitaldischargestatus) == "expired")
-  } else {
-    NA_integer_
+  # eICU uses status/location strings and offsets rather than timestamps.
+  # Preserve the hospital mortality outcome as tri-state:
+  #   1  = death evidence from discharge status/location
+  #   0  = explicit alive hospital discharge status
+  #   NA = unknown outcome
+  # This avoids converting missing/unknown statuses into false survivors, and
+  # it recovers rows where hospitaldischargestatus is missing but discharge
+  # location says Death.
+  normalize_text <- function(x) {
+    out <- tolower(trimws(as.character(x)))
+    out[out %in% c("", "na", "nan", "null", "unknown")] <- NA_character_
+    out
+  }
+  get_text_col <- function(col) {
+    if (col %in% names(pat)) {
+      as.character(pat[[col]])
+    } else {
+      rep(NA_character_, nrow(pat))
+    }
+  }
+  get_numeric_col <- function(col) {
+    if (col %in% names(pat)) {
+      suppressWarnings(as.numeric(pat[[col]]))
+    } else {
+      rep(NA_real_, nrow(pat))
+    }
   }
 
-  # Derive date_of_death from hospitaldischargeoffset for expired patients.
-  # eICU does not store death timestamps directly, but hospitaldischargeoffset
-  # gives minutes from unit admission to hospital discharge. For patients who
-  # expired (hospitaldischargestatus == "Expired"), this is the approximate
-  # time of death. We use the same synthetic epoch as the stays extraction
-  # so that windowed mortality tasks (e.g., mortality_24h) can compute
-  # whether death falls within the prediction window.
+  hospital_status <- get_text_col("hospitaldischargestatus")
+  unit_status <- get_text_col("unitdischargestatus")
+  hospital_location <- get_text_col("hospitaldischargelocation")
+  unit_location <- get_text_col("unitdischargelocation")
+
+  hospital_status_norm <- normalize_text(hospital_status)
+  unit_status_norm <- normalize_text(unit_status)
+  hospital_location_norm <- normalize_text(hospital_location)
+  unit_location_norm <- normalize_text(unit_location)
+
+  death_values <- c("expired", "death", "died", "deceased", "dead")
+  alive_values <- c("alive")
+
+  hospital_status_death <- hospital_status_norm %in% death_values
+  unit_status_death <- unit_status_norm %in% death_values
+  hospital_location_death <- hospital_location_norm %in% death_values
+  unit_location_death <- unit_location_norm %in% death_values
+
+  death_evidence <- hospital_status_death | unit_status_death |
+    hospital_location_death | unit_location_death
+  explicit_alive <- hospital_status_norm %in% alive_values
+
+  hosp_flag <- rep(NA_integer_, nrow(pat))
+  hosp_flag[explicit_alive] <- 0L
+  hosp_flag[death_evidence] <- 1L
+
+  discharge_location <- hospital_location
+  use_unit_location <- is.na(discharge_location) | trimws(discharge_location) == ""
+  discharge_location[use_unit_location] <- unit_location[use_unit_location]
+  death_location <- ifelse(hospital_location_death, hospital_location,
+                           ifelse(unit_location_death, unit_location, NA_character_))
+  use_death_location <- death_evidence & !is.na(death_location)
+  discharge_location[use_death_location] <- death_location[use_death_location]
+
+  # Derive date_of_death/death_time from discharge offsets for death-evidence
+  # rows. Hospital death evidence prefers hospitaldischargeoffset; unit death
+  # evidence can use unitdischargeoffset if hospital offset is unavailable.
+  # We use the same synthetic epoch as the stays extraction so that windowed
+  # mortality tasks (e.g., mortality_24h) can compute whether death falls
+  # within the prediction window.
   epoch <- as.POSIXct("2000-01-01 00:00:00", tz = "UTC")
-  has_offset <- "hospitaldischargeoffset" %in% names(pat)
-  expired <- !is.na(hosp_flag) & hosp_flag == 1L
+  hospital_offset <- get_numeric_col("hospitaldischargeoffset")
+  unit_offset <- get_numeric_col("unitdischargeoffset")
+
+  death_offset <- rep(NA_real_, nrow(pat))
+  hospital_death_evidence <- hospital_status_death | hospital_location_death
+  unit_death_evidence <- unit_status_death | unit_location_death
+  death_offset[hospital_death_evidence] <- hospital_offset[hospital_death_evidence]
+  needs_unit_offset <- is.na(death_offset) & unit_death_evidence
+  death_offset[needs_unit_offset] <- unit_offset[needs_unit_offset]
+  needs_hospital_fallback <- is.na(death_offset) & death_evidence
+  death_offset[needs_hospital_fallback] <- hospital_offset[needs_hospital_fallback]
+  needs_unit_fallback <- is.na(death_offset) & death_evidence
+  death_offset[needs_unit_fallback] <- unit_offset[needs_unit_fallback]
 
   dod <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
-  if (has_offset) {
-    dod[expired] <- epoch + pat$hospitaldischargeoffset[expired] * 60
-  }
+  has_death_offset <- death_evidence & !is.na(death_offset)
+  dod[has_death_offset] <- epoch + death_offset[has_death_offset] * 60
 
-  # Also derive dischtime from hospitaldischargeoffset for all patients
+  # Also derive dischtime for all rows from hospital offset, falling back to
+  # unit offset when hospital discharge timing is unavailable.
+  discharge_offset <- hospital_offset
+  missing_discharge_offset <- is.na(discharge_offset)
+  discharge_offset[missing_discharge_offset] <- unit_offset[missing_discharge_offset]
   dischtime <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
-  if (has_offset) {
-    dischtime <- epoch + pat$hospitaldischargeoffset * 60
-  }
+  has_discharge_offset <- !is.na(discharge_offset)
+  dischtime[has_discharge_offset] <- epoch + discharge_offset[has_discharge_offset] * 60
+
+  death_source <- rep(NA_character_, nrow(pat))
+  death_source[hospital_status_death] <- "patient.hospitaldischargestatus"
+  death_source[is.na(death_source) & hospital_location_death] <-
+    "patient.hospitaldischargelocation"
+  death_source[is.na(death_source) & unit_status_death] <- "patient.unitdischargestatus"
+  death_source[is.na(death_source) & unit_location_death] <- "patient.unitdischargelocation"
 
   df <- data.frame(
     stay_id              = pat[[id_col]],
     date_of_death        = dod,
     hospital_expire_flag = hosp_flag,
     dischtime            = dischtime,
-    discharge_location   = if ("unitdischargelocation" %in% names(pat)) {
-      pat$unitdischargelocation
-    } else {
-      NA_character_
-    },
+    discharge_location   = discharge_location,
     # Precision-aware schema: eICU timestamps are derived from offsets
-    # (minute-level precision) — these are true timestamps, not date-only.
+    # (minute-level precision) when an offset is available.
     death_time           = dod,
     death_date           = as.Date(rep(NA, nrow(pat))),
-    death_time_precision = ifelse(expired, "timestamp", NA_character_),
-    death_source         = ifelse(expired, "derived", NA_character_),
+    death_time_precision = ifelse(
+      has_death_offset,
+      "timestamp",
+      ifelse(death_evidence, "unknown", NA_character_)
+    ),
+    death_source         = death_source,
     stringsAsFactors = FALSE
   )
   df
@@ -1035,8 +1106,10 @@ main <- function(opts) {
   } else if (!is.null(deprecated_seq_length_hours) &&
              raw_export_horizon_hours != deprecated_seq_length_hours) {
     stop(
-      "Conflicting values provided for --raw_export_horizon_hours and "
-      "--seq_length_hours. Use only --raw_export_horizon_hours."
+      paste0(
+        "Conflicting values provided for --raw_export_horizon_hours and ",
+        "--seq_length_hours. Use only --raw_export_horizon_hours."
+      )
     )
   }
 

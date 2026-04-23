@@ -546,6 +546,145 @@ class TestMortalityBoundaryConditions:
         assert labels_dict[3] is None  # Missing info -> null (unknown outcome)
 
 
+class TestMortalityUnknownOutcomeRegressions:
+    """Regressions for nullable eICU hospital mortality evidence."""
+
+    @staticmethod
+    def _single_stay() -> pl.DataFrame:
+        base = datetime(2020, 1, 1, 0, 0)
+        return pl.DataFrame(
+            {
+                "stay_id": [1],
+                "intime": [base],
+                "outtime": [base.replace(day=5)],
+            }
+        )
+
+    @staticmethod
+    def _mortality_info(
+        *,
+        hospital_expire_flag: int | None,
+        discharge_location: str | None,
+        dischtime: datetime | None = None,
+    ) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "stay_id": [1],
+                "death_time": [None],
+                "death_date": [None],
+                "death_time_precision": [None],
+                "death_source": [None],
+                "hospital_expire_flag": [hospital_expire_flag],
+                "dischtime": [dischtime],
+                "discharge_location": [discharge_location],
+                "date_of_death": [None],
+            },
+            schema={
+                "stay_id": pl.Int64,
+                "death_time": pl.Datetime("us"),
+                "death_date": pl.Date,
+                "death_time_precision": pl.Utf8,
+                "death_source": pl.Utf8,
+                "hospital_expire_flag": pl.Int32,
+                "dischtime": pl.Datetime("us"),
+                "discharge_location": pl.Utf8,
+                "date_of_death": pl.Datetime("us"),
+            },
+        )
+
+    def test_null_hospital_flag_without_death_evidence_is_null_for_windowed_mortality(self):
+        """Unknown windowed mortality outcome must not become a negative label."""
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location=None,
+                ),
+            }
+        )
+
+        assert labels["label"][0] is None
+
+    def test_eicu_death_discharge_location_is_death_evidence(self):
+        """eICU discharge_location == Death should override a missing death flag."""
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location="Death",
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 1
+
+    def test_windowed_mortality_uses_death_discharge_time_inside_prediction_window(self):
+        """Death-coded discharge time inside the target window should be positive."""
+        base = datetime(2020, 1, 1, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location="Death",
+                    dischtime=base.replace(day=2, hour=6),
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 1
+
+    def test_hospital_mortality_unknown_outcome_is_null(self):
+        """Unknown hospital mortality outcome should not silently become 0."""
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location=None,
+                ),
+            }
+        )
+
+        assert labels["label"][0] is None
+
+
 class TestWindowedMortalityLabels:
     """Tests for windowed mortality prediction (observation + prediction windows).
 
