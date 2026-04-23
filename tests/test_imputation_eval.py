@@ -393,6 +393,49 @@ class TestFromEncoderCheckpoint:
             dec_out = evaluator.decoder(enc_out)
         assert dec_out.shape == (2, 12, 10)
 
+    def test_smart_encoder_checkpoint_adapts_to_timestep_probe(self, tmp_path):
+        """SMART pooling=none checkpoints should produce (B, T, D) reconstructions."""
+        from slices.models.encoders import build_encoder
+
+        encoder = build_encoder(
+            "smart",
+            {
+                "d_input": 5,
+                "d_model": 8,
+                "n_layers": 1,
+                "n_heads": 2,
+                "d_ff": 16,
+                "max_seq_length": 12,
+                "pooling": "none",
+            },
+        )
+        ckpt = {
+            "encoder_state_dict": encoder.state_dict(),
+            "encoder_config": {
+                "name": "smart",
+                "d_input": 5,
+                "d_model": 8,
+                "n_layers": 1,
+                "n_heads": 2,
+                "d_ff": 16,
+                "max_seq_length": 12,
+                "pooling": "none",
+            },
+            "version": 3,
+        }
+        ckpt_path = tmp_path / "smart_encoder.pt"
+        torch.save(ckpt, ckpt_path)
+
+        evaluator = ImputationEvaluator.from_encoder_checkpoint(str(ckpt_path), d_input=5)
+        dummy = torch.randn(2, 12, 5)
+        mask = torch.ones_like(dummy, dtype=torch.bool)
+        with torch.no_grad():
+            enc_out = evaluator.encoder(dummy, mask=mask)
+            dec_out = evaluator.decoder(enc_out)
+
+        assert enc_out.shape == (2, 12, 8)
+        assert dec_out.shape == (2, 12, 5)
+
 
 class TestInit:
     """Tests for __init__ edge cases."""

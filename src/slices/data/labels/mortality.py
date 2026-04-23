@@ -38,7 +38,7 @@ class MortalityLabelBuilder(LabelBuilder):
           unknown outcomes as null
     """
 
-    SEMANTIC_VERSION = "2.2.0"
+    SEMANTIC_VERSION = "2.3.0"
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build mortality labels from stay and mortality data.
@@ -286,6 +286,48 @@ class MortalityLabelBuilder(LabelBuilder):
         return flag_death | location_death | timed_death
 
     @staticmethod
+    def _hospital_death_date_evidence_expr() -> pl.Expr:
+        """Return true when date-only death evidence supports in-hospital death.
+
+        MIMIC-IV ``patients.dod`` is post-discharge mortality evidence. It must
+        not by itself turn a hospital survivor into a hospital mortality label.
+        Date-only evidence is accepted for hospital mortality only when explicit
+        hospital death evidence exists, or when the hospital outcome flag is
+        unknown and the death date is not after hospital discharge.
+        """
+        flag_death = (pl.col("hospital_expire_flag") == 1).fill_null(False)
+        location_death = MortalityLabelBuilder._death_location_evidence_expr().fill_null(False)
+        flag_survivor = (pl.col("hospital_expire_flag") == 0).fill_null(False)
+        date_present = pl.col("death_date").is_not_null()
+        date_not_after_discharge = (
+            pl.col("dischtime").is_not_null()
+            & (pl.col("death_date") <= pl.col("dischtime").cast(pl.Date))
+        ).fill_null(False)
+
+        return date_present & (
+            flag_death
+            | location_death
+            | (pl.col("hospital_expire_flag").is_null() & ~flag_survivor & date_not_after_discharge)
+        )
+
+    @staticmethod
+    def _hospital_death_evidence_expr() -> pl.Expr:
+        """Return true for mortality evidence that supports hospital death."""
+        flag_death = (pl.col("hospital_expire_flag") == 1).fill_null(False)
+        location_death = MortalityLabelBuilder._death_location_evidence_expr().fill_null(False)
+        timestamp_death = pl.col("death_time").is_not_null()
+        date_death = MortalityLabelBuilder._hospital_death_date_evidence_expr()
+        return flag_death | location_death | timestamp_death | date_death
+
+    @staticmethod
+    def _known_hospital_survivor_expr() -> pl.Expr:
+        """Return true for explicit hospital survivors with no hospital-death evidence."""
+        return (
+            (pl.col("hospital_expire_flag") == 0)
+            & ~MortalityLabelBuilder._hospital_death_evidence_expr()
+        ).fill_null(False)
+
+    @staticmethod
     def _known_survivor_expr() -> pl.Expr:
         """Return true only for explicit survivor outcomes with no conflicting death evidence."""
         return (
@@ -320,13 +362,42 @@ class MortalityLabelBuilder(LabelBuilder):
             .otherwise(pl.lit(None))
         )
 
+    @staticmethod
+    def _hospital_effective_death_time_expr() -> pl.Expr:
+        """Use exact hospital death time, or death-coded discharge time fallback."""
+        discharge_death_time = (
+            pl.when(
+                MortalityLabelBuilder._hospital_death_evidence_expr()
+                & pl.col("death_date").is_null()
+                & pl.col("dischtime").is_not_null()
+            )
+            .then(pl.col("dischtime"))
+            .otherwise(pl.lit(None).cast(pl.Datetime("us")))
+        )
+        return pl.coalesce([pl.col("death_time"), discharge_death_time])
+
+    @staticmethod
+    def _hospital_effective_death_precision_expr() -> pl.Expr:
+        """Return the precision available for hospital mortality timing."""
+        effective_death_time = MortalityLabelBuilder._hospital_effective_death_time_expr()
+        return (
+            pl.when(effective_death_time.is_not_null())
+            .then(pl.lit("timestamp"))
+            .when(MortalityLabelBuilder._hospital_death_date_evidence_expr())
+            .then(pl.lit("date"))
+            .when(MortalityLabelBuilder._hospital_death_evidence_expr())
+            .then(pl.lit("unknown"))
+            .otherwise(pl.lit(None))
+        )
+
     def _build_hospital_mortality_with_obs(
         self, merged: pl.DataFrame, obs_hours: int
     ) -> pl.DataFrame:
         """Hospital mortality with observation window exclusion."""
         obs_end = pl.col("intime") + pl.duration(hours=obs_hours)
-        effective_death_time = self._effective_death_time_expr()
-        effective_precision = self._effective_death_precision_expr()
+        effective_death_time = self._hospital_effective_death_time_expr()
+        effective_precision = self._hospital_effective_death_precision_expr()
+        hospital_death_evidence = self._hospital_death_evidence_expr()
 
         # Observation windows are half-open: [intime, obs_end). Deaths exactly
         # at obs_end belong to the prediction period when gap_hours == 0.
@@ -355,9 +426,9 @@ class MortalityLabelBuilder(LabelBuilder):
                 "stay_id",
                 pl.when(died_during_obs)
                 .then(None)
-                .when(self._death_evidence_expr())
+                .when(hospital_death_evidence)
                 .then(1)
-                .when(self._known_survivor_expr())
+                .when(self._known_hospital_survivor_expr())
                 .then(0)
                 .otherwise(None)
                 .cast(pl.Int32)

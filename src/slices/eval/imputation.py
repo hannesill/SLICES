@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from slices.models.encoders import ObservationTransformerEncoder
+from slices.models.encoders import ObservationTransformerEncoder, SMARTEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,30 @@ class _ObsEncoderTimestepAdapter(nn.Module):
         # Average tokens per timestep (avoid div-by-zero)
         output = output / counts.clamp(min=1)
         return output
+
+
+class _SmartEncoderTimestepAdapter(nn.Module):
+    """Wrap SMART pooling=none output into timestep-level representations.
+
+    SMART returns ``(B, V, T, d_model)`` for SSL. The generic imputation probe
+    expects ``(B, T, d_model)`` so one decoder can reconstruct all features at
+    each timestep.
+    """
+
+    def __init__(self, encoder: SMARTEncoder) -> None:
+        super().__init__()
+        self.encoder = encoder
+
+    def get_output_dim(self) -> int:
+        return self.encoder.get_output_dim()
+
+    def forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
+        encoded = self.encoder(x, mask=mask, **kwargs)
+        if encoded.dim() == 4:
+            return encoded.mean(dim=1)
+        return encoded
 
 
 class ImputationEvaluator:
@@ -195,6 +219,8 @@ class ImputationEvaluator:
         # need scatter-back; obs_aware TransformerEncoder already outputs per-timestep)
         if isinstance(encoder, ObservationTransformerEncoder):
             encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
+        elif isinstance(encoder, SMARTEncoder):
+            encoder = _SmartEncoderTimestepAdapter(encoder)
 
         encoder = encoder.to(device).eval()
 
@@ -248,6 +274,8 @@ class ImputationEvaluator:
             seq_length = encoder_config.get("max_seq_length", 168)
             if isinstance(encoder, ObservationTransformerEncoder):
                 encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
+            elif isinstance(encoder, SMARTEncoder):
+                encoder = _SmartEncoderTimestepAdapter(encoder)
         else:
             raise ValueError(
                 "Checkpoint does not contain encoder_config. "

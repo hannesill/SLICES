@@ -193,7 +193,7 @@ if [[ -n "$REVISION" ]]; then
   fairness_args+=(--revision "$REVISION")
 fi
 export_args+=(--experiment-class "${fairness_classes[@]}")
-fairness_args+=(--experiment-class "${fairness_classes[@]}" --batch-size "$BATCH_SIZE_FAIRNESS" --device "$DEVICE_FAIRNESS")
+fairness_args+=(--experiment-class "${fairness_classes[@]}" --batch-size "$BATCH_SIZE_FAIRNESS" --device "$DEVICE_FAIRNESS" --force)
 
 warmup_cmd=(uv run python scripts/internal/run_experiments.py warmup --experiment-class "${warmup_classes[@]}")
 main_cmd=(uv run python scripts/internal/run_experiments.py run --experiment-class "${main_classes[@]}" --parallel "$PARALLEL_MAIN" "${run_args[@]}")

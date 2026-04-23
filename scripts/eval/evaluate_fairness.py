@@ -137,6 +137,28 @@ def _retry(fn, max_retries=3, base_delay=5):
             time.sleep(delay)
 
 
+def _run_config_filter_value(run, key: str):
+    config = dict(getattr(run, "config", {}) or {})
+    if key == "paradigm":
+        ssl_cfg = config.get("ssl") or {}
+        return config.get("paradigm") or ssl_cfg.get("name")
+    return config.get(key)
+
+
+def _run_matches_filter(run, key: str, tag_prefix: str, values: Optional[list[str]]) -> bool:
+    """Match a W&B run by config first, falling back to tags."""
+    if not values:
+        return True
+
+    allowed = {str(value) for value in values}
+    config_value = _run_config_filter_value(run, key)
+    if config_value is not None:
+        return str(config_value) in allowed
+
+    tags = set(getattr(run, "tags", []) or [])
+    return any(f"{tag_prefix}:{value}" in tags for value in allowed)
+
+
 def fetch_eval_runs(
     project: str,
     entity: Optional[str],
@@ -153,50 +175,21 @@ def fetch_eval_runs(
     path = f"{entity}/{project}" if entity else project
 
     filters: dict = {"state": "finished"}
-    tag_filters: list[str] = []
-
-    if experiment_classes and len(experiment_classes) == 1:
-        tag_filters.append(f"experiment_class:{experiment_classes[0]}")
-    if paradigms and len(paradigms) == 1:
-        tag_filters.append(f"paradigm:{paradigms[0]}")
-    if datasets and len(datasets) == 1:
-        tag_filters.append(f"dataset:{datasets[0]}")
-    if phases and len(phases) == 1:
-        tag_filters.append(f"phase:{phases[0]}")
-    if revisions and len(revisions) == 1:
-        tag_filters.append(f"revision:{revisions[0]}")
-
-    if tag_filters:
-        filters["$and"] = [{"tags": tag} for tag in tag_filters]
 
     log.info("Fetching runs from %s with filters: %s", path, json.dumps(filters, default=str))
     runs_iter = api.runs(path, filters=filters or {}, order="-created_at")
 
-    # Client-side filtering for multi-value filters
-    experiment_class_set = (
-        set(experiment_classes) if experiment_classes and len(experiment_classes) > 1 else None
-    )
-    paradigm_set = set(paradigms) if paradigms and len(paradigms) > 1 else None
-    dataset_set = set(datasets) if datasets and len(datasets) > 1 else None
-    phase_set = set(phases) if phases and len(phases) > 1 else None
-    revision_set = set(revisions) if revisions and len(revisions) > 1 else None
-
     runs = []
     for run in runs_iter:
-        tags = set(run.tags)
-
-        if experiment_class_set and not any(
-            f"experiment_class:{experiment_class}" in tags
-            for experiment_class in experiment_class_set
-        ):
+        if not _run_matches_filter(run, "experiment_class", "experiment_class", experiment_classes):
             continue
-        if paradigm_set and not any(f"paradigm:{p}" in tags for p in paradigm_set):
+        if not _run_matches_filter(run, "paradigm", "paradigm", paradigms):
             continue
-        if dataset_set and not any(f"dataset:{d}" in tags for d in dataset_set):
+        if not _run_matches_filter(run, "dataset", "dataset", datasets):
             continue
-        if phase_set and not any(f"phase:{p}" in tags for p in phase_set):
+        if not _run_matches_filter(run, "phase", "phase", phases):
             continue
-        if revision_set and not any(f"revision:{r}" in tags for r in revision_set):
+        if not _run_matches_filter(run, "revision", "revision", revisions):
             continue
 
         runs.append(run)
