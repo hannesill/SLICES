@@ -2433,6 +2433,41 @@ class TestExperimentRunnerWandbOverrides:
         assert "ablation:label-efficiency" in captured["kwargs"]["tags"]
         assert "ablation:transfer" in captured["kwargs"]["tags"]
 
+    def test_setup_wandb_logger_raises_clear_error_for_missing_entity(self, monkeypatch):
+        import wandb
+
+        import slices.training.utils as training_utils
+
+        class DummyWandbLogger:
+            def __init__(self, **kwargs):
+                self._entity = kwargs["entity"]
+
+            @property
+            def experiment(self):
+                if self._entity == "missing-team":
+                    raise wandb.errors.CommError("entity missing-team not found during upsertBucket")
+                raise AssertionError("unexpected entity")
+
+        monkeypatch.setattr(training_utils, "WandbLogger", DummyWandbLogger)
+
+        cfg = OmegaConf.create(
+            {
+                "output_dir": "outputs/smoke/supervised_miiv_mortality_24h",
+                "training": {"freeze_encoder": False},
+                "logging": {
+                    "use_wandb": True,
+                    "wandb_project": "slices-final",
+                    "wandb_entity": "missing-team",
+                    "run_name": "supervised_miiv_mortality_24h_seed42",
+                    "wandb_group": "supervised_miiv_mortality_24h",
+                    "wandb_tags": [],
+                },
+            }
+        )
+
+        with pytest.raises(training_utils.WandbEntityNotFoundError, match="W&B entity 'missing-team' could not be found"):
+            training_utils.setup_wandb_logger(cfg)
+
     def test_transfer_finetune_command_propagates_source_dataset(self):
         from scripts.internal.run_experiments import Run
 

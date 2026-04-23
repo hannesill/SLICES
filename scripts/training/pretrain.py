@@ -26,6 +26,7 @@ from slices.training.utils import (
     setup_pretrain_callbacks,
     setup_wandb_logger,
     validate_data_prerequisites,
+    WandbEntityNotFoundError,
 )
 
 # SSL -> compatible model encoder mappings
@@ -151,7 +152,11 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     callbacks = setup_pretrain_callbacks(cfg)
-    logger = setup_wandb_logger(cfg)
+    try:
+        logger = setup_wandb_logger(cfg)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        return
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
