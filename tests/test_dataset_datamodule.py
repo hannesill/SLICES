@@ -402,7 +402,8 @@ class TestICUDataset:
         assert "static" in sample
         assert "age" in sample["static"]
         assert "gender" in sample["static"]
-        assert "los_days" in sample["static"]
+        assert "los_days" not in sample["static"]
+        assert "los_days" in dataset.static_df.columns
 
     def test_normalize_without_train_indices_raises_error(self, mock_extracted_data):
         """Test that normalize=True without train_indices raises ValueError (Issue #4 fix).

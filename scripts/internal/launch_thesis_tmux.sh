@@ -20,6 +20,8 @@ DEVICE_FAIRNESS="${DEVICE_FAIRNESS:-auto}"
 INCLUDE_SMART_REFERENCE="${INCLUDE_SMART_REFERENCE:-1}"
 INCLUDE_TS2VEC_EXTENSION="${INCLUDE_TS2VEC_EXTENSION:-1}"
 INCLUDE_CAPACITY_STUDY="${INCLUDE_CAPACITY_STUDY:-1}"
+VALIDATE_FINAL_CORPUS="${VALIDATE_FINAL_CORPUS:-1}"
+EXPECTED_TOTAL_RUNS="${EXPECTED_TOTAL_RUNS:-2590}"
 RUN_EXPORT="${RUN_EXPORT:-1}"
 STATUS_INTERVAL="${STATUS_INTERVAL:-60}"
 RESULTS_DIR="${RESULTS_DIR:-results/${WANDB_PROJECT}_${REVISION}}"
@@ -55,10 +57,11 @@ else
     LAUNCH_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)"
   fi
 
-  if ! git -C "$REPO_ROOT" cat-file -e "$LAUNCH_COMMIT^{commit}" 2>/dev/null; then
+  if ! RESOLVED_LAUNCH_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify "$LAUNCH_COMMIT^{commit}" 2>/dev/null)"; then
     echo "LAUNCH_COMMIT is not available in this checkout: $LAUNCH_COMMIT" >&2
     exit 1
   fi
+  LAUNCH_COMMIT="$RESOLVED_LAUNCH_COMMIT"
 
   CURRENT_COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)"
   if [[ "$CURRENT_COMMIT" != "$LAUNCH_COMMIT" ]]; then
@@ -186,6 +189,58 @@ warmup_classes=("${main_classes[@]}")
 if [[ "$INCLUDE_SMART_REFERENCE" == "1" ]]; then
   warmup_classes+=(smart_external_reference)
 fi
+
+class_expected_count() {
+  case "$1" in
+    core_ssl_benchmark) echo 465 ;;
+    label_efficiency) echo 1155 ;;
+    cross_dataset_transfer) echo 120 ;;
+    hp_robustness) echo 150 ;;
+    capacity_study) echo 100 ;;
+    classical_baselines) echo 330 ;;
+    ts2vec_extension) echo 135 ;;
+    smart_external_reference) echo 135 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_final_corpus() {
+  if [[ "$VALIDATE_FINAL_CORPUS" != "1" ]]; then
+    echo "WARNING: final corpus validation disabled by VALIDATE_FINAL_CORPUS=$VALIDATE_FINAL_CORPUS." >&2
+    return 0
+  fi
+
+  local selected=("${main_classes[@]}" "${appendix_classes[@]}")
+  local seen=" "
+  local total=0
+  local class count
+
+  for class in "${selected[@]}"; do
+    case "$seen" in
+      *" $class "*)
+        echo "Duplicate experiment class in final corpus: $class" >&2
+        exit 1
+        ;;
+    esac
+    seen="${seen}${class} "
+    if ! count="$(class_expected_count "$class")"; then
+      echo "Unknown experiment class in final corpus: $class" >&2
+      exit 1
+    fi
+    total=$((total + count))
+  done
+
+  if (( total != EXPECTED_TOTAL_RUNS )); then
+    echo "Final corpus preflight failed: selected $total runs, expected $EXPECTED_TOTAL_RUNS." >&2
+    echo "Selected classes:${seen}" >&2
+    echo "Unset INCLUDE_* overrides for the thesis launch, or set VALIDATE_FINAL_CORPUS=0 only for exploratory runs." >&2
+    exit 1
+  fi
+
+  echo "Final corpus preflight: $total planned runs across ${#selected[@]} classes."
+}
+
+validate_final_corpus
 
 quote_cmd() {
   printf "%q " "$@"
