@@ -195,10 +195,13 @@ Run fairness after training:
 uv run python scripts/eval/evaluate_fairness.py \
   --project slices-thesis \
   --revision thesis-v1 \
-  --entity <entity>
+  --entity <entity> \
+  --force
 ```
 
-Revision filtering is mandatory to avoid mixing rerun corpora.
+Revision filtering is mandatory to avoid mixing rerun corpora. Use `--force`
+for final publication refreshes so old fairness summaries are replaced with
+current artifact/source and evaluation-setting metadata.
 
 ## Export
 
@@ -218,8 +221,8 @@ Aggregated metric columns include seed mean, standard deviation, min/max, and
 95% confidence intervals for finite seed values.
 
 Do not use publication escape hatches such as `--allow-incomplete`,
-`--allow-extraction-failures`, or `--allow-duplicate-fingerprints` for final
-tables.
+`--allow-extraction-failures`, `--allow-duplicate-fingerprints`, or
+`--allow-multiple-revisions` for final tables.
 
 ## Checkpoint Policy
 

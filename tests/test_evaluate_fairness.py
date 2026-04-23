@@ -5,6 +5,18 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from slices.eval.fairness_metadata import (
+    FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SOURCE_KEY,
+    FAIRNESS_CHECKPOINT_SOURCE_KEY,
+    FAIRNESS_MIN_SUBGROUP_SIZE_KEY,
+    FAIRNESS_PROTECTED_ATTRIBUTES_KEY,
+    FAIRNESS_SCHEMA_VERSION_KEY,
+    FAIRNESS_SCRIPT_VERSION,
+    FAIRNESS_SCRIPT_VERSION_KEY,
+    FAIRNESS_SUMMARY_SCHEMA_VERSION,
+    encode_protected_attributes,
+)
 
 
 def _binary_fairness_summary(attr: str, base: float = 0.7) -> dict[str, float]:
@@ -31,6 +43,28 @@ def _regression_fairness_summary(attr: str) -> dict[str, float]:
         f"{prefix}mse_gap": 0.4,
         f"{prefix}mae_gap": 0.2,
     }
+
+
+def _fresh_fairness_metadata(
+    protected_attributes: list[str],
+    min_subgroup_size: int = 50,
+    artifact_path: str = "outputs/run/checkpoints/last.ckpt",
+    artifact_source: str = "recorded_final",
+    checkpoint_source: str = "final",
+) -> dict[str, object]:
+    metadata = {
+        "_eval_checkpoint_source": (
+            checkpoint_source if checkpoint_source in {"best", "final"} else None
+        ),
+        FAIRNESS_SCHEMA_VERSION_KEY: FAIRNESS_SUMMARY_SCHEMA_VERSION,
+        FAIRNESS_SCRIPT_VERSION_KEY: FAIRNESS_SCRIPT_VERSION,
+        FAIRNESS_ARTIFACT_PATH_KEY: artifact_path,
+        FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
+        FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
+        FAIRNESS_PROTECTED_ATTRIBUTES_KEY: encode_protected_attributes(protected_attributes),
+        FAIRNESS_MIN_SUBGROUP_SIZE_KEY: min_subgroup_size,
+    }
+    return {key: value for key, value in metadata.items() if value is not None}
 
 
 def test_default_phases_include_baseline():
@@ -108,6 +142,36 @@ def test_resolve_evaluation_artifact_supports_xgboost(tmp_path):
     assert source == "xgboost_model"
 
 
+def test_build_fairness_summary_metadata_stamps_artifact_and_settings(tmp_path):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    ckpt_path = tmp_path / "outputs" / "run" / "checkpoints" / "best.ckpt"
+    run = SimpleNamespace(
+        config={"paradigm": "mae", "output_dir": "outputs/run"},
+        summary_metrics={
+            "_eval_checkpoint_source": "best",
+            "_best_ckpt_path": "outputs/run/checkpoints/best.ckpt",
+        },
+    )
+
+    metadata = mod.build_fairness_summary_metadata(
+        run,
+        ckpt_path,
+        "recorded_best",
+        ["gender", "age_group", "race"],
+        50,
+    )
+
+    assert metadata[FAIRNESS_ARTIFACT_PATH_KEY] == str(ckpt_path)
+    assert metadata[FAIRNESS_ARTIFACT_SOURCE_KEY] == "recorded_best"
+    assert metadata[FAIRNESS_CHECKPOINT_SOURCE_KEY] == "best"
+    assert metadata[FAIRNESS_SCRIPT_VERSION_KEY] == FAIRNESS_SCRIPT_VERSION
+    assert metadata[FAIRNESS_PROTECTED_ATTRIBUTES_KEY] == encode_protected_attributes(
+        ["gender", "age_group", "race"]
+    )
+    assert metadata[FAIRNESS_MIN_SUBGROUP_SIZE_KEY] == 50
+
+
 def test_has_fairness_metrics_requires_requested_attribute_completeness():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
@@ -116,6 +180,7 @@ def test_has_fairness_metrics_requires_requested_attribute_completeness():
         summary_metrics={
             **_binary_fairness_summary("gender", 0.71),
             **_binary_fairness_summary("age_group", 0.69),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
         },
     )
 
@@ -131,6 +196,7 @@ def test_has_fairness_metrics_ignores_race_for_eicu():
         summary_metrics={
             **_binary_fairness_summary("gender", 0.71),
             **_binary_fairness_summary("age_group", 0.69),
+            **_fresh_fairness_metadata(["gender", "age_group", "race"]),
         },
     )
 
@@ -156,12 +222,42 @@ def test_has_fairness_metrics_accepts_written_nan_summary_values():
 
     summary = _binary_fairness_summary("gender")
     summary["fairness/gender/worst_group_auroc"] = float("nan")
+    summary.update(_fresh_fairness_metadata(["gender"]))
     run = SimpleNamespace(
         config={"dataset": "miiv", "task": {"task_type": "binary"}},
         summary_metrics=summary,
     )
 
     assert mod.has_fairness_metrics(run, ["gender"]) is True
+
+
+def test_has_fairness_metrics_rejects_complete_but_unstamped_summaries():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics=_binary_fairness_summary("gender"),
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"]) is False
+
+
+def test_has_fairness_metrics_rejects_stale_metadata_settings():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender"),
+            **_fresh_fairness_metadata(["gender"], min_subgroup_size=25),
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"], min_subgroup_size=50) is False
+    assert any(
+        "min subgroup size mismatch" in issue
+        for issue in mod.fairness_summary_metadata_issues(run, ["gender"], 50)
+    )
 
 
 def test_has_fairness_metrics_requires_regression_metric_family():
@@ -175,6 +271,7 @@ def test_has_fairness_metrics_requires_regression_metric_family():
         summary_metrics={
             **_regression_fairness_summary("gender"),
             **_regression_fairness_summary("age_group"),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
         },
     )
     partial = SimpleNamespace(
@@ -186,6 +283,7 @@ def test_has_fairness_metrics_requires_regression_metric_family():
             "fairness/gender/n_valid_groups": 2,
             "fairness/gender/worst_group_mse": 2.0,
             **_regression_fairness_summary("age_group"),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
         },
     )
 

@@ -12,11 +12,17 @@ to W&B summaries and the parquet exports produced by `scripts/export_results.py`
 - The standalone script is revision-scoped. Pass `--revision <name>` so reruns
   do not get mixed together.
 - Default benchmark fairness corpus:
-  - Internal experiment groups `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `7p`,
-    `10`, `11`, `12`, `13`
+  - Experiment classes `core_ssl_benchmark`, `label_efficiency`,
+    `cross_dataset_transfer`, `hp_robustness`, `capacity_study`,
+    `classical_baselines`, `ts2vec_extension`, and
+    `smart_external_reference`
   - Phases `finetune`, `supervised`, and `baseline`
 - The script re-runs inference from the checkpoint provenance recorded by the
   original training run, then writes fairness metrics back to that same W&B run.
+- Existing fairness summaries are skipped only when they contain current
+  metadata for the evaluated artifact path/source, checkpoint provenance,
+  script version, protected attributes, and minimum subgroup size. Otherwise
+  they are recomputed.
 
 ## Protected Attributes
 
@@ -80,6 +86,9 @@ For regression tasks it logs:
 - `per_group_mae`
 - `per_group_r2`
 - `worst_group_mse`
+- `worst_group_mae`
+- `mse_gap`
+- `mae_gap`
 - `group_sizes`
 - `group_sample_sizes`
 
@@ -87,13 +96,15 @@ For regression tasks it logs:
 
 `scripts/eval/evaluate_fairness.py`:
 
-1. Fetches finished W&B runs matching the requested sprint/paradigm/dataset
-   filters.
+1. Fetches finished W&B runs matching the requested class/paradigm/dataset,
+   phase, and revision filters.
 2. Requires a `revision` tag so different reruns are not mixed.
 3. Resolves checkpoint provenance from the run summary instead of heuristically
    guessing from disk.
 4. Re-runs test inference.
 5. Flattens the nested report into W&B-safe `fairness/*` keys.
+6. Writes `_fairness_*` metadata that identifies the artifact and evaluation
+   settings used to produce the summary.
 
 ### 4. Canonical result export
 
@@ -108,6 +119,12 @@ summary metrics. Publication validation requires dataset/task-appropriate
 fairness summaries for downstream rows: gender and age for all datasets, and
 race for MIMIC/combined rows. eICU race is not required.
 
+Publication validation also requires fresh `_fairness_*` metadata. Missing
+metadata, old script/schema versions, changed protected attributes, changed
+minimum subgroup size, artifact-source mismatches, and artifact-path mismatches
+are treated as validation failures unless `--allow-incomplete` is passed for an
+exploratory export.
+
 ## Design Decisions
 
 1. Threshold-dependent classification fairness metrics use a fixed threshold of
@@ -121,13 +138,16 @@ race for MIMIC/combined rows. eICU race is not required.
 
 ## How To Refresh Fairness Results
 
-1. Run the fairness sweep for a specific revision:
+1. Run the fairness sweep for a specific revision. For final publication, force
+   recomputation so stale summaries are replaced even if old `fairness/*` keys
+   exist:
 
 ```bash
 uv run python scripts/eval/evaluate_fairness.py \
   --project slices-thesis \
   --revision thesis-v1 \
-  --entity <entity>
+  --entity <entity> \
+  --force
 ```
 
 2. Re-export the result tables:
@@ -137,6 +157,54 @@ uv run python scripts/export_results.py \
   --project slices-thesis \
   --revision thesis-v1 \
   --entity <entity>
+```
+
+Do not pass `--allow-incomplete`, `--allow-extraction-failures`,
+`--allow-duplicate-fingerprints`, or `--allow-multiple-revisions` for final
+publication exports. Those flags are for exploratory cleanup only.
+
+## Final Publication Sequence
+
+After Bucket 1 and Bucket 2 are merged into the branch used for final reruns:
+
+1. Set the final revision name used by the launcher and export commands:
+
+```bash
+export REVISION=thesis-v1
+```
+
+2. Run or resume the final training corpus with the project launcher for that
+   revision. Confirm W&B contains the expected finished runs for the class-based
+   corpus.
+
+3. Recompute fairness summaries with metadata:
+
+```bash
+uv run python scripts/eval/evaluate_fairness.py \
+  --project slices-thesis \
+  --revision "$REVISION" \
+  --entity <entity> \
+  --force
+```
+
+4. Export publication tables:
+
+```bash
+uv run python scripts/export_results.py \
+  --project slices-thesis \
+  --revision "$REVISION" \
+  --entity <entity> \
+  --output-dir results
+```
+
+5. Run the publication reporting checks:
+
+```bash
+uv run pytest \
+  tests/test_metrics.py \
+  tests/test_export_results.py \
+  tests/test_fairness_evaluator.py \
+  tests/test_evaluate_fairness.py
 ```
 
 ## Source Of Truth

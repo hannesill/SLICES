@@ -51,6 +51,24 @@ from typing import Any, Optional
 
 import torch
 from slices.eval.fairness_evaluator import flatten_fairness_report
+from slices.eval.fairness_metadata import (
+    FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SOURCE_KEY,
+    FAIRNESS_CHECKPOINT_SOURCE_KEY,
+    FAIRNESS_CLEAR_PREFIXES,
+    FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
+    FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES,
+    FAIRNESS_MIN_SUBGROUP_SIZE_KEY,
+    FAIRNESS_PROTECTED_ATTRIBUTES_KEY,
+    FAIRNESS_SCHEMA_VERSION_KEY,
+    FAIRNESS_SCRIPT_VERSION,
+    FAIRNESS_SCRIPT_VERSION_KEY,
+    FAIRNESS_SUMMARY_SCHEMA_VERSION,
+    canonical_artifact_id,
+    decode_protected_attributes,
+    encode_protected_attributes,
+    normalize_protected_attributes,
+)
 
 log = logging.getLogger("evaluate_fairness")
 
@@ -69,7 +87,7 @@ DEFAULT_EXPERIMENT_CLASSES = [
     "smart_external_reference",
 ]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
-DEFAULT_PROTECTED_ATTRIBUTES = ["gender", "age_group", "race"]
+DEFAULT_PROTECTED_ATTRIBUTES = FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES
 THESIS_TASKS = {
     "mortality_24h",
     "mortality_hospital",
@@ -221,11 +239,144 @@ def _required_fairness_metrics_for_run(run) -> list[str]:
     return BINARY_FAIRNESS_REQUIRED_METRICS
 
 
-def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
+def _expected_fairness_artifact_source(run) -> str | None:
+    """Return the artifact-source metadata expected for a run."""
+    paradigm = str((run.config or {}).get("paradigm", "")).lower()
+    if paradigm == "xgboost":
+        return "xgboost_model"
+
+    eval_source = (run.summary_metrics or {}).get("_eval_checkpoint_source")
+    if eval_source == "best":
+        return "recorded_best"
+    if eval_source == "final":
+        return "recorded_final"
+    return None
+
+
+def _expected_fairness_checkpoint_source(run) -> str | None:
+    """Return checkpoint-provenance metadata expected for a run."""
+    paradigm = str((run.config or {}).get("paradigm", "")).lower()
+    if paradigm == "xgboost":
+        return "xgboost_model"
+    source = (run.summary_metrics or {}).get("_eval_checkpoint_source")
+    return str(source) if source in {"best", "final"} else None
+
+
+def _expected_fairness_artifact_id(run) -> str | None:
+    """Return expected evaluated-artifact identity when it can be inferred."""
+    config = run.config or {}
+    summary = run.summary_metrics or {}
+    output_dir = config.get("output_dir", "")
+    paradigm = str(config.get("paradigm", "")).lower()
+
+    if paradigm == "xgboost":
+        if not output_dir:
+            return None
+        return canonical_artifact_id(Path(output_dir) / "xgboost_model.json")
+
+    eval_source = summary.get("_eval_checkpoint_source")
+    if eval_source == "best":
+        best_path = summary.get("_best_ckpt_path")
+        return canonical_artifact_id(best_path) if best_path else None
+    if eval_source == "final" and output_dir:
+        return canonical_artifact_id(Path(output_dir) / "checkpoints" / "last.ckpt")
+    return None
+
+
+def build_fairness_summary_metadata(
+    run,
+    artifact_path: Path,
+    artifact_source: str,
+    protected_attributes: list[str],
+    min_subgroup_size: int,
+) -> dict[str, Any]:
+    """Build versioned metadata that makes fairness summaries auditable."""
+    checkpoint_source = _expected_fairness_checkpoint_source(run) or artifact_source
+    return {
+        FAIRNESS_SCHEMA_VERSION_KEY: FAIRNESS_SUMMARY_SCHEMA_VERSION,
+        FAIRNESS_SCRIPT_VERSION_KEY: FAIRNESS_SCRIPT_VERSION,
+        FAIRNESS_ARTIFACT_PATH_KEY: str(artifact_path),
+        FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
+        FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
+        FAIRNESS_PROTECTED_ATTRIBUTES_KEY: encode_protected_attributes(protected_attributes),
+        FAIRNESS_MIN_SUBGROUP_SIZE_KEY: int(min_subgroup_size),
+    }
+
+
+def fairness_summary_metadata_issues(
+    run,
+    protected_attributes: list[str],
+    min_subgroup_size: int = FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
+) -> list[str]:
+    """Return freshness problems for existing fairness summary metadata."""
+    summary = run.summary_metrics or {}
+    issues: list[str] = []
+
+    if summary.get(FAIRNESS_SCHEMA_VERSION_KEY) != FAIRNESS_SUMMARY_SCHEMA_VERSION:
+        issues.append("missing or stale fairness schema version")
+    if summary.get(FAIRNESS_SCRIPT_VERSION_KEY) != FAIRNESS_SCRIPT_VERSION:
+        issues.append("missing or stale fairness script version")
+
+    actual_attrs = decode_protected_attributes(summary.get(FAIRNESS_PROTECTED_ATTRIBUTES_KEY))
+    expected_attrs = normalize_protected_attributes(protected_attributes)
+    if actual_attrs != expected_attrs:
+        issues.append(
+            f"protected attributes mismatch: expected={expected_attrs}, actual={actual_attrs}"
+        )
+
+    try:
+        actual_min_subgroup_size = int(float(summary.get(FAIRNESS_MIN_SUBGROUP_SIZE_KEY)))
+    except (TypeError, ValueError):
+        actual_min_subgroup_size = None
+    if actual_min_subgroup_size != int(min_subgroup_size):
+        issues.append(
+            "min subgroup size mismatch: "
+            f"expected={int(min_subgroup_size)}, actual={actual_min_subgroup_size}"
+        )
+
+    expected_artifact_source = _expected_fairness_artifact_source(run)
+    actual_artifact_source = summary.get(FAIRNESS_ARTIFACT_SOURCE_KEY)
+    if expected_artifact_source is not None and actual_artifact_source != expected_artifact_source:
+        issues.append(
+            "artifact source mismatch: "
+            f"expected={expected_artifact_source}, actual={actual_artifact_source}"
+        )
+
+    expected_checkpoint_source = _expected_fairness_checkpoint_source(run)
+    actual_checkpoint_source = summary.get(FAIRNESS_CHECKPOINT_SOURCE_KEY)
+    if (
+        expected_checkpoint_source is not None
+        and actual_checkpoint_source != expected_checkpoint_source
+    ):
+        issues.append(
+            "checkpoint source mismatch: "
+            f"expected={expected_checkpoint_source}, actual={actual_checkpoint_source}"
+        )
+
+    actual_artifact_id = canonical_artifact_id(summary.get(FAIRNESS_ARTIFACT_PATH_KEY))
+    expected_artifact_id = _expected_fairness_artifact_id(run)
+    if not actual_artifact_id:
+        issues.append("missing fairness artifact path")
+    elif expected_artifact_id is not None and actual_artifact_id != expected_artifact_id:
+        issues.append(
+            "artifact path mismatch: "
+            f"expected={expected_artifact_id}, actual={actual_artifact_id}"
+        )
+
+    return issues
+
+
+def has_fairness_metrics(
+    run,
+    protected_attributes: list[str],
+    min_subgroup_size: int = FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
+) -> bool:
     """Check whether all requested dataset-appropriate fairness keys exist.
 
     Uses ``summary_metrics`` (populated from the batch query) instead of
-    ``summary._json_dict`` which triggers a per-run GraphQL reload.
+    ``summary._json_dict`` which triggers a per-run GraphQL reload. Existing
+    summaries must also carry current metadata so stale fairness outputs are
+    recomputed instead of skipped.
     """
     try:
         sm = run.summary_metrics or {}
@@ -238,7 +389,7 @@ def has_fairness_metrics(run, protected_attributes: list[str]) -> bool:
             for metric_name in required_metrics:
                 if not _has_summary_value(sm, f"{prefix}{metric_name}"):
                     return False
-        return True
+        return not fairness_summary_metadata_issues(run, protected_attributes, min_subgroup_size)
     except Exception:
         return False
 
@@ -296,7 +447,7 @@ def write_fairness_to_wandb(
             except (TypeError, ValueError):
                 existing_summary = dict(getattr(run.summary, "_json_dict", {}) or {})
             for key in existing_summary:
-                if key.startswith("fairness/") and key not in fairness_flat:
+                if key.startswith(FAIRNESS_CLEAR_PREFIXES) and key not in fairness_flat:
                     run.summary[key] = None
         run.summary.update(fairness_flat)
         run.summary.save()
@@ -698,7 +849,10 @@ def parse_args() -> argparse.Namespace:
         help=f"Attributes to evaluate (default: {DEFAULT_PROTECTED_ATTRIBUTES})",
     )
     parser.add_argument(
-        "--min-subgroup-size", type=int, default=50, help="Min patients per subgroup"
+        "--min-subgroup-size",
+        type=int,
+        default=FAIRNESS_DEFAULT_MIN_SUBGROUP_SIZE,
+        help="Min patients per subgroup",
     )
     parser.add_argument("--dry-run", action="store_true", help="List runs without processing")
     parser.add_argument(
@@ -782,10 +936,18 @@ def main() -> None:
     # Filter out runs that already have fairness metrics (unless --force)
     if args.skip_existing and not args.force:
         before = len(runs)
-        runs = [r for r in runs if not has_fairness_metrics(r, args.protected_attributes)]
+        runs = [
+            r
+            for r in runs
+            if not has_fairness_metrics(
+                r,
+                args.protected_attributes,
+                args.min_subgroup_size,
+            )
+        ]
         skipped = before - len(runs)
         if skipped:
-            log.info("Skipped %d runs with existing fairness metrics.", skipped)
+            log.info("Skipped %d runs with fresh existing fairness metrics.", skipped)
         if not runs:
             log.info("No pending runs after --skip-existing filtering.")
             return
@@ -907,6 +1069,15 @@ def main() -> None:
 
             # 4. Flatten and write back
             fairness_flat = flatten_fairness_report(report)
+            fairness_flat.update(
+                build_fairness_summary_metadata(
+                    run,
+                    artifact_path,
+                    artifact_source,
+                    args.protected_attributes,
+                    args.min_subgroup_size,
+                )
+            )
             run_path = (
                 f"{args.entity}/{args.project}/{run.id}"
                 if args.entity
