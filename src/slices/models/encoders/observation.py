@@ -210,7 +210,11 @@ class ObservationTransformerEncoder(BaseEncoder):
             (B, N, d_model) encoded tokens.
         """
         # Convert to PyTorch convention: True = ignore
-        key_padding_mask = ~padding_mask
+        key_padding_mask = ~padding_mask.to(dtype=torch.bool)
+        all_masked = key_padding_mask.all(dim=1)
+        if all_masked.any():
+            key_padding_mask = key_padding_mask.clone()
+            key_padding_mask[all_masked, 0] = False
 
         x = tokens
         for layer in self.layers:

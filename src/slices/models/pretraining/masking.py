@@ -102,27 +102,21 @@ def create_timestep_mask(
     Returns:
         ssl_mask: (B, T) bool mask, True = visible, False = masked.
     """
-    rand_vals = torch.rand(batch_size, n_timesteps, device=device)
-    ssl_mask = rand_vals >= mask_ratio  # True = visible
-
     if valid_timestep_mask is None:
         valid_timestep_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
     else:
         valid_timestep_mask = valid_timestep_mask.to(device=device, dtype=torch.bool)
 
-    # Empty timesteps are not eligible SSL tokens; mark them visible so they
-    # are excluded from masked-token accounting and downstream losses.
-    ssl_mask = ssl_mask | (~valid_timestep_mask)
+    ssl_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    for b in range(batch_size):
+        valid_idx = valid_timestep_mask[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+        n_masked = _masked_timestep_budget(n_valid, mask_ratio)
+        if n_masked == 0:
+            continue
 
-    # Ensure at least 1 visible eligible timestep per sample
-    n_visible = (ssl_mask & valid_timestep_mask).sum(dim=1)  # (B,)
-    has_valid = valid_timestep_mask.any(dim=1)
-    needs_fix = (n_visible == 0) & has_valid
-    if needs_fix.any():
-        for b in range(batch_size):
-            if needs_fix[b]:
-                first_valid = valid_timestep_mask[b].nonzero(as_tuple=True)[0][0]
-                ssl_mask[b, first_valid] = True
+        masked_ordinals = torch.randperm(n_valid, device=device)[:n_masked]
+        ssl_mask[b, valid_idx[masked_ordinals]] = False
 
     return ssl_mask
 

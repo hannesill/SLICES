@@ -65,6 +65,43 @@ class TestJEPABlockMasking:
         assert torch.all(ssl_mask[~valid_timestep_mask])
 
 
+class TestSharedTimestepMaskBudget:
+    """Core SSL objectives should share the same per-sample timestep budget."""
+
+    @pytest.mark.parametrize("mask_ratio", [0.3, 0.5, 0.75])
+    def test_random_and_block_masks_share_integer_budget(self, mask_ratio):
+        from slices.models.pretraining.masking import (
+            create_block_timestep_mask,
+            create_timestep_mask,
+        )
+
+        B, T = 24, 24
+        valid_timestep_mask = torch.zeros(B, T, dtype=torch.bool)
+        for b, n_valid in enumerate(range(1, B + 1)):
+            valid_timestep_mask[b, :n_valid] = True
+
+        random_mask = create_timestep_mask(
+            B,
+            T,
+            mask_ratio,
+            torch.device("cpu"),
+            valid_timestep_mask=valid_timestep_mask,
+        )
+        block_mask = create_block_timestep_mask(
+            B,
+            T,
+            mask_ratio,
+            torch.device("cpu"),
+            n_blocks=3,
+            valid_timestep_mask=valid_timestep_mask,
+        )
+
+        random_masked = ((~random_mask) & valid_timestep_mask).sum(dim=1)
+        block_masked = ((~block_mask) & valid_timestep_mask).sum(dim=1)
+        assert random_masked.tolist() == block_masked.tolist()
+        assert torch.all(random_mask[~valid_timestep_mask])
+
+
 # =============================================================================
 # Predictor tests
 # =============================================================================

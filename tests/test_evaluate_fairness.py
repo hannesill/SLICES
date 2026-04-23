@@ -4,6 +4,7 @@ import importlib
 import sys
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_SHA256_KEY,
@@ -394,3 +395,99 @@ def test_filter_thesis_task_runs_drops_non_thesis_tasks():
     extension = SimpleNamespace(config={"task": {"task_name": "sepsis"}})
 
     assert mod.filter_thesis_task_runs([main, extension]) == [main]
+
+
+def test_fairness_matrix_coverage_accepts_complete_scoped_corpus(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    export_mod = importlib.import_module("scripts.export_results")
+    row = {
+        "experiment_class": "core_ssl_benchmark",
+        "experiment_type": "core_ssl_benchmark",
+        "experiment_subtype": None,
+        "paradigm": "mae",
+        "dataset": "miiv",
+        "task": "mortality_24h",
+        "protocol": "B",
+        "label_fraction": 1.0,
+        "model_size": "default",
+        "source_dataset": None,
+        "phase": "finetune",
+        "upstream_pretrain_lr": None,
+        "upstream_pretrain_mask_ratio": None,
+        "seed": 42,
+    }
+    monkeypatch.setattr(export_mod, "build_expected_matrix_df", lambda **_: pd.DataFrame([row]))
+    run = SimpleNamespace(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "paradigm": "mae",
+            "dataset": "miiv",
+            "phase": "finetune",
+            "protocol": "B",
+            "seed": 42,
+            "task": {"task_name": "mortality_24h"},
+        },
+        tags=[],
+    )
+
+    issues = mod.fairness_matrix_coverage_issues(
+        [run],
+        experiment_classes=["core_ssl_benchmark"],
+        paradigms=None,
+        datasets=None,
+        phases=["finetune"],
+    )
+
+    assert issues == []
+
+
+def test_fairness_matrix_coverage_flags_missing_scoped_rows(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    export_mod = importlib.import_module("scripts.export_results")
+    expected = {
+        "experiment_class": "core_ssl_benchmark",
+        "experiment_type": "core_ssl_benchmark",
+        "experiment_subtype": None,
+        "paradigm": "mae",
+        "dataset": "miiv",
+        "task": "mortality_24h",
+        "protocol": "B",
+        "label_fraction": 1.0,
+        "model_size": "default",
+        "source_dataset": None,
+        "phase": "finetune",
+        "upstream_pretrain_lr": None,
+        "upstream_pretrain_mask_ratio": None,
+        "seed": 42,
+    }
+    monkeypatch.setattr(
+        export_mod, "build_expected_matrix_df", lambda **_: pd.DataFrame([expected])
+    )
+
+    issues = mod.fairness_matrix_coverage_issues(
+        [],
+        experiment_classes=["core_ssl_benchmark"],
+        paradigms=None,
+        datasets=None,
+        phases=["finetune"],
+    )
+
+    assert any("missing 1/1 expected downstream matrix rows" in issue for issue in issues)
+
+
+def test_validate_evaluation_artifact_digest_rejects_stale_local_file(tmp_path):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    artifact = tmp_path / "outputs" / "run" / "checkpoints" / "last.ckpt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("local stale artifact")
+    run = SimpleNamespace(
+        id="run",
+        config={"paradigm": "mae", "output_dir": "outputs/run"},
+        summary_metrics={
+            "_eval_checkpoint_source": "final",
+            EVAL_ARTIFACT_SHA256_KEY: "logged-digest",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        mod.validate_evaluation_artifact_digest(run, artifact)

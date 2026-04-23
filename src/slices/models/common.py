@@ -66,7 +66,8 @@ def apply_pooling(
             lengths = padding_mask.sum(dim=1)
             batch_idx = torch.arange(x.size(0), device=x.device)
             last_idx = (lengths - 1).clamp(min=0)
-            return x[batch_idx, last_idx, :]
+            pooled = x[batch_idx, last_idx, :]
+            return torch.where(lengths.unsqueeze(-1) > 0, pooled, torch.zeros_like(pooled))
         else:
             return x[:, -1, :]
 
@@ -84,7 +85,12 @@ def apply_pooling(
         if padding_mask is not None:
             mask_expanded = padding_mask.unsqueeze(-1)
             x_masked = x.masked_fill(~mask_expanded, float("-inf"))
-            return x_masked.max(dim=1)[0]
+            pooled = x_masked.max(dim=1)[0]
+            all_empty = ~padding_mask.any(dim=1)
+            if all_empty.any():
+                pooled = pooled.clone()
+                pooled[all_empty] = 0
+            return pooled
         else:
             return x.max(dim=1)[0]
 

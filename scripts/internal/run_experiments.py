@@ -969,6 +969,13 @@ def _validate_clean_final_launch_state(launch_commit: str) -> str | None:
     return None
 
 
+def _validate_wandb_online_mode() -> str | None:
+    mode = os.environ.get("WANDB_MODE")
+    if mode and mode.lower() != "online":
+        return f"final run/retry requires WANDB_MODE to be unset or 'online', got {mode!r}"
+    return None
+
+
 def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -> None:
     """Require auditable provenance for direct final run/retry invocations."""
     if args.command not in {"run", "retry"}:
@@ -989,6 +996,10 @@ def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -
         parser.error(
             "final run/retry requires --launch-commit or SLICES_LAUNCH_COMMIT " "for W&B provenance"
         )
+
+    wandb_mode_error = _validate_wandb_online_mode()
+    if wandb_mode_error:
+        parser.error(wandb_mode_error)
 
     error = _validate_clean_final_launch_state(str(launch_commit))
     if error:
