@@ -35,7 +35,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from slices.constants import THESIS_TASKS
+from slices.constants import (
+    FULL_FINETUNE_PROTOCOL,
+    THESIS_TASKS,
+    downstream_protocol_from_freeze,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -120,8 +124,13 @@ LOG_DIR = Path("logs/runner")
 LAUNCH_IDENTITY_FILE = ".runner_launch_identity.json"
 LAUNCH_IDENTITY_KEYS = ("revision", "wandb_project", "wandb_entity", "launch_commit")
 
-PROTO_A = {"freeze_encoder": True, "max_epochs": 50, "patience": 10, "lr": 1e-4}
-PROTO_B = {"freeze_encoder": False, "max_epochs": 100, "patience": 10, "lr": 3e-4}
+LINEAR_PROBE_SETTINGS = {"freeze_encoder": True, "max_epochs": 50, "patience": 10, "lr": 1e-4}
+FULL_FINETUNE_SETTINGS = {
+    "freeze_encoder": False,
+    "max_epochs": 100,
+    "patience": 10,
+    "lr": 3e-4,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -166,16 +175,16 @@ class Run:
 
     @property
     def protocol(self) -> str | None:
-        if self.freeze_encoder is True:
-            return "A"
-        if self.freeze_encoder is False or self.run_type in {"supervised", "gru_d", "xgboost"}:
-            return "B"
+        protocol = downstream_protocol_from_freeze(self.freeze_encoder)
+        if protocol is not None:
+            return protocol
+        if self.run_type in {"supervised", "gru_d", "xgboost"}:
+            return FULL_FINETUNE_PROTOCOL
         return None
 
     @property
     def protocol_selector(self) -> str | None:
-        protocol = self.protocol
-        return protocol.lower() if protocol is not None else None
+        return self.protocol
 
     def build_command(self, runs_by_id: dict[str, "Run"]) -> list[str]:
         """Build the subprocess command for this run."""
@@ -248,9 +257,9 @@ class Run:
             cmd.extend(
                 [
                     "training.freeze_encoder=true",
-                    f"training.max_epochs={PROTO_A['max_epochs']}",
-                    f"training.early_stopping_patience={PROTO_A['patience']}",
-                    f"optimizer.lr={PROTO_A['lr']}",
+                    f"training.max_epochs={LINEAR_PROBE_SETTINGS['max_epochs']}",
+                    f"training.early_stopping_patience={LINEAR_PROBE_SETTINGS['patience']}",
+                    f"optimizer.lr={LINEAR_PROBE_SETTINGS['lr']}",
                     "task.head_type=linear",
                     "task.hidden_dims=[]",
                     "task.dropout=0.0",
@@ -260,9 +269,9 @@ class Run:
             cmd.extend(
                 [
                     "training.freeze_encoder=false",
-                    f"training.max_epochs={PROTO_B['max_epochs']}",
-                    f"training.early_stopping_patience={PROTO_B['patience']}",
-                    f"optimizer.lr={PROTO_B['lr']}",
+                    f"training.max_epochs={FULL_FINETUNE_SETTINGS['max_epochs']}",
+                    f"training.early_stopping_patience={FULL_FINETUNE_SETTINGS['patience']}",
+                    f"optimizer.lr={FULL_FINETUNE_SETTINGS['lr']}",
                 ]
             )
         if self.label_fraction < 1.0:

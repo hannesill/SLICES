@@ -1679,8 +1679,8 @@ class TestExporterClassMetadata:
         assert row["source_dataset"] == "miiv"
         assert row["experiment_class"] == "cross_dataset_transfer"
 
-    def test_extract_run_assigns_protocol_b_to_xgboost_baselines(self):
-        """XGBoost baselines must align with the Protocol-B comparison family."""
+    def test_extract_run_assigns_full_finetune_protocol_to_xgboost_baselines(self):
+        """XGBoost baselines must align with the full-finetune comparison family."""
         from scripts.export_results import extract_run
 
         run = DummyWandbRun(
@@ -1696,7 +1696,7 @@ class TestExporterClassMetadata:
             name="s11_xgboost_miiv_mortality_24h_seed42",
         )
 
-        assert extract_run(run, [])["protocol"] == "B"
+        assert extract_run(run, [])["protocol"] == "full_finetune"
 
     def test_xgboost_wandb_tags_include_revision_scope(self):
         """XGBoost runs must be visible to revision-scoped export and fairness jobs."""
@@ -1793,7 +1793,7 @@ class TestExporterClassMetadata:
                     "dataset": "miiv",
                     "task": "mortality_24h",
                     "seed": seed,
-                    "protocol": "B",
+                    "protocol": "full_finetune",
                     "label_fraction": 1.0,
                     "model_size": "default",
                     "source_dataset": None,
@@ -2462,7 +2462,7 @@ class TestExperimentRunnerWandbOverrides:
         cmd = finetune.build_command({pretrain.id: pretrain, finetune.id: finetune})
         assert "+source_dataset=miiv" in cmd
 
-    def test_protocol_a_finetune_command_uses_strict_linear_probe(self):
+    def test_linear_probe_finetune_command_uses_strict_linear_probe(self):
         from scripts.internal.run_experiments import Run
 
         pretrain = Run(
@@ -2493,11 +2493,12 @@ class TestExperimentRunnerWandbOverrides:
         assert "task.head_type=linear" in cmd
         assert "task.hidden_dims=[]" in cmd
         assert "task.dropout=0.0" in cmd
-        assert "protocol=a" in cmd
+        assert "protocol=linear_probe" in cmd
+        assert "protocol=a" not in cmd
         assert "protocol=A" not in cmd
         assert "+protocol=A" not in cmd
 
-    def test_protocol_b_finetune_command_keeps_task_mlp_head(self):
+    def test_full_finetune_command_keeps_task_mlp_head(self):
         from scripts.internal.run_experiments import Run
 
         pretrain = Run(
@@ -2526,7 +2527,8 @@ class TestExperimentRunnerWandbOverrides:
 
         assert "training.freeze_encoder=false" in cmd
         assert "task.head_type=linear" not in cmd
-        assert "protocol=b" in cmd
+        assert "protocol=full_finetune" in cmd
+        assert "protocol=b" not in cmd
         assert "protocol=B" not in cmd
         assert "+protocol=B" not in cmd
 
@@ -2546,10 +2548,11 @@ class TestExperimentRunnerWandbOverrides:
 
         cmd = run.build_command({run.id: run})
 
+        assert "protocol=full_finetune" not in cmd
         assert "+protocol=B" not in cmd
         assert "protocol=B" not in cmd
 
-    def test_generated_finetune_protocol_selectors_are_lowercase(self):
+    def test_generated_finetune_protocol_selectors_are_public_names(self):
         import scripts.internal.run_experiments as runner
 
         runs = runner.generate_all_runs()
@@ -2557,30 +2560,31 @@ class TestExperimentRunnerWandbOverrides:
         commands = [" ".join(run.build_command(runs_by_id)) for run in runs]
 
         assert not any("protocol=A" in command or "protocol=B" in command for command in commands)
-        assert sum("protocol=a" in command for command in commands) == 825
-        assert sum("protocol=b" in command for command in commands) == 1020
+        assert not any("protocol=a" in command or "protocol=b" in command for command in commands)
+        assert sum("protocol=linear_probe" in command for command in commands) == 825
+        assert sum("protocol=full_finetune" in command for command in commands) == 1020
 
     def test_manual_finetune_protocol_configs_encode_safe_defaults(self):
-        protocol_a = OmegaConf.load("configs/protocol/a.yaml")
-        protocol_b = OmegaConf.load("configs/protocol/b.yaml")
+        linear_probe = OmegaConf.load("configs/protocol/linear_probe.yaml")
+        full_finetune = OmegaConf.load("configs/protocol/full_finetune.yaml")
 
-        assert protocol_a.protocol == "A"
-        assert protocol_a.training.freeze_encoder is True
-        assert protocol_a.training.max_epochs == 50
-        assert protocol_a.training.early_stopping_patience == 10
-        assert protocol_a.optimizer.lr == pytest.approx(1.0e-4)
-        assert protocol_a.task.head_type == "linear"
-        assert list(protocol_a.task.hidden_dims) == []
-        assert protocol_a.task.dropout == 0.0
+        assert linear_probe.protocol == "linear_probe"
+        assert linear_probe.training.freeze_encoder is True
+        assert linear_probe.training.max_epochs == 50
+        assert linear_probe.training.early_stopping_patience == 10
+        assert linear_probe.optimizer.lr == pytest.approx(1.0e-4)
+        assert linear_probe.task.head_type == "linear"
+        assert list(linear_probe.task.hidden_dims) == []
+        assert linear_probe.task.dropout == 0.0
 
-        assert protocol_b.protocol == "B"
-        assert protocol_b.training.freeze_encoder is False
-        assert protocol_b.training.max_epochs == 100
-        assert protocol_b.training.early_stopping_patience == 10
-        assert protocol_b.optimizer.lr == pytest.approx(3.0e-4)
-        assert protocol_b.task.head_type == "mlp"
-        assert list(protocol_b.task.hidden_dims) == [64]
-        assert protocol_b.task.dropout == 0.3
+        assert full_finetune.protocol == "full_finetune"
+        assert full_finetune.training.freeze_encoder is False
+        assert full_finetune.training.max_epochs == 100
+        assert full_finetune.training.early_stopping_patience == 10
+        assert full_finetune.optimizer.lr == pytest.approx(3.0e-4)
+        assert full_finetune.task.head_type == "mlp"
+        assert list(full_finetune.task.hidden_dims) == [64]
+        assert full_finetune.task.dropout == 0.3
 
 
 class TestExperimentRunnerRetry:
@@ -3073,9 +3077,9 @@ class TestExportStatisticalScope:
 
         rows = []
         for paradigm, phase, protocol, offset in [
-            ("xgboost", "baseline", "B", 0.08),
-            ("gru_d", "baseline", "B", 0.03),
-            ("supervised", "supervised", "B", 0.0),
+            ("xgboost", "baseline", "full_finetune", 0.08),
+            ("gru_d", "baseline", "full_finetune", 0.03),
+            ("supervised", "supervised", "full_finetune", 0.0),
         ]:
             for seed in [42, 123]:
                 for task, base in [("mortality_24h", 0.30), ("aki_kdigo", 0.25)]:

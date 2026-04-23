@@ -1,7 +1,7 @@
 # @package _global_
-# Protocol A: strict linear probe for SSL representation quality.
+# Linear probe: frozen encoder, linear head, representation-quality evaluation.
 
-protocol: A
+protocol: linear_probe
 
 training:
   freeze_encoder: true

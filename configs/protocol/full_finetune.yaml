@@ -1,7 +1,7 @@
 # @package _global_
-# Protocol B: full finetune for practical downstream utility.
+# Full finetune: train encoder and downstream head for practical utility.
 
-protocol: B
+protocol: full_finetune
 
 training:
   freeze_encoder: false

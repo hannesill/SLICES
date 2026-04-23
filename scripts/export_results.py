@@ -37,7 +37,14 @@ from pathlib import Path
 import pandas as pd
 import wandb
 from scipy import stats as scipy_stats
-from slices.constants import THESIS_TASKS as BENCHMARK_THESIS_TASKS
+from slices.constants import (
+    FULL_FINETUNE_PROTOCOL,
+    canonical_downstream_protocol,
+    downstream_protocol_from_freeze,
+)
+from slices.constants import (
+    THESIS_TASKS as BENCHMARK_THESIS_TASKS,
+)
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_PATH_KEY,
     EVAL_ARTIFACT_SHA256_KEY,
@@ -463,12 +470,11 @@ def extract_run(run, metric_keys: list[str]) -> dict:
             phase = "finetune"
 
     freeze = _get_nested(config, "training.freeze_encoder")
-    protocol = config.get("protocol") or _tag_value(tags, "protocol")
+    protocol = canonical_downstream_protocol(config.get("protocol") or _tag_value(tags, "protocol"))
     if protocol is None:
-        if freeze is True:
-            protocol = "A"
-        elif freeze is False or config.get("paradigm") == "xgboost" or phase == "baseline":
-            protocol = "B"
+        protocol = downstream_protocol_from_freeze(freeze)
+        if protocol is None and (config.get("paradigm") == "xgboost" or phase == "baseline"):
+            protocol = FULL_FINETUNE_PROTOCOL
 
     source_dataset = _recover_source_dataset(run_name, config)
     up_lr, up_mr, experiment_subtype = _recover_pretrain_metadata(run_name, config)
@@ -806,14 +812,16 @@ def build_classical_context_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
     if per_seed_df.empty:
         return pd.DataFrame()
     label_fraction = pd.to_numeric(per_seed_df["label_fraction"], errors="coerce").fillna(1.0)
-    protocol_b = per_seed_df["protocol"] == "B"
+    full_finetune = (
+        per_seed_df["protocol"].map(canonical_downstream_protocol) == FULL_FINETUNE_PROTOCOL
+    )
     full = per_seed_df[
-        protocol_b
+        full_finetune
         & (label_fraction == 1.0)
         & (per_seed_df["experiment_class"].isin(["core_ssl_benchmark", "classical_baselines"]))
     ].copy()
     low_label = per_seed_df[
-        protocol_b
+        full_finetune
         & (label_fraction < 1.0)
         & (per_seed_df["experiment_class"].isin(["label_efficiency", "classical_baselines"]))
     ].copy()

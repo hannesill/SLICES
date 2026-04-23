@@ -2,14 +2,14 @@
 #
 # This config orchestrates finetuning a pretrained encoder on downstream tasks.
 # By default, the encoder is frozen and only the task head is trained. Use
-# protocol=a or protocol=b for thesis Protocol A/B-safe manual launches.
+# protocol=linear_probe or protocol=full_finetune for benchmark-safe manual launches.
 #
 # Example usage:
-#   # Protocol A: strict linear probe (frozen encoder, linear head, 50 epochs, lr=1e-4)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=a
+#   # Linear probe (frozen encoder, linear head, 50 epochs, lr=1e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=linear_probe
 #
-#   # Protocol B: full finetune (unfrozen encoder, MLP head, 100 epochs, lr=3e-4)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=b
+#   # Full finetune (unfrozen encoder, MLP head, 100 epochs, lr=3e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=full_finetune
 #
 #   # Gradual unfreezing (freeze for N epochs, then unfreeze)
 #   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.unfreeze_epoch=5

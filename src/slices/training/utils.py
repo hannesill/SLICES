@@ -25,6 +25,8 @@ from slices.constants import (
     LABEL_HORIZON_HOURS,
     MIN_STAY_HOURS,
     SEQ_LENGTH_HOURS,
+    canonical_downstream_protocol,
+    downstream_protocol_from_freeze,
 )
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 
@@ -374,12 +376,13 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         _add_wandb_tag(tags, f"model_size:{model_size}")
 
     # Add downstream protocol family tag. Supervised-from-scratch shares the
-    # Protocol B optimization budget; the phase tag distinguishes it from SSL.
+    # full-finetune optimization budget; the phase tag distinguishes it from SSL.
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
     if cfg.get("protocol") is not None:
-        _add_wandb_tag(tags, f"protocol:{cfg.protocol}")
+        protocol = canonical_downstream_protocol(cfg.protocol)
+        _add_wandb_tag(tags, f"protocol:{protocol}")
     elif freeze_encoder is not None:
-        protocol = "A" if freeze_encoder else "B"
+        protocol = downstream_protocol_from_freeze(freeze_encoder)
         _add_wandb_tag(tags, f"protocol:{protocol}")
 
     # Add mask_ratio tag for pretrain runs (useful for ablation filtering)
