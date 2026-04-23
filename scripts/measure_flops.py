@@ -7,7 +7,7 @@ total training FLOPs by multiplying per-step FLOPs by gradient steps from W&B.
 Usage:
     uv run python scripts/measure_flops.py
     uv run python scripts/measure_flops.py --no-wandb          # skip W&B query
-    uv run python scripts/measure_flops.py --n-features 35     # override feature dim
+    uv run python scripts/measure_flops.py --n-features 84     # override feature dim
     uv run python scripts/measure_flops.py --sparsity 0.7      # fraction missing
 """
 
@@ -26,8 +26,10 @@ from torch.utils.flop_counter import FlopCounterMode
 # Paradigm configs — mirror the YAML defaults used in actual runs
 # ---------------------------------------------------------------------------
 
+DEFAULT_N_FEATURES = 84
+
 ENCODER_CONFIG = {
-    "d_input": 35,
+    "d_input": DEFAULT_N_FEATURES,
     "d_model": 64,
     "max_seq_length": SEQ_LENGTH_HOURS,
     "n_layers": 2,
@@ -134,7 +136,7 @@ def format_params(n: int) -> str:
     return str(n)
 
 
-def query_wandb_runs(entity: str, project: str) -> Dict[str, dict]:
+def query_wandb_runs(entity: str, project: str, revision: str | None = None) -> Dict[str, dict]:
     """Query W&B for pretrain run gradient steps and wall-clock time.
 
     Returns dict keyed by SSL name -> {grad_steps, wall_clock_s, n_runs}.
@@ -144,8 +146,11 @@ def query_wandb_runs(entity: str, project: str) -> Dict[str, dict]:
     api = wandb.Api(timeout=300)
     path = f"{entity}/{project}" if entity else project
 
-    # Server-side filter: only pretrain runs (tagged phase:pretrain)
-    filters = {"tags": {"$all": ["phase:pretrain"]}, "state": "finished"}
+    # Server-side filter: only finished pretrain runs from the selected corpus.
+    required_tags = ["phase:pretrain"]
+    if revision:
+        required_tags.append(f"revision:{revision}")
+    filters = {"tags": {"$all": required_tags}, "state": "finished"}
     runs = api.runs(path, filters=filters, order="-created_at")
 
     results: Dict[str, list] = {}
@@ -190,7 +195,10 @@ def query_wandb_runs(entity: str, project: str) -> Dict[str, dict]:
 def main():
     parser = argparse.ArgumentParser(description="Measure FLOPs per SSL paradigm")
     parser.add_argument(
-        "--n-features", type=int, default=35, help="Number of input features (d_input)"
+        "--n-features",
+        type=int,
+        default=DEFAULT_N_FEATURES,
+        help=f"Number of input features (d_input; default: {DEFAULT_N_FEATURES})",
     )
     parser.add_argument(
         "--seq-length", type=int, default=SEQ_LENGTH_HOURS, help="Sequence length (T)"
@@ -206,8 +214,14 @@ def main():
     parser.add_argument(
         "--wandb-project",
         type=str,
-        default=os.environ.get("WANDB_PROJECT", "SLICES"),
+        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
         help="W&B project",
+    )
+    parser.add_argument(
+        "--revision",
+        type=str,
+        default=os.environ.get("SLICES_REVISION", "thesis-v1"),
+        help="Revision tag to query in W&B (use empty string to disable)",
     )
     args = parser.parse_args()
 
@@ -239,7 +253,14 @@ def main():
     wandb_data = {}
     if not args.no_wandb:
         try:
-            wandb_data = query_wandb_runs(args.wandb_entity, args.wandb_project)
+            revision = args.revision or None
+            target = (
+                f"{args.wandb_entity}/{args.wandb_project}"
+                if args.wandb_entity
+                else args.wandb_project
+            )
+            print(f"Querying W&B target: {target}, revision: {revision or 'unfiltered'}")
+            wandb_data = query_wandb_runs(args.wandb_entity, args.wandb_project, revision)
             print(f"Found W&B data for: {list(wandb_data.keys())}")
             print()
         except Exception as e:

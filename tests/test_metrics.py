@@ -341,11 +341,20 @@ class TestConstants:
             for metric in defaults:
                 assert metric in available
 
-    def test_binary_defaults_minimal(self):
-        """Test binary defaults are minimal."""
+    def test_binary_defaults_match_public_export_surface(self):
+        """Test binary defaults include threshold and calibration metrics."""
         defaults = DEFAULT_METRICS["binary"]
-        assert len(defaults) <= 4  # Core discrimination + calibration metrics
-        assert "auroc" in defaults  # Core clinical metric
+        assert defaults == [
+            "auroc",
+            "auprc",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "specificity",
+            "brier_score",
+            "ece",
+        ]
 
     def test_all_task_types_covered(self):
         """Test all task types have entries."""

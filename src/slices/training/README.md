@@ -55,6 +55,11 @@ Checkpoint inputs:
 - full Lightning pretrain checkpoint via `pretrain_checkpoint`
 - no checkpoint for supervised-from-scratch runs
 
+The benchmark matrix uses `encoder.pt`, the last encoder from the fixed
+pretraining schedule, for all SSL downstream runs. `encoder_best_val.pt` is
+saved for diagnostics but is not the thesis downstream checkpoint, because SSL
+validation loss is not comparable as an early-stopping signal across objectives.
+
 What it handles:
 
 - linear probing via `training.freeze_encoder=true`

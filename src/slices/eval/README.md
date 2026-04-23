@@ -20,11 +20,7 @@ inference helpers, and SSL imputation checks.
 ```python
 from slices.eval import MetricConfig, build_metrics
 
-config = MetricConfig(
-    task_type="binary",
-    metrics=["auroc", "auprc", "brier_score", "ece"],
-    threshold=0.5,
-)
+config = MetricConfig(task_type="binary", threshold=0.5)
 
 val_metrics = build_metrics(config, prefix="val")
 ```
@@ -36,9 +32,9 @@ Supported task types:
 - `multilabel`: `auroc`, `auprc`, `accuracy`, `f1`
 - `regression`: `mse`, `mae`, `rmse`, `r2`
 
-Default metric sets are intentionally small:
+Default metric sets match the public benchmark export surface:
 
-- Binary: `auroc`, `auprc`, `brier_score`, `ece`
+- Binary: `auroc`, `auprc`, `accuracy`, `f1`, `precision`, `recall`, `specificity`, `brier_score`, `ece`
 - Multiclass: `auroc`, `accuracy`
 - Multilabel: `auroc`
 - Regression: `mse`, `mae`, `r2`

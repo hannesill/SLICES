@@ -21,7 +21,11 @@
 # Metric configuration
 metrics:
   # Metrics to compute (null = use defaults for task type)
-  # Defaults: binary -> [auroc, auprc, brier_score], multiclass -> [auroc, accuracy]
+  # Defaults:
+  #   binary -> [auroc, auprc, accuracy, f1, precision, recall, specificity,
+  #              brier_score, ece]
+  #   multiclass -> [auroc, accuracy]
+  #   regression -> [mse, mae, r2]
   names: null
 
   # Decision threshold for binary classification

@@ -109,6 +109,7 @@ MODEL_SIZES = {
 
 LR_ROBUSTNESS = [2e-4, 5e-4, 2e-3]
 MASK_RATIO_ROBUSTNESS = [0.3, 0.75]
+VIEW_MASK_EXPERIMENT_SUBTYPE = "view_mask_sensitivity"
 TRANSFER_PAIRS = [("miiv", "eicu"), ("eicu", "miiv")]
 
 STATE_FILE = Path("outputs/experiment_state.json")
@@ -667,9 +668,15 @@ class MatrixBuilder:
                     )
                 for mask_ratio in MASK_RATIO_ROBUSTNESS:
                     extra = {"ssl.mask_ratio": mask_ratio}
-                    if paradigm == "contrastive":
-                        extra["ssl.complementary_masks"] = False
                     subtype = "mask_ratio_sensitivity"
+                    if paradigm == "contrastive":
+                        # Contrastive complementary views make the per-view mask
+                        # budgets asymmetric away from 0.5. The robustness slice
+                        # therefore uses independent views and is labeled as a
+                        # view/mask sensitivity test rather than a pure
+                        # mask-ratio sweep.
+                        extra["ssl.complementary_masks"] = False
+                        subtype = VIEW_MASK_EXPERIMENT_SUBTYPE
                     pretrain = self._add_pretrain(
                         experiment_class,
                         paradigm,

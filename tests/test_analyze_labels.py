@@ -41,3 +41,20 @@ def test_analyze_task_has_no_quality_warning_below_threshold():
 
     assert stats["missing_percentage"] == 20.0
     assert stats["quality_warnings"] == []
+
+
+def test_analyze_task_summarizes_regression_labels_without_class_casting():
+    labels_df = pl.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "los_remaining": [0.5, 2.0, None, 7.5],
+        }
+    )
+
+    stats = analyze_task(labels_df, "los_remaining", task_type="regression")
+
+    assert stats["task_type"] == "regression"
+    assert stats["n_classes"] is None
+    assert stats["class_distribution"] == {}
+    assert stats["label_summary"]["mean"] == 3.3333
+    assert stats["label_summary"]["median"] == 2.0
