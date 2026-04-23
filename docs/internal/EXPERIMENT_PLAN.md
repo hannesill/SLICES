@@ -93,23 +93,32 @@ project-history knowledge.
 
 ## Experiment Classes
 
-The final launched run budget remains scientifically equivalent to the prior
-thesis matrix.
+The final launched run budget keeps the controlled benchmark structure and uses
+task-specific low-label fractions where fixed random splits are scientifically
+defensible.
 
 | Experiment class | Scope | Launched runs |
 |---|---:|---:|
 | `core_ssl_benchmark` | MAE, JEPA, contrastive, supervised Transformer; 3 datasets; 4 tasks; 5 seeds; Protocol A/B for SSL | 465 |
-| `label_efficiency` | SSL Protocol A/B plus supervised Transformer at low-label fractions; 5 seeds | 840 |
+| `label_efficiency` | SSL Protocol A/B plus supervised Transformer at low-label fractions; 5 seeds | 1155 |
 | `cross_dataset_transfer` | MIMIC-IV to eICU and eICU to MIMIC-IV; SSL Protocol B; 5 seeds | 120 |
 | `hp_robustness` | LR robustness plus MAE/JEPA mask-ratio and contrastive view/mask sensitivity on MIMIC-IV `mortality_24h`; 5 seeds | 150 |
 | `capacity_study` | Larger MAE and supervised Transformer encoders on MIIV `mortality_24h`; 5 seeds | 100 |
-| `classical_baselines` | XGBoost and GRU-D full-label plus label-efficiency context; 5 seeds | 360 |
+| `classical_baselines` | XGBoost and GRU-D full-label plus label-efficiency context; 5 seeds | 330 |
 | `ts2vec_extension` | TS2Vec temporal contrastive extension; 3 datasets; 4 tasks; 5 seeds; Protocol A/B | 135 |
 | `smart_external_reference` | SMART external SSL reference; 3 datasets; 4 tasks; 5 seeds; Protocol A/B | 135 |
-| **Total** | Includes appendix SMART reference | **2305** |
+| **Total** | Includes appendix SMART reference | **2590** |
 
-The formal thesis corpus excluding `smart_external_reference` has 2170 launched
+The formal thesis corpus excluding `smart_external_reference` has 2455 launched
 runs.
+
+Low-label policy:
+
+- `mortality_24h` starts at 5% labels. The 1% fixed random subsets can
+  undersample positives under the final seeds.
+- `mortality_hospital` gets the full 1%, 5%, 10%, 25%, 50% low-label curve.
+- `aki_kdigo` and `los_remaining` remain contextual 10% low-label points.
+- Capacity and classical-baseline `mortality_24h` slices also start at 5%.
 
 ## Derived Comparison Views
 
@@ -172,7 +181,7 @@ uv run python scripts/internal/run_experiments.py run \
   --dry-run
 ```
 
-Expected dry-run count: 2305 launched runs.
+Expected dry-run count: 2590 launched runs.
 
 ## Fairness
 
@@ -237,8 +246,8 @@ post-hoc fairness evaluation.
 
 Before launching final runs:
 
-- generated matrix has exactly 2305 launched runs including SMART
-- generated matrix has exactly 2170 launched runs excluding SMART
+- generated matrix has exactly 2590 launched runs including SMART
+- generated matrix has exactly 2455 launched runs excluding SMART
 - every generated run has `experiment_class`
 - no generated command contains historical launch-group overrides
 - every generated command for a final rerun contains `revision=<revision>`

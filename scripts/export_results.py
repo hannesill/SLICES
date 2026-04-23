@@ -82,7 +82,7 @@ CONTEXTUAL_STAT_CLASSES = {
 
 FIXED_SEED_EXPERIMENT_CLASSES = set(EXPERIMENT_CLASSES)
 EXPECTED_FIXED_SEEDS = {42, 123, 456, 789, 1011}
-CAPACITY_LABEL_FRACTIONS = {0.01, 0.1, 0.5}
+CAPACITY_LABEL_FRACTIONS = {0.05, 0.1, 0.5}
 CAPACITY_PARADIGMS = {"mae", "supervised"}
 THESIS_TASKS = {
     "mortality_24h",
@@ -224,6 +224,33 @@ REGRESSION_FAIRNESS_REQUIRED_METRICS = [
 # ---------------------------------------------------------------------------
 
 
+def _run_config_filter_value(run, key: str):
+    config = dict(getattr(run, "config", {}) or {})
+    if key == "paradigm":
+        ssl_cfg = config.get("ssl") or {}
+        return config.get("paradigm") or ssl_cfg.get("name")
+    return config.get(key)
+
+
+def _run_matches_filter(run, key: str, tag_prefix: str, values: list[str] | None) -> bool:
+    """Match a W&B run by config first, falling back to tags.
+
+    Some historical runs have complete config metadata but incomplete tags. Fetch
+    broadly and apply this client-side predicate so publication exports do not
+    silently drop runs before config fallback can see them.
+    """
+    if not values:
+        return True
+
+    allowed = {str(value) for value in values}
+    config_value = _run_config_filter_value(run, key)
+    if config_value is not None:
+        return str(config_value) in allowed
+
+    tags = set(getattr(run, "tags", []) or [])
+    return any(f"{tag_prefix}:{value}" in tags for value in allowed)
+
+
 def fetch_all_runs(
     project: str,
     entity: str | None = None,
@@ -242,42 +269,21 @@ def fetch_all_runs(
     if state:
         filters["state"] = state
 
-    tag_filters: list[str] = []
-    if experiment_class and len(experiment_class) == 1:
-        tag_filters.append(f"experiment_class:{experiment_class[0]}")
-    if paradigm and len(paradigm) == 1:
-        tag_filters.append(f"paradigm:{paradigm[0]}")
-    if dataset and len(dataset) == 1:
-        tag_filters.append(f"dataset:{dataset[0]}")
-    if phase and len(phase) == 1:
-        tag_filters.append(f"phase:{phase[0]}")
-    if revision and len(revision) == 1:
-        tag_filters.append(f"revision:{revision[0]}")
-    if tag_filters:
-        filters["$and"] = [{"tags": tag} for tag in tag_filters]
-
     print(f"Fetching runs from {path}...", file=sys.stderr)
     print(f"  Server-side filters: {json.dumps(filters, default=str)}", file=sys.stderr)
     runs_iter = api.runs(path, filters=filters or {}, order="-created_at")
 
-    class_set = set(experiment_class) if experiment_class and len(experiment_class) > 1 else None
-    paradigm_set = set(paradigm) if paradigm and len(paradigm) > 1 else None
-    dataset_set = set(dataset) if dataset and len(dataset) > 1 else None
-    phase_set = set(phase) if phase and len(phase) > 1 else None
-    revision_set = set(revision) if revision and len(revision) > 1 else None
-
     runs = []
     for run in runs_iter:
-        tags = set(run.tags)
-        if class_set and not any(f"experiment_class:{value}" in tags for value in class_set):
+        if not _run_matches_filter(run, "experiment_class", "experiment_class", experiment_class):
             continue
-        if paradigm_set and not any(f"paradigm:{value}" in tags for value in paradigm_set):
+        if not _run_matches_filter(run, "paradigm", "paradigm", paradigm):
             continue
-        if dataset_set and not any(f"dataset:{value}" in tags for value in dataset_set):
+        if not _run_matches_filter(run, "dataset", "dataset", dataset):
             continue
-        if phase_set and not any(f"phase:{value}" in tags for value in phase_set):
+        if not _run_matches_filter(run, "phase", "phase", phase):
             continue
-        if revision_set and not any(f"revision:{value}" in tags for value in revision_set):
+        if not _run_matches_filter(run, "revision", "revision", revision):
             continue
         runs.append(run)
 

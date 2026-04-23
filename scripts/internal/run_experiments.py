@@ -65,11 +65,11 @@ DOWNSTREAM_EXPERIMENT_CLASSES = [
 
 EXPECTED_CLASS_COUNTS = {
     "core_ssl_benchmark": 465,
-    "label_efficiency": 840,
+    "label_efficiency": 1155,
     "cross_dataset_transfer": 120,
     "hp_robustness": 150,
     "capacity_study": 100,
-    "classical_baselines": 360,
+    "classical_baselines": 330,
     "ts2vec_extension": 135,
     "smart_external_reference": 135,
 }
@@ -79,8 +79,9 @@ DATASETS = ["miiv", "eicu", "combined"]
 TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
 SEEDS_EXTENDED = [42, 123, 456, 789, 1011]
 LABEL_FRACTIONS_FULL = [0.01, 0.05, 0.1, 0.25, 0.5]
+LABEL_FRACTIONS_MORTALITY_24H = [0.05, 0.1, 0.25, 0.5]
 LABEL_FRACTIONS_TREND = [0.1]
-LABEL_FRACTIONS_CAPACITY = [0.01, 0.1, 0.5]
+LABEL_FRACTIONS_CAPACITY = [0.05, 0.1, 0.5]
 
 MODEL_SIZES = {
     "medium": {
@@ -570,7 +571,7 @@ class MatrixBuilder:
             for dataset in DATASETS:
                 for paradigm in SSL_PARADIGMS:
                     pretrain = self._get_pretrain(paradigm, dataset, seed)
-                    for frac in LABEL_FRACTIONS_FULL:
+                    for frac in LABEL_FRACTIONS_MORTALITY_24H:
                         self._add_finetune(
                             experiment_class,
                             paradigm,
@@ -592,7 +593,12 @@ class MatrixBuilder:
                             frac,
                         )
                     for task in TASKS[1:]:
-                        for frac in LABEL_FRACTIONS_TREND:
+                        fractions = (
+                            LABEL_FRACTIONS_FULL
+                            if task == "mortality_hospital"
+                            else LABEL_FRACTIONS_TREND
+                        )
+                        for frac in fractions:
                             self._add_finetune(
                                 experiment_class,
                                 paradigm,
@@ -613,10 +619,15 @@ class MatrixBuilder:
                                 pretrain,
                                 frac,
                             )
-                for frac in LABEL_FRACTIONS_FULL:
+                for frac in LABEL_FRACTIONS_MORTALITY_24H:
                     self._add_supervised(experiment_class, dataset, seed, "mortality_24h", frac)
                 for task in TASKS[1:]:
-                    for frac in LABEL_FRACTIONS_TREND:
+                    fractions = (
+                        LABEL_FRACTIONS_FULL
+                        if task == "mortality_hospital"
+                        else LABEL_FRACTIONS_TREND
+                    )
+                    for frac in fractions:
                         self._add_supervised(experiment_class, dataset, seed, task, frac)
 
     def build_cross_dataset_transfer(self) -> None:
@@ -758,7 +769,7 @@ class MatrixBuilder:
                 for task in TASKS:
                     self._add_xgboost(experiment_class, dataset, seed, task)
                     self._add_gru_d(experiment_class, dataset, seed, task)
-                for frac in LABEL_FRACTIONS_FULL:
+                for frac in LABEL_FRACTIONS_MORTALITY_24H:
                     self._add_xgboost(experiment_class, dataset, seed, "mortality_24h", frac)
                     self._add_gru_d(experiment_class, dataset, seed, "mortality_24h", frac)
                 for task in TASKS[1:]:

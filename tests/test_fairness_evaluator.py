@@ -267,6 +267,26 @@ class TestAttributeAutoDetection:
         evaluator = FairnessEvaluator(static_df, protected_attributes=["gender", "race"])
         assert evaluator._available_attributes == []
 
+    def test_unknown_gender_values_are_excluded(self):
+        """String unknown gender labels should not form a fairness subgroup."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "patient_id": [1, 2, 3, 4],
+                "gender": ["M", "Unknown", "F", "not specified"],
+                "age": [50.0, 50.0, 50.0, 50.0],
+                "los_days": [5.0, 5.0, 5.0, 5.0],
+            }
+        )
+        evaluator = FairnessEvaluator(
+            static_df, protected_attributes=["gender"], min_subgroup_size=1
+        )
+
+        group_ids, group_names, _ = evaluator._encode_attribute([1, 2, 3, 4], "gender")
+
+        assert group_ids.tolist().count(-1) == 2
+        assert set(group_names.values()) == {"M", "F", "unknown"}
+
 
 class TestMinSubgroupSize:
     """Tests for min_subgroup_size filtering."""

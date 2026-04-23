@@ -180,9 +180,41 @@ def test_extract_run_exports_launch_commit_from_config_or_tags():
     assert mod.extract_run(tag_run, [])["launch_commit"] == "tag-commit"
 
 
-def test_fetch_all_runs_single_class_adds_server_side_filter(monkeypatch):
+def test_fetch_all_runs_filters_by_config_before_tags(monkeypatch):
     mod = importlib.import_module("scripts.export_results")
     captured = {}
+    keep_config = DummyRun(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "paradigm": "mae",
+            "dataset": "miiv",
+            "phase": "finetune",
+            "revision": "thesis-v1",
+        },
+        tags=[],
+    )
+    keep_config.id = "keep-config"
+    keep_tags = DummyRun(
+        config={},
+        tags=[
+            "experiment_class:core_ssl_benchmark",
+            "paradigm:mae",
+            "dataset:miiv",
+            "phase:finetune",
+            "revision:thesis-v1",
+        ],
+    )
+    keep_tags.id = "keep-tags"
+    drop = DummyRun(
+        config={"experiment_class": "core_ssl_benchmark", "revision": "other"},
+        tags=[],
+    )
+    drop.id = "drop"
+    drop_stale_tag = DummyRun(
+        config={"revision": "other"},
+        tags=["revision:thesis-v1"],
+    )
+    drop_stale_tag.id = "drop-stale-tag"
 
     class DummyApi:
         def __init__(self, timeout):
@@ -192,11 +224,11 @@ def test_fetch_all_runs_single_class_adds_server_side_filter(monkeypatch):
             captured["path"] = path
             captured["filters"] = filters
             captured["order"] = order
-            return []
+            return [keep_config, keep_tags, drop, drop_stale_tag]
 
     monkeypatch.setattr(mod.wandb, "Api", DummyApi)
 
-    mod.fetch_all_runs(
+    runs = mod.fetch_all_runs(
         project="proj",
         entity="entity",
         experiment_class=["core_ssl_benchmark"],
@@ -207,13 +239,8 @@ def test_fetch_all_runs_single_class_adds_server_side_filter(monkeypatch):
     )
 
     assert captured["path"] == "entity/proj"
-    assert captured["filters"]["$and"] == [
-        {"tags": "experiment_class:core_ssl_benchmark"},
-        {"tags": "paradigm:mae"},
-        {"tags": "dataset:miiv"},
-        {"tags": "phase:finetune"},
-        {"tags": "revision:thesis-v1"},
-    ]
+    assert captured["filters"] == {"state": "finished"}
+    assert [run.id for run in runs] == ["keep-config", "keep-tags"]
 
 
 def test_build_per_seed_df_keeps_hp_robustness_rows_out_of_derived_views():

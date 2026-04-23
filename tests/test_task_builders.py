@@ -3,7 +3,7 @@
 Comprehensive tests for mortality tasks and task builder infrastructure.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 import polars as pl
 import pytest
@@ -566,14 +566,16 @@ class TestMortalityUnknownOutcomeRegressions:
         hospital_expire_flag: int | None,
         discharge_location: str | None,
         dischtime: datetime | None = None,
+        death_date: date | None = None,
+        death_source: str | None = None,
     ) -> pl.DataFrame:
         return pl.DataFrame(
             {
                 "stay_id": [1],
                 "death_time": [None],
-                "death_date": [None],
-                "death_time_precision": [None],
-                "death_source": [None],
+                "death_date": [death_date],
+                "death_time_precision": ["date" if death_date is not None else None],
+                "death_source": [death_source],
                 "hospital_expire_flag": [hospital_expire_flag],
                 "dischtime": [dischtime],
                 "discharge_location": [discharge_location],
@@ -614,6 +616,33 @@ class TestMortalityUnknownOutcomeRegressions:
         )
 
         assert labels["label"][0] is None
+
+    def test_mimic_post_discharge_dod_is_not_hospital_mortality(self):
+        """MIMIC patients.dod after discharge should not count as hospital death."""
+        base = datetime(2020, 1, 1, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=0,
+                    discharge_location="HOME",
+                    dischtime=base.replace(day=3),
+                    death_date=date(2020, 2, 1),
+                    death_source="patients.dod",
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 0
 
     def test_eicu_death_discharge_location_is_death_evidence(self):
         """eICU discharge_location == Death should override a missing death flag."""

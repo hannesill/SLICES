@@ -770,10 +770,38 @@ class TestFairnessRevisionScoping:
         }
         assert expected.issubset(set(mod.DEFAULT_EXPERIMENT_CLASSES))
 
-    def test_fetch_eval_runs_single_revision_adds_server_side_filter(self, monkeypatch):
-        """A single revision should be sent as a W&B tag filter."""
+    def test_fetch_eval_runs_single_revision_filters_by_config_before_tags(self, monkeypatch):
+        """Revision-scoped fairness should not depend on W&B tags alone."""
         mod = importlib.import_module("scripts.eval.evaluate_fairness")
         captured = {}
+        keep_config = SimpleNamespace(
+            id="keep_config",
+            config={
+                "experiment_class": "core_ssl_benchmark",
+                "paradigm": "mae",
+                "dataset": "miiv",
+                "phase": "finetune",
+                "revision": "thesis-v1",
+            },
+            tags=[],
+        )
+        keep_tags = SimpleNamespace(
+            id="keep_tags",
+            config={},
+            tags=[
+                "experiment_class:core_ssl_benchmark",
+                "paradigm:mae",
+                "dataset:miiv",
+                "phase:finetune",
+                "revision:thesis-v1",
+            ],
+        )
+        drop = SimpleNamespace(id="drop", config={"revision": "other"}, tags=[])
+        drop_stale_tag = SimpleNamespace(
+            id="drop_stale_tag",
+            config={"revision": "other"},
+            tags=["revision:thesis-v1"],
+        )
 
         class DummyApi:
             def __init__(self, timeout):
@@ -783,11 +811,11 @@ class TestFairnessRevisionScoping:
                 captured["path"] = path
                 captured["filters"] = filters
                 captured["order"] = order
-                return []
+                return [keep_config, keep_tags, drop, drop_stale_tag]
 
         monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(Api=DummyApi))
 
-        mod.fetch_eval_runs(
+        runs = mod.fetch_eval_runs(
             project="proj",
             entity="entity",
             experiment_classes=["core_ssl_benchmark"],
@@ -798,13 +826,8 @@ class TestFairnessRevisionScoping:
         )
 
         assert captured["path"] == "entity/proj"
-        assert captured["filters"]["$and"] == [
-            {"tags": "experiment_class:core_ssl_benchmark"},
-            {"tags": "paradigm:mae"},
-            {"tags": "dataset:miiv"},
-            {"tags": "phase:finetune"},
-            {"tags": "revision:thesis-v1"},
-        ]
+        assert captured["filters"] == {"state": "finished"}
+        assert [run.id for run in runs] == ["keep_config", "keep_tags"]
 
     def test_fetch_eval_runs_multi_revision_filters_client_side(self, monkeypatch):
         """Multiple revisions should be filtered client-side without mixing reruns."""
@@ -964,6 +987,7 @@ class TestFairnessRevisionScoping:
         assert "--revision thesis-v2" in runner_text
         assert "--project slices-thesis" in runner_text
         assert "--entity test-entity" in runner_text
+        assert "--force" in runner_text
         assert "uv sync --dev --locked" in runner_text
 
     def test_auto_shutdown_counts_fairness_and_export_processes(self):
@@ -3362,11 +3386,27 @@ class TestExperimentRunnerMatrix:
         runs = generate_all_runs()
         by_class = Counter(run.experiment_class for run in runs)
 
-        assert len(runs) == 2305
-        assert sum(run.experiment_class != "smart_external_reference" for run in runs) == 2170
+        assert len(runs) == 2590
+        assert sum(run.experiment_class != "smart_external_reference" for run in runs) == 2455
         assert by_class == EXPECTED_CLASS_COUNTS
         assert len({scientific_fingerprint(run) for run in runs}) == len(runs)
         assert not any(run.task == "mortality" for run in runs)
+        assert not any(
+            run.task == "mortality_24h"
+            and run.label_fraction == 0.01
+            and run.experiment_class
+            in {"label_efficiency", "capacity_study", "classical_baselines"}
+            for run in runs
+        )
+
+        label_eff_hospital_fractions = {
+            run.label_fraction
+            for run in runs
+            if run.experiment_class == "label_efficiency"
+            and run.task == "mortality_hospital"
+            and run.label_fraction < 1.0
+        }
+        assert label_eff_hospital_fractions == {0.01, 0.05, 0.1, 0.25, 0.5}
 
         non_classical_baselines = [
             run

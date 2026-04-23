@@ -141,6 +141,35 @@ class FairnessEvaluator:
             groups[finite_ages & (ages >= low) & (ages <= high)] = i
         return groups
 
+    @staticmethod
+    def _canonicalize_gender(value: Any) -> Optional[str]:
+        """Normalize gender labels and exclude missing/unknown values."""
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        if normalized in {
+            "unknown",
+            "unk",
+            "missing",
+            "not specified",
+            "not available",
+            "na",
+            "n/a",
+            "none",
+            "null",
+        }:
+            return None
+        if normalized in {"m", "male"}:
+            return "M"
+        if normalized in {"f", "female"}:
+            return "F"
+        return text
+
     def _encode_attribute(
         self,
         stay_ids: List[int],
@@ -184,7 +213,7 @@ class FairnessEvaluator:
             unique_vals = set()
             raw_vals = []
             for row in rows:
-                val = row.get("gender")
+                val = self._canonicalize_gender(row.get("gender"))
                 raw_vals.append(val)
                 if val is not None:
                     unique_vals.add(val)
