@@ -23,7 +23,7 @@ from pathlib import Path
 
 import polars as pl
 import yaml
-from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
+from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS, THESIS_TASKS
 from slices.data.preparation import prepare_processed_dataset
 
 # Offset applied to stay_id for the second dataset when needed to avoid
@@ -174,6 +174,39 @@ def validate_frame_schema(name: str, df_a: pl.DataFrame, df_b: pl.DataFrame) -> 
         )
 
 
+def validate_required_task_coverage(
+    meta_a: dict,
+    meta_b: dict,
+    labels_a: pl.DataFrame,
+    labels_b: pl.DataFrame,
+    names: tuple[str, str],
+    required_tasks: tuple[str, ...] = THESIS_TASKS,
+) -> None:
+    """Fail closed if either source dataset lacks a thesis task or manifest entry."""
+    required = set(required_tasks)
+    task_sets = [set(meta_a.get("task_names", [])), set(meta_b.get("task_names", []))]
+    manifests = [meta_a.get("label_manifest", {}) or {}, meta_b.get("label_manifest", {}) or {}]
+    label_columns = [set(labels_a.columns), set(labels_b.columns)]
+
+    messages = []
+    for name, tasks, manifest, columns in zip(names, task_sets, manifests, label_columns):
+        missing_tasks = sorted(required - tasks)
+        missing_manifest = sorted(required - set(manifest))
+        missing_columns = sorted(required - columns)
+        if missing_tasks:
+            messages.append(f"{name} metadata task_names missing {missing_tasks}")
+        if missing_manifest:
+            messages.append(f"{name} label_manifest missing {missing_manifest}")
+        if missing_columns:
+            messages.append(f"{name} labels.parquet missing columns {missing_columns}")
+
+    if messages:
+        raise ValueError(
+            "Combined dataset creation requires both source datasets to contain all "
+            "thesis tasks before merge:\n  " + "\n  ".join(messages)
+        )
+
+
 def merge_labels(labels_a: pl.DataFrame, labels_b: pl.DataFrame) -> pl.DataFrame:
     """Merge label DataFrames, handling column mismatches."""
     cols_a = set(labels_a.columns)
@@ -319,6 +352,13 @@ def main():
     tasks_a = set(meta_a.get("task_names", []))
     tasks_b = set(meta_b.get("task_names", []))
     common_tasks = sorted(tasks_a & tasks_b)
+    validate_required_task_coverage(
+        meta_a,
+        meta_b,
+        data_a["labels"],
+        data_b["labels"],
+        names,
+    )
 
     # Merge label manifests from source datasets for freshness checking.
     # Both source datasets must have manifests, and for each common task

@@ -21,6 +21,7 @@ import pytest
 import torch
 import yaml
 from omegaconf import OmegaConf
+from slices.constants import THESIS_TASKS
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.labels.aki import AKILabelBuilder
 from slices.data.labels.los import LOSLabelBuilder
@@ -517,6 +518,39 @@ class TestCombinedDatasetValidation:
         assert namespaced_a["patient_id"].item() == "miiv:10"
         assert namespaced_b["patient_id"].item() == "eicu:10"
 
+    def test_required_thesis_task_missing_raises(self):
+        """Combined data should not silently narrow the thesis task surface."""
+        import importlib
+
+        mod = importlib.import_module("scripts.preprocessing.create_combined_dataset")
+
+        task_names = list(THESIS_TASKS)
+        meta_a = {
+            "task_names": task_names,
+            "label_manifest": {task: {} for task in task_names},
+        }
+        meta_b = {
+            "task_names": ["mortality_24h", "mortality_hospital"],
+            "label_manifest": {"mortality_24h": {}, "mortality_hospital": {}},
+        }
+        labels_a = pl.DataFrame({"stay_id": [1], **{task: [0] for task in task_names}})
+        labels_b = pl.DataFrame(
+            {
+                "stay_id": [2],
+                "mortality_24h": [0],
+                "mortality_hospital": [0],
+            }
+        )
+
+        with pytest.raises(ValueError, match="all thesis tasks"):
+            mod.validate_required_task_coverage(
+                meta_a,
+                meta_b,
+                labels_a,
+                labels_b,
+                ("miiv", "eicu"),
+            )
+
 
 class TestCombinedSetupPath:
     """Regression tests for the combined-dataset setup flow."""
@@ -553,10 +587,20 @@ class TestCombinedSetupPath:
             {
                 "stay_id": [stay_id],
                 "mortality_24h": [0],
+                "mortality_hospital": [0],
+                "aki_kdigo": [0],
+                "los_remaining": [1.0],
             }
         )
         labels_df.write_parquet(processed_dir / "labels.parquet")
 
+        label_manifest = {
+            task: {
+                "builder_version": "1.0.0",
+                "config_hash": "abc123",
+            }
+            for task in THESIS_TASKS
+        }
         metadata = {
             "dataset": dataset_name,
             "feature_set": "core",
@@ -565,13 +609,8 @@ class TestCombinedSetupPath:
             "seq_length_hours": 2,
             "min_stay_hours": 2,
             "label_horizon_hours": 24,
-            "task_names": ["mortality_24h"],
-            "label_manifest": {
-                "mortality_24h": {
-                    "builder_version": "1.0.0",
-                    "config_hash": "abc123",
-                }
-            },
+            "task_names": list(THESIS_TASKS),
+            "label_manifest": label_manifest,
         }
         with open(processed_dir / "metadata.yaml", "w") as f:
             yaml.dump(metadata, f)
@@ -2047,6 +2086,8 @@ class TestExperimentRunnerWandbOverrides:
                 "dryrun-audit",
                 "--project",
                 "slices-thesis",
+                "--entity",
+                "hannes-ill",
                 "--dry-run",
             ],
         )
@@ -2074,6 +2115,34 @@ class TestExperimentRunnerWandbOverrides:
                 "thesis-v1",
                 "--project",
                 "slices-thesis",
+                "--entity",
+                "hannes-ill",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
+    def test_main_run_requires_wandb_entity_for_final_launch(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        monkeypatch.delenv("WANDB_ENTITY", raising=False)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "thesis-v1",
+                "--project",
+                "slices-thesis",
+                "--launch-commit",
+                "dummy",
             ],
         )
 
@@ -2339,7 +2408,8 @@ class TestExperimentRunnerWandbOverrides:
         assert "task.head_type=linear" in cmd
         assert "task.hidden_dims=[]" in cmd
         assert "task.dropout=0.0" in cmd
-        assert "protocol=A" in cmd
+        assert "protocol=a" in cmd
+        assert "protocol=A" not in cmd
         assert "+protocol=A" not in cmd
 
     def test_protocol_b_finetune_command_keeps_task_mlp_head(self):
@@ -2371,7 +2441,8 @@ class TestExperimentRunnerWandbOverrides:
 
         assert "training.freeze_encoder=false" in cmd
         assert "task.head_type=linear" not in cmd
-        assert "protocol=B" in cmd
+        assert "protocol=b" in cmd
+        assert "protocol=B" not in cmd
         assert "+protocol=B" not in cmd
 
     def test_xgboost_command_does_not_load_protocol_config_group(self):
@@ -2392,6 +2463,17 @@ class TestExperimentRunnerWandbOverrides:
 
         assert "+protocol=B" not in cmd
         assert "protocol=B" not in cmd
+
+    def test_generated_finetune_protocol_selectors_are_lowercase(self):
+        import scripts.internal.run_experiments as runner
+
+        runs = runner.generate_all_runs()
+        runs_by_id = {run.id: run for run in runs}
+        commands = [" ".join(run.build_command(runs_by_id)) for run in runs]
+
+        assert not any("protocol=A" in command or "protocol=B" in command for command in commands)
+        assert sum("protocol=a" in command for command in commands) == 825
+        assert sum("protocol=b" in command for command in commands) == 1020
 
     def test_manual_finetune_protocol_configs_encode_safe_defaults(self):
         protocol_a = OmegaConf.load("configs/protocol/a.yaml")
@@ -2833,6 +2915,52 @@ class TestExperimentRunnerRetry:
         exit_code = runner.run_scheduler([failed_run], state, parallel=1, dry_run=False)
 
         assert exit_code == 1
+
+    def test_scheduler_rejects_completed_pretrain_missing_encoder(self, tmp_path, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        pretrain_dir = tmp_path / "pretrain"
+        finetune_dir = tmp_path / "finetune"
+        pretrain_dir.mkdir()
+        finetune_dir.mkdir()
+        pretrain = runner.Run(
+            id="pretrain",
+            experiment_class="core_ssl_benchmark",
+            run_type="pretrain",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(pretrain_dir),
+        )
+        finetune = runner.Run(
+            id="finetune",
+            experiment_class="core_ssl_benchmark",
+            run_type="finetune",
+            paradigm="mae",
+            dataset="miiv",
+            seed=42,
+            output_dir=str(finetune_dir),
+            depends_on=[pretrain.id],
+            task="mortality_24h",
+            freeze_encoder=False,
+        )
+        state = {
+            "version": 1,
+            "runs": {
+                pretrain.id: {"status": "completed"},
+                finetune.id: {"status": "pending"},
+            },
+        }
+
+        monkeypatch.setattr(runner, "LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr(runner, "save_state", lambda state: None)
+
+        exit_code = runner.run_scheduler([pretrain, finetune], state, parallel=1, dry_run=False)
+
+        assert exit_code == 1
+        assert state["runs"][pretrain.id]["status"] == "failed"
+        assert state["runs"][finetune.id]["status"] == "skipped"
+        assert "missing encoder.pt" in state["runs"][pretrain.id]["reason"]
 
     def test_scheduler_exit_code_nonzero_for_dependency_skips(self):
         import scripts.internal.run_experiments as runner

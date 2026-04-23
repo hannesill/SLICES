@@ -457,7 +457,7 @@ class TestInit:
 class TestEvaluateImputationScript:
     """Regression tests for the standalone imputation evaluation script."""
 
-    def test_pretrain_checkpoint_still_trains_probe_decoder(self, monkeypatch):
+    def test_pretrain_checkpoint_still_trains_probe_decoder(self, monkeypatch, tmp_path):
         """MAE checkpoints must not skip probe-decoder training."""
         module = importlib.import_module("scripts.eval.evaluate_imputation")
         captured = {}
@@ -555,7 +555,7 @@ class TestEvaluateImputationScript:
                 "logging": {
                     "use_wandb": False,
                 },
-                "output_dir": "outputs/test-imputation",
+                "output_dir": str(tmp_path / "test-imputation"),
             }
         )
 
@@ -569,3 +569,6 @@ class TestEvaluateImputationScript:
         assert captured["feature_stds_loader"] == "train_stats_loader"
         assert captured["evaluate"]["dataloader"] == "test_loader"
         assert captured["evaluate"]["mask_strategy"] == "random"
+        results_path = tmp_path / "test-imputation" / "imputation_results.json"
+        assert results_path.exists()
+        assert '"pretrain_checkpoint": "outputs/pretrain/ssl-last.ckpt"' in results_path.read_text()

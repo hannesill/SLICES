@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+from slices.constants import THESIS_TASKS
 from slices.data.extractors.base import ExtractorConfig
 
 
@@ -175,11 +176,10 @@ class TestExtractorConfigTasksParameter:
     """Test tasks parameter handling."""
 
     def test_default_tasks_list(self):
-        """Test that default tasks list contains expected mortality tasks."""
+        """Test that default tasks list contains the thesis task surface."""
         config = ExtractorConfig(parquet_root="/path")
 
-        assert "mortality_24h" in config.tasks
-        assert "mortality_hospital" in config.tasks
+        assert config.tasks == list(THESIS_TASKS)
 
     def test_custom_tasks_list(self):
         """Test custom tasks list."""

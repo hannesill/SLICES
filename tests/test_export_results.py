@@ -47,12 +47,15 @@ def _fresh_fairness_metadata(
     artifact_source="recorded_final",
     checkpoint_source="final",
     min_subgroup_size=50,
+    artifact_sha256="abc123",
 ):
     protected_attributes = protected_attributes or mod.FAIRNESS_ATTRIBUTES
     return {
+        mod.EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
         mod.FAIRNESS_SCHEMA_VERSION_KEY: mod.FAIRNESS_SUMMARY_SCHEMA_VERSION,
         mod.FAIRNESS_SCRIPT_VERSION_KEY: mod.FAIRNESS_SCRIPT_VERSION,
         mod.FAIRNESS_ARTIFACT_PATH_KEY: artifact_path,
+        mod.FAIRNESS_ARTIFACT_SHA256_KEY: artifact_sha256,
         mod.FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
         mod.FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
         mod.FAIRNESS_PROTECTED_ATTRIBUTES_KEY: json.dumps(protected_attributes),
@@ -684,6 +687,32 @@ def test_validate_accepts_fresh_fairness_summary_metadata():
     warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
 
     assert not warnings
+
+
+def test_validate_warns_when_fairness_artifact_digest_differs_from_test_artifact():
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-digest-mismatch",
+        "_eval_checkpoint_source": "final",
+        "_output_dir": "outputs/run-digest-mismatch",
+        **_fresh_fairness_metadata(
+            mod,
+            artifact_path="outputs/run-digest-mismatch/checkpoints/last.ckpt",
+            artifact_sha256="train-digest",
+        ),
+        mod.FAIRNESS_ARTIFACT_SHA256_KEY: "fairness-digest",
+    }
+    _add_binary_fairness_summary(row, mod, value=0.0)
+
+    per_seed_df = pd.DataFrame([row])
+    aggregated_df = mod.build_aggregated_df(per_seed_df)
+    warnings = mod.validate(per_seed_df, aggregated_df, expected_seeds={42})
+    joined = "\n".join(warnings)
+
+    assert "artifact sha256 mismatch" in joined
+    assert "run-digest-mismatch" in joined
 
 
 def test_validate_does_not_require_eicu_race_fairness():

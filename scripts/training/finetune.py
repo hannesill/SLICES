@@ -28,11 +28,18 @@ Example usage:
         training.unfreeze_epoch=5
 """
 
+from pathlib import Path
+
 import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
 from slices.data.datamodule import ICUDataModule
+from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_PATH_KEY,
+    EVAL_ARTIFACT_SHA256_KEY,
+    file_sha256,
+)
 from slices.training import FineTuneModule
 from slices.training.utils import (
     report_and_validate_train_label_support,
@@ -43,6 +50,26 @@ from slices.training.utils import (
     train_label_support_summary,
     validate_data_prerequisites,
 )
+
+
+def _evaluated_artifact_metadata(
+    cfg: DictConfig,
+    eval_checkpoint_source: str,
+    best_ckpt: str | None,
+) -> dict[str, str]:
+    """Return path and digest for the artifact used to produce test metrics."""
+    if eval_checkpoint_source == "best" and best_ckpt:
+        artifact_path = Path(best_ckpt)
+    elif eval_checkpoint_source == "final":
+        artifact_path = Path(cfg.get("checkpoint_dir", "checkpoints")) / "last.ckpt"
+    else:
+        return {EVAL_ARTIFACT_PATH_KEY: "", EVAL_ARTIFACT_SHA256_KEY: ""}
+
+    artifact_sha256 = file_sha256(artifact_path) if artifact_path.exists() else ""
+    return {
+        EVAL_ARTIFACT_PATH_KEY: str(artifact_path),
+        EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
+    }
 
 
 def _detect_paradigm_from_checkpoint(path: str, *, full_checkpoint: bool) -> str | None:
@@ -380,6 +407,7 @@ def main(cfg: DictConfig) -> None:
             logger.experiment.summary.update(
                 {
                     "_eval_checkpoint_source": eval_checkpoint_source,
+                    **_evaluated_artifact_metadata(cfg, eval_checkpoint_source, best_ckpt),
                     "_best_ckpt_path": best_ckpt or "",
                     "_best_ckpt_load_ok": best_ckpt_load_ok,
                     "_best_ckpt_error": best_ckpt_error or "",

@@ -20,6 +20,9 @@ Example usage:
         masking.strategies=[random]
 """
 
+import json
+from pathlib import Path
+
 import hydra
 import lightning.pytorch as pl
 import torch
@@ -203,10 +206,22 @@ def main(cfg: DictConfig) -> None:
             f"{results['mae_overall']:>10.4f}"
         )
 
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_path = output_dir / "imputation_results.json"
+    payload = {
+        "checkpoint": encoder_ckpt,
+        "pretrain_checkpoint": pretrain_ckpt,
+        "config": OmegaConf.to_container(cfg, resolve=True),
+        "results": all_results,
+    }
+    results_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
     if logger:
         wandb.finish()
 
     print(f"\n  Output directory: {cfg.output_dir}")
+    print(f"  Results: {results_path}")
     print("\n" + "=" * 80)
 
 

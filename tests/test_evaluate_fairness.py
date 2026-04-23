@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SHA256_KEY,
     FAIRNESS_ARTIFACT_SOURCE_KEY,
     FAIRNESS_CHECKPOINT_SOURCE_KEY,
     FAIRNESS_MIN_SUBGROUP_SIZE_KEY,
@@ -51,14 +53,17 @@ def _fresh_fairness_metadata(
     artifact_path: str = "outputs/run/checkpoints/last.ckpt",
     artifact_source: str = "recorded_final",
     checkpoint_source: str = "final",
+    artifact_sha256: str = "abc123",
 ) -> dict[str, object]:
     metadata = {
         "_eval_checkpoint_source": (
             checkpoint_source if checkpoint_source in {"best", "final"} else None
         ),
+        EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
         FAIRNESS_SCHEMA_VERSION_KEY: FAIRNESS_SUMMARY_SCHEMA_VERSION,
         FAIRNESS_SCRIPT_VERSION_KEY: FAIRNESS_SCRIPT_VERSION,
         FAIRNESS_ARTIFACT_PATH_KEY: artifact_path,
+        FAIRNESS_ARTIFACT_SHA256_KEY: artifact_sha256,
         FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
         FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
         FAIRNESS_PROTECTED_ATTRIBUTES_KEY: encode_protected_attributes(protected_attributes),
@@ -146,6 +151,8 @@ def test_build_fairness_summary_metadata_stamps_artifact_and_settings(tmp_path):
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 
     ckpt_path = tmp_path / "outputs" / "run" / "checkpoints" / "best.ckpt"
+    ckpt_path.parent.mkdir(parents=True)
+    ckpt_path.write_text("best checkpoint")
     run = SimpleNamespace(
         config={"paradigm": "mae", "output_dir": "outputs/run"},
         summary_metrics={
@@ -163,6 +170,7 @@ def test_build_fairness_summary_metadata_stamps_artifact_and_settings(tmp_path):
     )
 
     assert metadata[FAIRNESS_ARTIFACT_PATH_KEY] == str(ckpt_path)
+    assert metadata[FAIRNESS_ARTIFACT_SHA256_KEY]
     assert metadata[FAIRNESS_ARTIFACT_SOURCE_KEY] == "recorded_best"
     assert metadata[FAIRNESS_CHECKPOINT_SOURCE_KEY] == "best"
     assert metadata[FAIRNESS_SCRIPT_VERSION_KEY] == FAIRNESS_SCRIPT_VERSION
@@ -256,6 +264,25 @@ def test_has_fairness_metrics_rejects_stale_metadata_settings():
     assert mod.has_fairness_metrics(run, ["gender"], min_subgroup_size=50) is False
     assert any(
         "min subgroup size mismatch" in issue
+        for issue in mod.fairness_summary_metadata_issues(run, ["gender"], 50)
+    )
+
+
+def test_has_fairness_metrics_rejects_artifact_digest_mismatch():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender"),
+            **_fresh_fairness_metadata(["gender"], artifact_sha256="old-digest"),
+            EVAL_ARTIFACT_SHA256_KEY: "new-digest",
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"], min_subgroup_size=50) is False
+    assert any(
+        "artifact sha256 mismatch" in issue
         for issue in mod.fairness_summary_metadata_issues(run, ["gender"], 50)
     )
 
