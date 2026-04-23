@@ -248,6 +248,7 @@ echo "Launch commit: $(printf "%q" "$LAUNCH_COMMIT")"
 echo "Main classes: ${main_classes[*]}"
 echo "Fairness classes: ${fairness_classes[*]}"
 echo "Appendix classes: ${appendix_classes[*]:-none}"
+export SLICES_SKIP_LAUNCH_GIT_CHECK=$(printf "%q" "$SKIP_LAUNCH_GIT_CHECK")
 
 if [[ "$(printf "%q" "$SKIP_LAUNCH_GIT_CHECK")" != "1" ]]; then
   current_commit="\$(git rev-parse --verify HEAD)"

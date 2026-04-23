@@ -985,6 +985,15 @@ def _validate_wandb_online_mode() -> str | None:
     return None
 
 
+def _skip_launch_git_check_enabled() -> bool:
+    """Return whether the explicit launcher escape hatch should bypass git checks."""
+    return os.environ.get("SLICES_SKIP_LAUNCH_GIT_CHECK", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    } or os.environ.get("SKIP_LAUNCH_GIT_CHECK", "").lower() in {"1", "true", "yes"}
+
+
 def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -> None:
     """Require auditable provenance for direct final run/retry invocations."""
     if args.command not in {"run", "retry"}:
@@ -1009,6 +1018,14 @@ def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -
     wandb_mode_error = _validate_wandb_online_mode()
     if wandb_mode_error:
         parser.error(wandb_mode_error)
+
+    if _skip_launch_git_check_enabled():
+        print(
+            "WARNING: skipping final launch git provenance validation because "
+            "SLICES_SKIP_LAUNCH_GIT_CHECK/SKIP_LAUNCH_GIT_CHECK is enabled.",
+            file=sys.stderr,
+        )
+        return
 
     error = _validate_clean_final_launch_state(str(launch_commit))
     if error:
