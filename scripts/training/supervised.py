@@ -47,6 +47,7 @@ from slices.training.utils import (
     setup_wandb_logger,
     train_label_support_summary,
     validate_data_prerequisites,
+    WandbEntityNotFoundError,
 )
 
 
@@ -325,7 +326,11 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     callbacks = setup_finetune_callbacks(cfg, checkpoint_prefix="supervised")
-    logger = setup_wandb_logger(cfg)
+    try:
+        logger = setup_wandb_logger(cfg)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        return
     if logger:
         logger.experiment.summary.update(train_label_support_summary(train_support_stats))
 

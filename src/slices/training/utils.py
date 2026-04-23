@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import torch
 import torch.nn as nn
 import yaml
+import wandb
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -29,6 +30,10 @@ from slices.constants import (
     downstream_protocol_from_freeze,
 )
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+
+
+class WandbEntityNotFoundError(ValueError):
+    """Raised when an explicit W&B entity does not exist."""
 
 # =============================================================================
 # Optimizer / Scheduler
@@ -430,9 +435,11 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
             frac_str = str(label_fraction).replace(".", "")
             group += f"_frac{frac_str}"
 
+    wandb_entity = cfg.logging.get("wandb_entity", None)
+
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
-        entity=cfg.logging.get("wandb_entity", None),
+        entity=wandb_entity,
         name=run_name,
         group=group,
         tags=tags,
@@ -440,7 +447,17 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         log_model=False,
     )
 
-    logger.experiment.config.update(OmegaConf.to_container(cfg, resolve=True))
+    try:
+        logger.experiment.config.update(OmegaConf.to_container(cfg, resolve=True))
+    except wandb.errors.CommError as exc:
+        message = str(exc)
+        if wandb_entity and "entity" in message and "not found" in message:
+            raise WandbEntityNotFoundError(
+                f"W&B entity '{wandb_entity}' could not be found. "
+                "Remove logging.wandb_entity to use the signed-in account, "
+                "or provide a valid W&B username/team."
+            ) from None
+        raise
 
     return logger
 

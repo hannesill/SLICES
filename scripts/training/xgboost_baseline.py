@@ -168,14 +168,27 @@ def _init_wandb_run(cfg: DictConfig, task_name: str):
     import wandb
 
     run_name, group_name = _wandb_run_name_and_group(cfg, task_name)
-    run = wandb.init(
-        project=cfg.logging.wandb_project,
-        entity=cfg.logging.get("wandb_entity", None),
-        name=run_name,
-        group=group_name,
-        tags=_build_wandb_tags(cfg),
-        config=OmegaConf.to_container(cfg, resolve=True),
-    )
+    wandb_entity = cfg.logging.get("wandb_entity", None)
+    try:
+        run = wandb.init(
+            project=cfg.logging.wandb_project,
+            entity=wandb_entity,
+            name=run_name,
+            group=group_name,
+            tags=_build_wandb_tags(cfg),
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
+    except wandb.errors.CommError as exc:
+        message = str(exc)
+        if wandb_entity and "entity" in message and "not found" in message:
+            from slices.training.utils import WandbEntityNotFoundError
+
+            raise WandbEntityNotFoundError(
+                f"W&B entity '{wandb_entity}' could not be found. "
+                "Remove logging.wandb_entity to use the signed-in account, "
+                "or provide a valid W&B username/team."
+            ) from None
+        raise
     return wandb, run
 
 
@@ -197,6 +210,7 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     from slices.training.utils import (
+        WandbEntityNotFoundError,
         report_and_validate_train_label_support,
         train_label_support_summary,
         validate_data_prerequisites,
@@ -204,7 +218,11 @@ def main(cfg: DictConfig) -> None:
 
     task_name = cfg.task.get("task_name", "mortality_24h")
     task_type = cfg.task.get("task_type", "binary")
-    wandb_module, wandb_run = _init_wandb_run(cfg, task_name)
+    try:
+        wandb_module, wandb_run = _init_wandb_run(cfg, task_name)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        return
 
     # Validate data prerequisites including label freshness
     validate_data_prerequisites(
