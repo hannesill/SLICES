@@ -182,6 +182,50 @@ def test_build_fairness_summary_metadata_stamps_artifact_and_settings(tmp_path):
     assert metadata[FAIRNESS_MIN_SUBGROUP_SIZE_KEY] == 50
 
 
+def test_write_fairness_to_wandb_replaces_existing_fairness_keys_by_default(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    class FakeSummary(dict):
+        def save(self):
+            self["saved"] = True
+
+    fake_summary = FakeSummary(
+        {
+            "fairness/race/worst_group_auroc": 0.11,
+            "_fairness_old_setting": "stale",
+            "test/auprc": 0.42,
+        }
+    )
+
+    class FakeRun:
+        summary = fake_summary
+
+    class FakeApi:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def run(self, run_path):
+            assert run_path == "entity/project/run"
+            return FakeRun()
+
+    fake_wandb = SimpleNamespace(Api=FakeApi)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    mod.write_fairness_to_wandb(
+        "entity/project/run",
+        {
+            "fairness/gender/n_valid_groups": 2,
+            "_fairness_summary_schema_version": "fresh",
+        },
+    )
+
+    assert fake_summary["fairness/race/worst_group_auroc"] is None
+    assert fake_summary["_fairness_old_setting"] is None
+    assert fake_summary["fairness/gender/n_valid_groups"] == 2
+    assert fake_summary["test/auprc"] == 0.42
+    assert fake_summary["saved"] is True
+
+
 def test_has_fairness_metrics_requires_requested_attribute_completeness():
     mod = importlib.import_module("scripts.eval.evaluate_fairness")
 

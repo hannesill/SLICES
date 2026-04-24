@@ -582,9 +582,14 @@ def write_fairness_to_wandb(
     run_path: str,
     fairness_flat: dict[str, Any],
     dry_run: bool = False,
-    clear_existing: bool = False,
+    clear_existing: bool = True,
 ) -> None:
-    """Write fairness metrics to W&B run summary."""
+    """Write fairness metrics to W&B run summary.
+
+    Existing fairness summaries are replaced by default so stale subgroup keys
+    from older script versions or settings cannot survive a recomputation and
+    leak into publication exports.
+    """
     import wandb
 
     if dry_run:
@@ -1285,7 +1290,6 @@ def main() -> None:
                 run_path,
                 fairness_flat,
                 args.dry_run,
-                clear_existing=args.force,
             )
             results["processed"] += 1
 

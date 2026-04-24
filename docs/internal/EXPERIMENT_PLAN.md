@@ -70,7 +70,7 @@ Every final run must carry class-based metadata:
 | `experiment_subtype` | Optional finer-grained family, e.g. `lr_sensitivity` |
 | `revision` | Rerun corpus identifier, e.g. `thesis-v1` |
 | `phase` | `pretrain`, `finetune`, `supervised`, or `baseline` |
-| `protocol` | `A` for linear probe, `B` for full finetune/full-training where applicable |
+| `protocol` | `linear_probe` or `full_finetune` where applicable |
 | `dataset` | `miiv`, `eicu`, or `combined` |
 | `paradigm` | `mae`, `jepa`, `contrastive`, `supervised`, `gru_d`, `xgboost`, `ts2vec`, `smart` |
 | `task` | Downstream task where applicable |

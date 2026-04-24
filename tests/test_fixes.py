@@ -2200,6 +2200,86 @@ class TestExperimentRunnerWandbOverrides:
         assert excinfo.value.code == 0
         assert "dry run has no launch provenance" in capsys.readouterr().err
 
+    def test_main_run_dry_run_rejects_invalid_launch_commit(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        def fail_git_stdout(args):
+            raise RuntimeError("Needed a single revision")
+
+        monkeypatch.delenv("SLICES_LAUNCH_COMMIT", raising=False)
+        monkeypatch.setattr(runner, "_git_stdout", fail_git_stdout)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "dryrun-audit",
+                "--project",
+                "slices-thesis",
+                "--entity",
+                "hannes-ill",
+                "--launch-commit",
+                "not-a-commit",
+                "--dry-run",
+            ],
+        )
+        monkeypatch.setattr(
+            runner, "cmd_run", lambda args: pytest.fail("cmd_run should not execute")
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 2
+
+    def test_main_run_dry_run_resolves_launch_commit_before_execution(self, monkeypatch):
+        import scripts.internal.run_experiments as runner
+
+        resolved_commit = "b" * 40
+        captured = {}
+
+        def fake_git_stdout(args):
+            if args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                return resolved_commit
+            raise AssertionError(f"unexpected git command: {args}")
+
+        def fake_cmd_run(args):
+            captured["args"] = args
+            return 0
+
+        monkeypatch.delenv("SLICES_LAUNCH_COMMIT", raising=False)
+        monkeypatch.setattr(runner, "_git_stdout", fake_git_stdout)
+        monkeypatch.setattr(runner, "cmd_run", fake_cmd_run)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_experiments.py",
+                "run",
+                "--experiment-class",
+                "core_ssl_benchmark",
+                "--revision",
+                "dryrun-audit",
+                "--project",
+                "slices-thesis",
+                "--entity",
+                "hannes-ill",
+                "--launch-commit",
+                "HEAD",
+                "--dry-run",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+
+        assert excinfo.value.code == 0
+        assert captured["args"].launch_commit == resolved_commit
+
     def test_main_run_requires_launch_commit_for_final_launch(self, monkeypatch):
         import scripts.internal.run_experiments as runner
 
@@ -2462,11 +2542,43 @@ class TestExperimentRunnerWandbOverrides:
         monkeypatch.setattr(runner, "is_pid_alive", lambda pid: True)
         monkeypatch.setattr(runner, "_pid_matches_command", lambda pid, command: False)
 
-        runner.recover_stale_running(state)
+        recovered = runner.recover_stale_running(state)
 
+        assert recovered == 1
         assert state["runs"]["run-a"]["status"] == "pending"
         assert "pid" not in state["runs"]["run-a"]
         assert "command" not in state["runs"]["run-a"]
+
+    def test_status_recovers_and_persists_stale_running_entries(self, monkeypatch, capsys):
+        import scripts.internal.run_experiments as runner
+
+        state = {
+            "version": 1,
+            "runs": {
+                "core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42": {
+                    "status": "running",
+                    "pid": 123,
+                    "command": "uv run stale",
+                }
+            },
+        }
+        saved = {}
+
+        monkeypatch.setattr(runner, "generate_all_runs", lambda: [])
+        monkeypatch.setattr(runner, "load_state", lambda: state)
+        monkeypatch.setattr(
+            runner, "save_state", lambda updated: saved.setdefault("state", updated)
+        )
+        monkeypatch.setattr(runner, "is_pid_alive", lambda pid: False)
+
+        runner.print_status(["core_ssl_benchmark"], "thesis-v1")
+
+        assert (
+            state["runs"]["core_ssl_benchmark_rev-thesis-v1_pretrain_mae_miiv_seed42"]["status"]
+            == "pending"
+        )
+        assert saved["state"] is state
+        assert "Recovered stale run" in capsys.readouterr().out
 
     def test_scheduler_exit_code_flags_pending_and_running_runs(self):
         import scripts.internal.run_experiments as runner
