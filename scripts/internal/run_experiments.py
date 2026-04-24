@@ -9,10 +9,12 @@ Usage:
         --experiment-class core_ssl_benchmark label_efficiency
     uv run python scripts/internal/run_experiments.py run \
         --experiment-class core_ssl_benchmark label_efficiency \
-        --project slices-thesis --revision thesis-v1 --entity <entity>
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --launch-commit <commit>
     uv run python scripts/internal/run_experiments.py run \
         --experiment-class core_ssl_benchmark --dry-run \
-        --project slices-thesis --revision thesis-v1 --entity <entity>
+        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --launch-commit <commit>
     uv run python scripts/internal/run_experiments.py status \
         --experiment-class core_ssl_benchmark --revision thesis-v1
     uv run python scripts/internal/run_experiments.py retry --failed --skipped \
@@ -989,6 +991,11 @@ def validate_direct_final_launch_policy(args, parser: argparse.ArgumentParser) -
                 "--launch-commit or SLICES_LAUNCH_COMMIT.",
                 file=sys.stderr,
             )
+        else:
+            try:
+                args.launch_commit = _resolve_launch_commit(str(launch_commit))
+            except RuntimeError as exc:
+                parser.error(f"could not validate dry-run launch git provenance: {exc}")
         return
 
     if not launch_commit:
@@ -1402,8 +1409,9 @@ def _pid_matches_command(pid: int, expected_command: str | None) -> bool:
     )
 
 
-def recover_stale_running(state: dict) -> None:
+def recover_stale_running(state: dict) -> int:
     """Reset running entries whose PIDs are dead or no longer match the run."""
+    recovered = 0
     for run_id, info in state["runs"].items():
         if info.get("status") == "running":
             pid = info.get("pid")
@@ -1416,6 +1424,8 @@ def recover_stale_running(state: dict) -> None:
                 info.pop("pid", None)
                 info.pop("command", None)
                 print(f"  Recovered stale run: {run_id}")
+                recovered += 1
+    return recovered
 
 
 RUN_SLOT_COSTS = {
@@ -1653,6 +1663,8 @@ def print_status(
     if revision_filter:
         all_runs = apply_revision(all_runs, revision_filter)
     state = load_state()
+    if recover_stale_running(state):
+        save_state(state)
     generated_ids = {run.id for run in all_runs}
 
     groups: dict[tuple[str, str | None], list[str]] = {}
