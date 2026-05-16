@@ -35,15 +35,17 @@ These constraints are enforced in the objective constructors and by
 
 ## Benchmark Design
 
-The controlled benchmark objectives share the same timestep-level obs-aware
-transformer encoder and differ only in the SSL objective and masking logic.
+The core controlled benchmark objectives are `mae`, `jepa`, and `contrastive`.
+They share the same timestep-level obs-aware transformer encoder and differ only
+in the SSL objective and masking logic.
 
 Highlights:
 
 - MAE reconstructs masked timestep features
 - JEPA predicts masked latent targets from an EMA teacher
 - Contrastive aligns sequence or temporal representations across masked views
-- TS2Vec gives the contrastive family a stronger temporal objective
+- TS2Vec gives the contrastive family a temporal extension, but it is not a
+  core thesis vertex
 - SMART remains outside the controlled comparison because it swaps in MART
 
 ## Example
@@ -97,6 +99,8 @@ pretraining/
 - adds input-level Gaussian noise and optional cropping
 - uses independent timestep masks
 - applies a hierarchical temporal contrastive loss
+- treated as a temporal-contrastive extension, not one of the three controlled
+  thesis objectives
 
 ### SMART
 
