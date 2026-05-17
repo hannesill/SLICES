@@ -21,6 +21,7 @@ from slices.constants import (
     PIN_MEMORY,
     SEQ_LENGTH_HOURS,
     TEST_RATIO,
+    THESIS_TASKS,
     TRAIN_RATIO,
     VAL_RATIO,
 )
@@ -180,6 +181,7 @@ class DataConfig(BaseModel):
     # Data Paths
     # ==========================================================================
     csv_root: Optional[str] = None  # Raw CSV path (only for convert_csv_to_parquet)
+    ricu_output_dir: Optional[str] = None  # RICU parquet output path
     parquet_root: Optional[str] = None  # Parquet files (input for extraction)
     processed_dir: str  # Extracted features (output of extraction, input for training)
 
@@ -191,7 +193,7 @@ class DataConfig(BaseModel):
     feature_set: Literal["core", "extended"] = "core"  # Feature set to extract
     categories: Optional[List[str]] = None  # Feature categories (null = all)
     extraction_batch_size: int = EXTRACTION_BATCH_SIZE
-    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h", "mortality_hospital"])
+    tasks: List[str] = Field(default_factory=lambda: list(THESIS_TASKS))
 
     # Config directory paths (auto-detected if null)
     tasks_dir: Optional[str] = None
@@ -203,14 +205,19 @@ class DataConfig(BaseModel):
     pin_memory: bool = PIN_MEMORY
 
     # Patient-level split ratios
-    train_ratio: float = TRAIN_RATIO
-    val_ratio: float = VAL_RATIO
-    test_ratio: float = TEST_RATIO
+    train_ratio: float = Field(default=TRAIN_RATIO, ge=0.0, le=1.0)
+    val_ratio: float = Field(default=VAL_RATIO, ge=0.0, le=1.0)
+    test_ratio: float = Field(default=TEST_RATIO, ge=0.0, le=1.0)
 
     # Preprocessing applied during training
     normalize: bool = NORMALIZE
 
-    model_config = {"extra": "allow"}  # Allow additional fields from Hydra
+    # Optional pretraining windowing controls
+    enable_sliding_windows: bool = False
+    window_size: Optional[int] = None
+    window_stride: Optional[int] = None
+
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_split_ratios(self) -> "DataConfig":
@@ -233,5 +240,13 @@ class DataConfig(BaseModel):
     def validate_positive_int(cls, v: int) -> int:
         """Validate that value is positive."""
         if v <= 0:
+            raise ValueError("Value must be positive")
+        return v
+
+    @field_validator("window_size", "window_stride")
+    @classmethod
+    def validate_optional_positive_int(cls, v: Optional[int]) -> Optional[int]:
+        """Validate optional window dimensions when configured."""
+        if v is not None and v <= 0:
             raise ValueError("Value must be positive")
         return v

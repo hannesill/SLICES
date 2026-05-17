@@ -19,8 +19,8 @@ import torch.nn as nn
 
 from slices.models.common import build_sinusoidal_pe
 
-from .base import BaseSSLObjective, SSLConfig
-from .masking import create_timestep_mask, extract_visible_timesteps
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
+from .masking import create_timestep_mask, extract_visible_timesteps, scatter_visible_timesteps
 
 
 @dataclass
@@ -113,29 +113,46 @@ class MAEDecoder(nn.Module):
         Returns:
             (B, T, D) predicted feature values per timestep.
         """
-        B = encoded_visible.shape[0]
-        d_dec = self.config.decoder_d_model
-
         # Project visible tokens to decoder space
         vis_proj = self.encoder_proj(encoded_visible)  # (B, n_vis, d_dec)
 
-        # Build full decoder input: mask tokens everywhere, then scatter visible
-        full_tokens = self.mask_token.expand(B, n_timesteps, d_dec).clone()
+        valid_timestep_mask = token_info.get("valid_timestep_mask")
+        if valid_timestep_mask is None:
+            visible_mask = ssl_mask
+        else:
+            visible_mask = ssl_mask & valid_timestep_mask.to(
+                device=ssl_mask.device,
+                dtype=torch.bool,
+            )
 
-        # Scatter visible tokens to their original positions
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        n_vis = vis_proj.shape[1]
-        scatter_idx = vis_indices[:, :n_vis]  # (B, n_vis)
-        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_dec)
-        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
+        full_tokens = scatter_visible_timesteps(
+            vis_proj,
+            visible_mask,
+            n_timesteps,
+            fill_value=self.mask_token,
+        )
 
         # Add time PE to all positions
         timestep_idx = token_info["timestep_idx"]  # (B, T)
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        # Run decoder transformer (no padding mask needed, all T positions valid)
-        decoded = self.decoder(full_tokens)
+        decoder_padding_mask = None
+        if valid_timestep_mask is not None:
+            decoder_padding_mask = ~valid_timestep_mask.to(
+                device=full_tokens.device,
+                dtype=torch.bool,
+            )
+            all_masked = decoder_padding_mask.all(dim=1)
+            if all_masked.any():
+                decoder_padding_mask = decoder_padding_mask.clone()
+                decoder_padding_mask[all_masked, 0] = False
+
+        # Fully unobserved hours should not be available as decoder context.
+        if decoder_padding_mask is None:
+            decoded = self.decoder(full_tokens)
+        else:
+            decoded = self.decoder(full_tokens, src_key_padding_mask=decoder_padding_mask)
 
         # Predict D features per timestep
         predictions = self.output_proj(decoded)  # (B, T, D)
@@ -160,21 +177,7 @@ class MAEObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: MAEConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "MAE requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "MAE requires encoder with pooling='none' to get per-token "
-                f"representations, but got pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "MAE")
 
         d_encoder = encoder.get_output_dim()
         n_features = encoder.config.d_input
@@ -212,10 +215,21 @@ class MAEObjective(BaseSSLObjective):
         # tokens: (B, T, d_model)
 
         # 2. Create SSL mask on timesteps
-        ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=token_info["valid_timestep_mask"],
+        )
 
         # 3. Extract visible tokens
-        visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
+        valid_timestep_mask = token_info["valid_timestep_mask"]
+        visible_tokens, vis_padding = extract_visible_timesteps(
+            tokens,
+            ssl_mask,
+            valid_timestep_mask=valid_timestep_mask,
+        )
 
         # 4. Encode visible tokens only
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
@@ -229,7 +243,13 @@ class MAEObjective(BaseSSLObjective):
         )  # (B, T, D)
 
         # 6. Compute loss on observed features at masked timesteps
-        loss, metrics = self._compute_loss(predictions, x, ssl_mask, obs_mask)
+        loss, metrics = self._compute_loss(
+            predictions,
+            x,
+            ssl_mask,
+            obs_mask,
+            valid_timestep_mask,
+        )
 
         return loss, metrics
 
@@ -239,6 +259,7 @@ class MAEObjective(BaseSSLObjective):
         true_values: torch.Tensor,
         ssl_mask: torch.Tensor,
         obs_mask: torch.Tensor,
+        valid_timestep_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute MSE loss on observed features at masked timesteps.
 
@@ -247,6 +268,7 @@ class MAEObjective(BaseSSLObjective):
             true_values: (B, T, D) original input values.
             ssl_mask: (B, T) True = visible, False = masked.
             obs_mask: (B, T, D) True = observed.
+            valid_timestep_mask: (B, T) True for timesteps with observations.
 
         Returns:
             (loss, metrics_dict)
@@ -260,8 +282,9 @@ class MAEObjective(BaseSSLObjective):
         with torch.no_grad():
             B, T, D = true_values.shape
             n_timesteps = T
-            n_masked_timesteps = (~ssl_mask).sum().item()
-            n_visible_timesteps = ssl_mask.sum().item()
+            n_valid_timesteps = valid_timestep_mask.sum().item()
+            n_masked_timesteps = ((~ssl_mask) & valid_timestep_mask).sum().item()
+            n_visible_timesteps = (ssl_mask & valid_timestep_mask).sum().item()
             n_loss_positions = loss_mask.sum().item()
 
             # Visible reconstruction for monitoring
@@ -278,7 +301,7 @@ class MAEObjective(BaseSSLObjective):
                 "ssl_loss": loss.detach(),
                 "mae_recon_loss_masked": loss.detach(),
                 "mae_recon_loss_visible": visible_loss,
-                "mae_mask_ratio_actual": n_masked_timesteps / max(B * n_timesteps, 1),
+                "mae_mask_ratio_actual": n_masked_timesteps / max(n_valid_timesteps, 1),
                 "mae_n_timesteps": n_timesteps,
                 "mae_n_visible_per_sample": n_visible_timesteps / B,
                 "mae_n_masked_per_sample": n_masked_timesteps / B,

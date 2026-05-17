@@ -1,8 +1,10 @@
 """Base classes for label extraction."""
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import polars as pl
 
@@ -26,6 +28,7 @@ class LabelConfig:
     # Label definition
     label_sources: List[str] = field(default_factory=list)  # Required data sources
     label_params: Dict = field(default_factory=dict)  # Task-specific parameters
+    quality_checks: Dict = field(default_factory=dict)  # Optional alert thresholds only
 
     # Evaluation metrics
     primary_metric: str = "auroc"
@@ -47,6 +50,33 @@ class LabelBuilder(ABC):
     (e.g., mortality flags, creatinine values) into prediction labels.
     """
 
+    SEMANTIC_VERSION: str = "1.0.0"
+
+    @staticmethod
+    def config_hash(config: LabelConfig) -> str:
+        """Compute a deterministic hash of the label-affecting config fields.
+
+        Returns:
+            16-char hex digest of the config's label-relevant fields.
+        """
+        # NOTE: quality_checks intentionally excluded because they only control
+        # warnings/analysis thresholds, not the label semantics themselves.
+        supported_datasets = (
+            sorted(config.supported_datasets) if config.supported_datasets is not None else None
+        )
+        hashable = {
+            "task_name": config.task_name,
+            "task_type": config.task_type,
+            "prediction_window_hours": config.prediction_window_hours,
+            "observation_window_hours": config.observation_window_hours,
+            "gap_hours": config.gap_hours,
+            "label_sources": sorted(config.label_sources),
+            "label_params": config.label_params,
+            "supported_datasets": supported_datasets,
+        }
+        content = json.dumps(hashable, sort_keys=True, default=str)
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
     def __init__(self, config: LabelConfig) -> None:
         """Initialize label builder with configuration.
 
@@ -54,6 +84,64 @@ class LabelBuilder(ABC):
             config: Label configuration specifying label definition.
         """
         self.config = config
+        self._last_quality_stats: Dict[str, Any] = {}
+
+    def required_raw_timeseries_horizon_hours(self) -> int:
+        """Return the raw timeseries horizon needed to build this task's labels.
+
+        This is independent of the model input sequence length. The extractor uses
+        it to validate that the upstream export retains enough post-observation
+        data for forward-looking labels.
+
+        Returns:
+            Maximum hour offset needed from the raw ``timeseries`` source.
+            Returns 0 for tasks that do not depend on raw timeseries labels.
+        """
+        if "timeseries" not in self.config.label_sources:
+            return 0
+
+        return int(self.config.observation_window_hours or 0)
+
+    def build_quality_stats(self, labels: pl.DataFrame) -> Dict[str, Any]:
+        """Build serializable task-level quality stats from extracted labels.
+
+        Args:
+            labels: Builder output with ``stay_id`` and ``label`` columns.
+
+        Returns:
+            Dictionary of quality stats suitable for persistence in metadata.yaml.
+        """
+        total = len(labels)
+        if "label" not in labels.columns:
+            stats: Dict[str, Any] = {"total_stays": total}
+            self._last_quality_stats = stats
+            return stats
+
+        null_count = labels["label"].null_count()
+        non_null = total - null_count
+
+        stats = {
+            "total_stays": total,
+            "non_null_labels": non_null,
+            "null_labels": null_count,
+            "null_percentage": ((null_count / total) * 100.0) if total > 0 else 0.0,
+        }
+
+        if self.config.task_type in {"binary", "binary_classification"}:
+            positives = labels.filter(pl.col("label") == 1).height
+            negatives = labels.filter(pl.col("label") == 0).height
+            stats.update(
+                {
+                    "positive_labels": positives,
+                    "negative_labels": negatives,
+                    "positive_prevalence_non_null": (
+                        (positives / non_null) if non_null > 0 else None
+                    ),
+                }
+            )
+
+        self._last_quality_stats = stats
+        return stats
 
     @abstractmethod
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:

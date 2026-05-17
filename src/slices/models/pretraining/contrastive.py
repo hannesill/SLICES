@@ -37,8 +37,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base import BaseSSLObjective, SSLConfig
-from .masking import create_timestep_mask, extract_visible_timesteps
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
+from .masking import (
+    create_complementary_timestep_masks,
+    create_timestep_mask,
+    extract_visible_timesteps,
+    scatter_visible_timesteps,
+)
 
 
 @dataclass
@@ -60,7 +65,9 @@ class ContrastiveConfig(SSLConfig):
     # Temperature for NT-Xent
     temperature: float = 0.07
 
-    # Use complementary (non-overlapping) masks for views
+    # Use complementary masks for views. Extremely sparse samples may fall back
+    # to a shared timestep so neither view becomes empty after eligibility
+    # filtering.
     complementary_masks: bool = True
 
     def __post_init__(self) -> None:
@@ -121,22 +128,7 @@ class ContrastiveObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: ContrastiveConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "Contrastive requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "Contrastive requires encoder with pooling='none' to get "
-                "per-token representations for mean-pooling, but got "
-                f"pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "Contrastive")
 
         d_encoder = encoder.get_output_dim()
 
@@ -167,28 +159,61 @@ class ContrastiveObjective(BaseSSLObjective):
 
         # 1. Tokenize (shared between both views)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
+        valid_timestep_mask = token_info["valid_timestep_mask"]
 
         # 2. Create two views via timestep masks
-        ssl_mask_1 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+        ssl_mask_1 = create_timestep_mask(
+            B,
+            T,
+            self.config.mask_ratio,
+            device,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         if self.config.complementary_masks:
-            ssl_mask_2 = ~ssl_mask_1
+            ssl_mask_1, ssl_mask_2 = create_complementary_timestep_masks(
+                ssl_mask_1,
+                valid_timestep_mask,
+            )
         else:
-            ssl_mask_2 = create_timestep_mask(B, T, self.config.mask_ratio, device)
+            ssl_mask_2 = create_timestep_mask(
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                valid_timestep_mask=valid_timestep_mask,
+            )
+
+        effective_mask_1 = ssl_mask_1 & valid_timestep_mask
+        effective_mask_2 = ssl_mask_2 & valid_timestep_mask
 
         # 3. Encode both views
-        vis_tokens_1, vis_padding_1 = extract_visible_timesteps(tokens, ssl_mask_1)
+        vis_tokens_1, vis_padding_1 = extract_visible_timesteps(
+            tokens,
+            ssl_mask_1,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         encoded_1 = self.encoder.encode(vis_tokens_1, vis_padding_1)
 
-        vis_tokens_2, vis_padding_2 = extract_visible_timesteps(tokens, ssl_mask_2)
+        vis_tokens_2, vis_padding_2 = extract_visible_timesteps(
+            tokens,
+            ssl_mask_2,
+            valid_timestep_mask=valid_timestep_mask,
+        )
         encoded_2 = self.encoder.encode(vis_tokens_2, vis_padding_2)
 
         if self.config.mode == "temporal":
             # 4a. Scatter encoded tokens back to full (B, T, d) grid
-            full_1 = self._scatter_to_full(encoded_1, ssl_mask_1, T)
-            full_2 = self._scatter_to_full(encoded_2, ssl_mask_2, T)
+            full_1 = self._scatter_to_full(encoded_1, effective_mask_1, T)
+            full_2 = self._scatter_to_full(encoded_2, effective_mask_2, T)
 
             # 5a. Temporal NT-Xent on overlapping timesteps
-            loss, metrics = self._temporal_nt_xent_loss(full_1, full_2, ssl_mask_1, ssl_mask_2)
+            loss, metrics = self._temporal_nt_xent_loss(
+                full_1,
+                full_2,
+                effective_mask_1,
+                effective_mask_2,
+                valid_timestep_mask,
+            )
         else:
             # 4b. Instance mode: mean-pool -> project -> instance NT-Xent
             pooled_1 = self._mean_pool(encoded_1, vis_padding_1)
@@ -197,7 +222,13 @@ class ContrastiveObjective(BaseSSLObjective):
             z1 = self.projection_head(pooled_1)  # (B, proj_dim)
             z2 = self.projection_head(pooled_2)  # (B, proj_dim)
 
-            loss, metrics = self._nt_xent_loss(z1, z2, ssl_mask_1, ssl_mask_2)
+            loss, metrics = self._nt_xent_loss(
+                z1,
+                z2,
+                effective_mask_1,
+                effective_mask_2,
+                valid_timestep_mask,
+            )
 
         return loss, metrics
 
@@ -221,6 +252,30 @@ class ContrastiveObjective(BaseSSLObjective):
         return summed / counts
 
     @staticmethod
+    def _timestep_count_metrics(
+        ssl_mask_1: torch.Tensor,
+        ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
+    ) -> Dict[str, float]:
+        """Count visible/masked timesteps over eligible non-empty timesteps only."""
+        eligible_mask = eligible_mask.to(device=ssl_mask_1.device, dtype=torch.bool)
+        ssl_mask_1 = ssl_mask_1.to(dtype=torch.bool) & eligible_mask
+        ssl_mask_2 = ssl_mask_2.to(dtype=torch.bool) & eligible_mask
+        denom = max(int(eligible_mask.shape[0]), 1)
+
+        n_vis_1 = ssl_mask_1.sum().item()
+        n_vis_2 = ssl_mask_2.sum().item()
+        n_masked_1 = ((~ssl_mask_1) & eligible_mask).sum().item()
+        n_masked_2 = ((~ssl_mask_2) & eligible_mask).sum().item()
+
+        return {
+            "contrastive_n_visible_view1": n_vis_1 / denom,
+            "contrastive_n_visible_view2": n_vis_2 / denom,
+            "contrastive_n_masked_view1": n_masked_1 / denom,
+            "contrastive_n_masked_view2": n_masked_2 / denom,
+        }
+
+    @staticmethod
     def _scatter_to_full(
         encoded: torch.Tensor,
         ssl_mask: torch.Tensor,
@@ -228,9 +283,8 @@ class ContrastiveObjective(BaseSSLObjective):
     ) -> torch.Tensor:
         """Scatter visible encoded tokens back to full (B, T, d) tensor.
 
-        Uses the same argsort-scatter pattern as the MAE decoder and JEPA
-        predictor to place encoded visible tokens at their original temporal
-        positions, with zeros at masked positions.
+        Places encoded visible tokens at their original temporal positions,
+        with zeros at masked positions.
 
         Args:
             encoded: (B, n_vis, d_enc) encoded visible tokens.
@@ -240,16 +294,7 @@ class ContrastiveObjective(BaseSSLObjective):
         Returns:
             (B, T, d_enc) with encoded tokens at visible positions, zeros elsewhere.
         """
-        B, n_vis, d_enc = encoded.shape
-        device = encoded.device
-
-        full = torch.zeros(B, n_timesteps, d_enc, device=device, dtype=encoded.dtype)
-
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        scatter_idx = vis_indices[:, :n_vis].unsqueeze(-1).expand(-1, -1, d_enc)
-        full.scatter_(1, scatter_idx, encoded)
-
-        return full
+        return scatter_visible_timesteps(encoded, ssl_mask, n_timesteps)
 
     def _temporal_nt_xent_loss(
         self,
@@ -257,6 +302,7 @@ class ContrastiveObjective(BaseSSLObjective):
         full_2: torch.Tensor,
         ssl_mask_1: torch.Tensor,
         ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute temporal NT-Xent loss on overlapping timestep tokens.
 
@@ -269,6 +315,7 @@ class ContrastiveObjective(BaseSSLObjective):
             full_2: (B, T, d_enc) scattered encoded tokens from view 2.
             ssl_mask_1: (B, T) True = visible in view 1.
             ssl_mask_2: (B, T) True = visible in view 2.
+            eligible_mask: (B, T) True for non-empty timesteps eligible for masking.
 
         Returns:
             (loss, metrics_dict)
@@ -284,6 +331,11 @@ class ContrastiveObjective(BaseSSLObjective):
         if N < 2:
             loss = full_1.sum() * 0.0  # zero with grad connectivity
             with torch.no_grad():
+                count_metrics = self._timestep_count_metrics(
+                    ssl_mask_1,
+                    ssl_mask_2,
+                    eligible_mask,
+                )
                 metrics = {
                     "contrastive_loss": loss.detach(),
                     "ssl_loss": loss.detach(),
@@ -291,13 +343,10 @@ class ContrastiveObjective(BaseSSLObjective):
                     "contrastive_pos_similarity": torch.tensor(0.0),
                     "contrastive_temperature": temperature,
                     "contrastive_n_timesteps": T,
-                    "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
-                    "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
-                    "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
-                    "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
                     "contrastive_n_overlap_tokens": 0,
                     "contrastive_n_overlap_per_sample": 0.0,
                 }
+                metrics.update(count_metrics)
             return loss, metrics
 
         # Gather overlap tokens — boolean indexing in row-major order ensures
@@ -329,6 +378,11 @@ class ContrastiveObjective(BaseSSLObjective):
             preds = sim_matrix.argmax(dim=1)
             accuracy = (preds == labels).float().mean()
             pos_sim = F.cosine_similarity(z1, z2, dim=-1).mean()
+            count_metrics = self._timestep_count_metrics(
+                ssl_mask_1,
+                ssl_mask_2,
+                eligible_mask,
+            )
 
             metrics = {
                 "contrastive_loss": loss.detach(),
@@ -337,13 +391,10 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_pos_similarity": pos_sim,
                 "contrastive_temperature": temperature,
                 "contrastive_n_timesteps": T,
-                "contrastive_n_visible_view1": ssl_mask_1.sum().item() / B,
-                "contrastive_n_visible_view2": ssl_mask_2.sum().item() / B,
-                "contrastive_n_masked_view1": (~ssl_mask_1).sum().item() / B,
-                "contrastive_n_masked_view2": (~ssl_mask_2).sum().item() / B,
                 "contrastive_n_overlap_tokens": N,
                 "contrastive_n_overlap_per_sample": N / B,
             }
+            metrics.update(count_metrics)
 
         return loss, metrics
 
@@ -353,6 +404,7 @@ class ContrastiveObjective(BaseSSLObjective):
         z2: torch.Tensor,
         ssl_mask_1: torch.Tensor,
         ssl_mask_2: torch.Tensor,
+        eligible_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute NT-Xent (Normalized Temperature-scaled Cross Entropy) loss.
 
@@ -361,10 +413,47 @@ class ContrastiveObjective(BaseSSLObjective):
             z2: (B, proj_dim) L2-normalized projections from view 2.
             ssl_mask_1: (B, T) mask for view 1 (for metrics).
             ssl_mask_2: (B, T) mask for view 2 (for metrics).
+            eligible_mask: (B, T) True for non-empty timesteps eligible for masking.
 
         Returns:
             (loss, metrics_dict)
         """
+        valid_samples = ssl_mask_1.any(dim=1) & ssl_mask_2.any(dim=1)
+        n_valid_samples = int(valid_samples.sum().item())
+        if n_valid_samples < 2:
+            loss = (z1.sum() + z2.sum()) * 0.0
+            with torch.no_grad():
+                T = ssl_mask_1.shape[1]
+                valid_mask_1 = ssl_mask_1[valid_samples]
+                valid_mask_2 = ssl_mask_2[valid_samples]
+                valid_eligible_mask = eligible_mask[valid_samples]
+                count_metrics = self._timestep_count_metrics(
+                    valid_mask_1,
+                    valid_mask_2,
+                    valid_eligible_mask,
+                )
+                metrics = {
+                    "contrastive_loss": loss.detach(),
+                    "ssl_loss": loss.detach(),
+                    "contrastive_accuracy": torch.tensor(0.0, device=z1.device),
+                    "contrastive_pos_similarity": torch.tensor(0.0, device=z1.device),
+                    "contrastive_alignment": torch.tensor(0.0, device=z1.device),
+                    "contrastive_uniformity": torch.tensor(0.0, device=z1.device),
+                    "contrastive_effective_rank": torch.tensor(0.0, device=z1.device),
+                    "contrastive_temperature": self.config.temperature,
+                    "contrastive_n_timesteps": T,
+                    "contrastive_n_samples_used": n_valid_samples,
+                    "contrastive_n_samples_skipped": z1.shape[0] - n_valid_samples,
+                }
+                metrics.update(count_metrics)
+            return loss, metrics
+
+        z1 = z1[valid_samples]
+        z2 = z2[valid_samples]
+        ssl_mask_1 = ssl_mask_1[valid_samples]
+        ssl_mask_2 = ssl_mask_2[valid_samples]
+        eligible_mask = eligible_mask[valid_samples]
+
         B = z1.shape[0]
         temperature = self.config.temperature
 
@@ -412,12 +501,13 @@ class ContrastiveObjective(BaseSSLObjective):
             p = p / p.sum().clamp(min=1e-12)
             eff_rank = (-p * p.clamp(min=1e-7).log()).sum().exp()
 
-            # Timestep statistics
+            # Timestep statistics over eligible non-empty timesteps only.
             T = ssl_mask_1.shape[1]
-            n_vis_1 = ssl_mask_1.sum().item()
-            n_vis_2 = ssl_mask_2.sum().item()
-            n_masked_1 = (~ssl_mask_1).sum().item()
-            n_masked_2 = (~ssl_mask_2).sum().item()
+            count_metrics = self._timestep_count_metrics(
+                ssl_mask_1,
+                ssl_mask_2,
+                eligible_mask,
+            )
 
             metrics = {
                 "contrastive_loss": loss.detach(),
@@ -429,10 +519,9 @@ class ContrastiveObjective(BaseSSLObjective):
                 "contrastive_effective_rank": eff_rank,
                 "contrastive_temperature": temperature,
                 "contrastive_n_timesteps": T,
-                "contrastive_n_visible_view1": n_vis_1 / B,
-                "contrastive_n_visible_view2": n_vis_2 / B,
-                "contrastive_n_masked_view1": n_masked_1 / B,
-                "contrastive_n_masked_view2": n_masked_2 / B,
+                "contrastive_n_samples_used": B,
+                "contrastive_n_samples_skipped": valid_samples.numel() - B,
             }
+            metrics.update(count_metrics)
 
         return loss, metrics

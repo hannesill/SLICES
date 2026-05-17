@@ -2,6 +2,8 @@
 
 import pytest
 from pydantic import ValidationError
+
+from slices.constants import THESIS_TASKS
 from slices.data.extractors.base import ExtractorConfig
 
 
@@ -24,10 +26,10 @@ class TestExtractorConfigBasic:
         config = ExtractorConfig(parquet_root="/path/to/parquet")
 
         assert config.output_dir == "data/processed"
-        assert config.seq_length_hours == 48
+        assert config.seq_length_hours == 24
         assert config.feature_set == "core"
         assert config.tasks_dir is None
-        assert config.min_stay_hours == 48
+        assert config.min_stay_hours == 24
         assert "mortality_24h" in config.tasks
 
     def test_custom_values(self):
@@ -175,11 +177,10 @@ class TestExtractorConfigTasksParameter:
     """Test tasks parameter handling."""
 
     def test_default_tasks_list(self):
-        """Test that default tasks list contains expected mortality tasks."""
+        """Test that default tasks list contains the thesis task surface."""
         config = ExtractorConfig(parquet_root="/path")
 
-        assert "mortality_24h" in config.tasks
-        assert "mortality_hospital" in config.tasks
+        assert config.tasks == list(THESIS_TASKS)
 
     def test_custom_tasks_list(self):
         """Test custom tasks list."""

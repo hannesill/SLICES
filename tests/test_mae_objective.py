@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+
 from slices.data.transforms import (
     MaskingStrategy,
     apply_mask,
@@ -137,6 +138,76 @@ class TestMAEDecoder:
         decoder = MAEDecoder(d_encoder=d_encoder, n_features=10, max_seq_length=48, config=config)
 
         assert decoder.mask_token.shape[-1] == d_decoder
+
+    def test_decoder_ignores_padded_visible_tokens(self):
+        """Padded visible-token rows must not overwrite real masked positions."""
+        from slices.models.pretraining.mae import MAEDecoder
+
+        config = MAEConfig(decoder_d_model=2, decoder_n_layers=1, decoder_n_heads=1)
+        decoder = MAEDecoder(d_encoder=2, n_features=2, max_seq_length=3, config=config)
+        decoder.encoder_proj = torch.nn.Identity()
+        decoder.decoder = torch.nn.Identity()
+        decoder.embed_dropout = torch.nn.Identity()
+        decoder.output_proj = torch.nn.Identity()
+        decoder.time_pe.zero_()
+        with torch.no_grad():
+            decoder.mask_token.fill_(-1.0)
+
+        encoded_visible = torch.tensor(
+            [
+                [[10.0, 10.0], [11.0, 11.0]],
+                [[20.0, 20.0], [99.0, 99.0]],
+            ]
+        )
+        ssl_mask = torch.tensor(
+            [
+                [True, True, False],
+                [True, False, False],
+            ]
+        )
+        token_info = {
+            "timestep_idx": torch.arange(3).unsqueeze(0).expand(2, -1),
+        }
+
+        pred = decoder(encoded_visible, ssl_mask, token_info, n_timesteps=3)
+
+        assert torch.allclose(pred[1, 0], torch.tensor([20.0, 20.0]))
+        assert torch.allclose(pred[1, 1], torch.tensor([-1.0, -1.0]))
+        assert torch.allclose(pred[1, 2], torch.tensor([-1.0, -1.0]))
+
+    def test_decoder_masks_empty_timesteps_from_attention_context(self):
+        """Fully unobserved timesteps should not contribute decoder context."""
+        from slices.models.pretraining.mae import MAEDecoder
+
+        class ContextSumDecoder(torch.nn.Module):
+            def forward(self, src, src_key_padding_mask=None):
+                if src_key_padding_mask is not None:
+                    src = src.masked_fill(src_key_padding_mask.unsqueeze(-1), 0.0)
+                context = src.sum(dim=1, keepdim=True)
+                return context.expand_as(src)
+
+        config = MAEConfig(decoder_d_model=2, decoder_n_layers=1, decoder_n_heads=1)
+        decoder = MAEDecoder(d_encoder=2, n_features=2, max_seq_length=3, config=config)
+        decoder.encoder_proj = torch.nn.Identity()
+        decoder.decoder = ContextSumDecoder()
+        decoder.embed_dropout = torch.nn.Identity()
+        decoder.output_proj = torch.nn.Identity()
+        decoder.time_pe.zero_()
+        with torch.no_grad():
+            decoder.mask_token.fill_(100.0)
+
+        encoded_visible = torch.tensor([[[1.0, 0.0], [3.0, 0.0]]])
+        ssl_mask = torch.tensor([[True, False, True]])
+        token_info = {
+            "timestep_idx": torch.arange(3).unsqueeze(0),
+            "valid_timestep_mask": torch.tensor([[True, False, True]]),
+        }
+
+        pred = decoder(encoded_visible, ssl_mask, token_info, n_timesteps=3)
+
+        expected_context = torch.tensor([4.0, 0.0])
+        assert torch.allclose(pred[0, 0], expected_context)
+        assert torch.allclose(pred[0, 2], expected_context)
 
 
 # =============================================================================
@@ -296,6 +367,91 @@ class TestMAEObjective:
         n_loss = metrics["mae_n_loss_positions"]
         n_observed = obs_mask.sum().item()
         assert n_loss <= n_observed
+
+    def test_empty_timesteps_are_excluded_from_mae_counts(self, encoder, mae_config):
+        """MAE masking metrics should only count timesteps with observations."""
+        mae = MAEObjective(encoder, mae_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 1, :3] = True
+        obs_mask[:, 5, :3] = True
+        obs_mask[:, 6, :3] = True
+
+        _, metrics = mae(x, obs_mask)
+
+        assert metrics["mae_n_visible_per_sample"] + metrics[
+            "mae_n_masked_per_sample"
+        ] == pytest.approx(3.0)
+
+    def test_mae_passes_valid_timestep_mask_to_masking(self, encoder, mae_config, monkeypatch):
+        """Fully unobserved timesteps should be excluded from MAE masking."""
+        mae = MAEObjective(encoder, mae_config)
+        captured = {}
+
+        def fake_create_timestep_mask(
+            batch_size,
+            n_timesteps,
+            mask_ratio,
+            device,
+            valid_timestep_mask=None,
+        ):
+            captured["batch_size"] = batch_size
+            captured["n_timesteps"] = n_timesteps
+            captured["mask_ratio"] = mask_ratio
+            captured["device"] = device
+            captured["masking_valid_timestep_mask"] = valid_timestep_mask.clone()
+            return torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+
+        def fake_extract_visible_timesteps(
+            tokens,
+            ssl_mask,
+            valid_timestep_mask=None,
+        ):
+            captured["extract_valid_timestep_mask"] = valid_timestep_mask.clone()
+            visible_tokens = tokens[:, :1, :]
+            vis_padding = torch.ones(
+                tokens.shape[0],
+                1,
+                dtype=torch.bool,
+                device=tokens.device,
+            )
+            return visible_tokens, vis_padding
+
+        monkeypatch.setattr(
+            "slices.models.pretraining.mae.create_timestep_mask",
+            fake_create_timestep_mask,
+        )
+        monkeypatch.setattr(
+            "slices.models.pretraining.mae.extract_visible_timesteps",
+            fake_extract_visible_timesteps,
+        )
+
+        x = torch.randn(2, 4, 10)
+        obs_mask = torch.tensor(
+            [
+                [
+                    [True] * 10,
+                    [False] * 10,
+                    [True] * 10,
+                    [False] * 10,
+                ],
+                [
+                    [False] * 10,
+                    [True] * 10,
+                    [True] * 10,
+                    [False] * 10,
+                ],
+            ],
+            dtype=torch.bool,
+        )
+
+        mae(x, obs_mask)
+
+        expected = obs_mask.any(dim=-1)
+        assert torch.equal(captured["masking_valid_timestep_mask"], expected)
+        assert torch.equal(captured["extract_valid_timestep_mask"], expected)
 
     def test_mae_get_encoder(self, encoder, mae_config):
         mae = MAEObjective(encoder, mae_config)

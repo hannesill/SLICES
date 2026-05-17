@@ -10,8 +10,8 @@ Three masking strategies:
 - feature_block: Mask entire features for the full window
 - temporal_block: Mask contiguous hour blocks across all features
 
-For MAE models: extracts encoder weights, uses a linear decoder for probing.
-For non-MAE models: train lightweight linear decoder (d_model -> d_input).
+Checkpoint loaders create a lightweight probe decoder (d_model -> d_input).
+This probe should be trained on the training split before evaluation.
 
 Metrics: NRMSE per feature, MAE overall.
 """
@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from slices.models.encoders import ObservationTransformerEncoder
+from slices.models.encoders import ObservationTransformerEncoder, SMARTEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,30 @@ class _ObsEncoderTimestepAdapter(nn.Module):
         # Average tokens per timestep (avoid div-by-zero)
         output = output / counts.clamp(min=1)
         return output
+
+
+class _SmartEncoderTimestepAdapter(nn.Module):
+    """Wrap SMART pooling=none output into timestep-level representations.
+
+    SMART returns ``(B, V, T, d_model)`` for SSL. The generic imputation probe
+    expects ``(B, T, d_model)`` so one decoder can reconstruct all features at
+    each timestep.
+    """
+
+    def __init__(self, encoder: SMARTEncoder) -> None:
+        super().__init__()
+        self.encoder = encoder
+
+    def get_output_dim(self) -> int:
+        return self.encoder.get_output_dim()
+
+    def forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
+        encoded = self.encoder(x, mask=mask, **kwargs)
+        if encoded.dim() == 4:
+            return encoded.mean(dim=1)
+        return encoded
 
 
 class ImputationEvaluator:
@@ -152,10 +176,10 @@ class ImputationEvaluator:
         device: str = "cpu",
         feature_names: Optional[List[str]] = None,
     ) -> "ImputationEvaluator":
-        """Load MAE encoder for reconstruction evaluation.
+        """Load a MAE encoder and initialize a probe decoder for evaluation.
 
         Extracts the encoder from a full MAE pretraining checkpoint and
-        creates a linear decoder for probing reconstruction quality.
+        creates a lightweight probe decoder for reconstruction quality.
 
         The MAE's native decoder operates in observation-token space which
         is incompatible with the timestep-level masking used by evaluate().
@@ -168,7 +192,7 @@ class ImputationEvaluator:
             feature_names: Optional feature names for per-feature reporting.
 
         Returns:
-            ImputationEvaluator with MAE encoder (adapted) and linear decoder.
+            ImputationEvaluator with MAE encoder (adapted) and probe decoder.
         """
         from slices.models.encoders import build_encoder
 
@@ -195,6 +219,8 @@ class ImputationEvaluator:
         # need scatter-back; obs_aware TransformerEncoder already outputs per-timestep)
         if isinstance(encoder, ObservationTransformerEncoder):
             encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
+        elif isinstance(encoder, SMARTEncoder):
+            encoder = _SmartEncoderTimestepAdapter(encoder)
 
         encoder = encoder.to(device).eval()
 
@@ -248,6 +274,8 @@ class ImputationEvaluator:
             seq_length = encoder_config.get("max_seq_length", 168)
             if isinstance(encoder, ObservationTransformerEncoder):
                 encoder = _ObsEncoderTimestepAdapter(encoder, seq_length)
+            elif isinstance(encoder, SMARTEncoder):
+                encoder = _SmartEncoderTimestepAdapter(encoder)
         else:
             raise ValueError(
                 "Checkpoint does not contain encoder_config. "
@@ -328,10 +356,11 @@ class ImputationEvaluator:
         max_epochs: int = 10,
         lr: float = 1e-3,
     ) -> Dict[str, Any]:
-        """Train lightweight decoder for non-MAE models.
+        """Train a lightweight reconstruction probe on frozen encoder features.
 
-        Freezes encoder and trains only the decoder to reconstruct
-        observed values from encoder representations.
+        Freezes the encoder and trains only the decoder to reconstruct
+        observed values from encoder representations. This is the intended
+        evaluation path for both MAE checkpoints and saved encoder checkpoints.
 
         Args:
             dataloader: DataLoader providing batches with 'timeseries' and 'mask'.

@@ -10,6 +10,7 @@ Tests cover:
 
 import pytest
 import torch
+
 from slices.eval.fairness import (
     FairnessConfig,
     compute_demographic_parity,

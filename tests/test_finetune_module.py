@@ -8,6 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 from pydantic import ValidationError
+
 from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.heads import (
     LinearTaskHead,
@@ -412,11 +413,44 @@ class TestFineTuneModule:
         assert module.task_head is not None
         assert isinstance(module.task_head, MLPTaskHead)
 
+    def test_obs_aware_transformer_forward_masks_empty_timesteps(self, sample_config):
+        """Downstream pooling should exclude fully unobserved obs-aware timesteps."""
+        config = OmegaConf.create(OmegaConf.to_container(sample_config, resolve=True))
+        config.encoder.obs_aware = True
+        config.training.use_missing_token = False
+        module = FineTuneModule(config)
+
+        captured = {}
+
+        def capture_forward(timeseries, mask=None, padding_mask=None):
+            captured["padding_mask"] = padding_mask.detach().clone()
+            return torch.zeros(timeseries.size(0), module.encoder.get_output_dim())
+
+        module.encoder.forward = capture_forward
+
+        timeseries = torch.randn(2, 4, 35)
+        obs_mask = torch.ones(2, 4, 35, dtype=torch.bool)
+        obs_mask[0, 1, :] = False
+        obs_mask[1, 2, :] = False
+
+        module(timeseries, obs_mask)
+
+        assert torch.equal(captured["padding_mask"], obs_mask.any(dim=-1))
+
     def test_load_encoder_checkpoint(self, sample_config, encoder_checkpoint):
         """Test loading encoder from checkpoint."""
         module = FineTuneModule(sample_config, checkpoint_path=encoder_checkpoint)
 
         assert module.encoder is not None
+
+    def test_rejects_ambiguous_checkpoint_sources(self, sample_config):
+        """Finetuning must not silently prefer one checkpoint source over another."""
+        with pytest.raises(ValueError, match="exactly one checkpoint source"):
+            FineTuneModule(
+                sample_config,
+                checkpoint_path="outputs/pretrain/encoder.pt",
+                pretrain_checkpoint_path="outputs/pretrain/last.ckpt",
+            )
 
     def test_load_pretrain_checkpoint_auto_detect_encoder(self, sample_config, tmp_path):
         """Test that pretrain checkpoint auto-detects encoder architecture.
@@ -657,6 +691,7 @@ class TestIntrinsicMissingnessEncodersNotWrapped:
 
         # Encoder should be ObservationTransformerEncoder directly, not wrapped
         assert isinstance(module.encoder, ObservationTransformerEncoder)
+        assert module.encoder.handles_missingness_intrinsically()
 
     def test_smart_encoder_not_wrapped(self):
         """SMARTEncoder should not be wrapped (handles missingness via MLPEmbedder)."""
@@ -700,6 +735,7 @@ class TestIntrinsicMissingnessEncodersNotWrapped:
 
         # SMART encoder should NOT be wrapped
         assert isinstance(module.encoder, SMARTEncoder)
+        assert module.encoder.handles_missingness_intrinsically()
 
 
 class TestFineTuneModuleGradualUnfreeze:
@@ -1297,3 +1333,57 @@ class TestClassWeighting:
 
         assert module.criterion.weight is not None
         assert torch.allclose(module.criterion.weight, torch.tensor([0.3, 0.7]))
+
+
+class TestMetricThresholdConfig:
+    """Test finetune metric construction from eval config."""
+
+    def test_binary_metric_threshold_is_forwarded(self):
+        config = OmegaConf.create(
+            {
+                "encoder": {
+                    "name": "transformer",
+                    "d_input": 10,
+                    "d_model": 32,
+                    "n_layers": 1,
+                    "n_heads": 2,
+                    "d_ff": 64,
+                    "dropout": 0.0,
+                    "max_seq_length": 24,
+                    "pooling": "mean",
+                    "use_positional_encoding": True,
+                    "prenorm": True,
+                    "activation": "gelu",
+                    "layer_norm_eps": 1e-5,
+                },
+                "task": {
+                    "task_name": "mortality_24h",
+                    "task_type": "binary",
+                    "n_classes": None,
+                    "head_type": "mlp",
+                    "hidden_dims": [16],
+                    "dropout": 0.0,
+                    "activation": "relu",
+                },
+                "training": {
+                    "freeze_encoder": False,
+                    "unfreeze_epoch": None,
+                },
+                "optimizer": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                },
+                "eval": {
+                    "metrics": {
+                        "names": ["accuracy", "precision", "recall", "specificity"],
+                        "threshold": 0.8,
+                    }
+                },
+            }
+        )
+
+        module = FineTuneModule(config)
+
+        assert module.train_metrics["accuracy"].threshold == pytest.approx(0.8)
+        assert module.val_metrics["precision"].threshold == pytest.approx(0.8)
+        assert module.test_metrics["specificity"].threshold == pytest.approx(0.8)

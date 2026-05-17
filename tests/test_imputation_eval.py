@@ -9,11 +9,15 @@ Tests cover:
 - from_encoder_checkpoint() creates linear decoder
 """
 
+import importlib
+
 import pytest
 import torch
 import torch.nn as nn
-from slices.eval.imputation import ImputationEvaluator
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
+
+from slices.eval.imputation import ImputationEvaluator
 
 
 class SimpleEncoder(nn.Module):
@@ -248,6 +252,43 @@ class TestEvaluate:
         for key in results["nrmse_per_feature"]:
             assert key.startswith("feat_"), f"Expected feature name, got {key}"
 
+    def test_evaluate_uses_provided_feature_stds(self, monkeypatch):
+        """Explicit feature stds should be used instead of recomputing from the eval loader."""
+        encoder = SimpleEncoder(d_input=5, d_model=8)
+        decoder = nn.Linear(8, 5)
+        nn.init.zeros_(decoder.weight)
+        nn.init.zeros_(decoder.bias)
+
+        evaluator = ImputationEvaluator(encoder=encoder, decoder=decoder, d_input=5)
+
+        timeseries = torch.ones(16, 12, 5) * 2.0
+        mask = torch.ones(16, 12, 5, dtype=torch.bool)
+
+        class ConstDataset:
+            def __len__(self):
+                return 16
+
+            def __getitem__(self, idx):
+                return {"timeseries": timeseries[idx], "mask": mask[idx]}
+
+        loader = DataLoader(ConstDataset(), batch_size=16)
+
+        def fail_if_called(_):
+            raise AssertionError(
+                "compute_feature_stds should not be called when feature_stds is set"
+            )
+
+        monkeypatch.setattr(evaluator, "compute_feature_stds", fail_if_called)
+
+        results = evaluator.evaluate(
+            loader,
+            mask_strategy="random",
+            mask_ratio=0.5,
+            feature_stds={i: 2.0 for i in range(5)},
+        )
+
+        assert results["nrmse_overall"] == pytest.approx(1.0, rel=1e-3)
+
 
 class TestNRMSEComputation:
     """Tests for NRMSE computation correctness."""
@@ -353,6 +394,49 @@ class TestFromEncoderCheckpoint:
             dec_out = evaluator.decoder(enc_out)
         assert dec_out.shape == (2, 12, 10)
 
+    def test_smart_encoder_checkpoint_adapts_to_timestep_probe(self, tmp_path):
+        """SMART pooling=none checkpoints should produce (B, T, D) reconstructions."""
+        from slices.models.encoders import build_encoder
+
+        encoder = build_encoder(
+            "smart",
+            {
+                "d_input": 5,
+                "d_model": 8,
+                "n_layers": 1,
+                "n_heads": 2,
+                "d_ff": 16,
+                "max_seq_length": 12,
+                "pooling": "none",
+            },
+        )
+        ckpt = {
+            "encoder_state_dict": encoder.state_dict(),
+            "encoder_config": {
+                "name": "smart",
+                "d_input": 5,
+                "d_model": 8,
+                "n_layers": 1,
+                "n_heads": 2,
+                "d_ff": 16,
+                "max_seq_length": 12,
+                "pooling": "none",
+            },
+            "version": 3,
+        }
+        ckpt_path = tmp_path / "smart_encoder.pt"
+        torch.save(ckpt, ckpt_path)
+
+        evaluator = ImputationEvaluator.from_encoder_checkpoint(str(ckpt_path), d_input=5)
+        dummy = torch.randn(2, 12, 5)
+        mask = torch.ones_like(dummy, dtype=torch.bool)
+        with torch.no_grad():
+            enc_out = evaluator.encoder(dummy, mask=mask)
+            dec_out = evaluator.decoder(enc_out)
+
+        assert enc_out.shape == (2, 12, 8)
+        assert dec_out.shape == (2, 12, 5)
+
 
 class TestInit:
     """Tests for __init__ edge cases."""
@@ -369,3 +453,125 @@ class TestInit:
         decoder = nn.Linear(16, 10)
         evaluator = ImputationEvaluator(encoder, decoder=decoder)
         assert evaluator.decoder is decoder
+
+
+class TestEvaluateImputationScript:
+    """Regression tests for the standalone imputation evaluation script."""
+
+    def test_pretrain_checkpoint_still_trains_probe_decoder(self, monkeypatch, tmp_path):
+        """MAE checkpoints must not skip probe-decoder training."""
+        module = importlib.import_module("scripts.eval.evaluate_imputation")
+        captured = {}
+
+        class DummyDataset:
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, idx):
+                return {
+                    "timeseries": torch.zeros(2, 3),
+                    "mask": torch.ones(2, 3, dtype=torch.bool),
+                }
+
+            def get_feature_names(self):
+                return ["a", "b", "c"]
+
+        class DummyDataModule:
+            def __init__(self, *args, **kwargs):
+                self.dataset = DummyDataset()
+                self.train_indices = [0, 1]
+                self.pin_memory = False
+
+            def setup(self):
+                return None
+
+            def get_feature_dim(self):
+                return 3
+
+            def get_seq_length(self):
+                return 2
+
+            def train_dataloader(self):
+                return "train_loader"
+
+            def test_dataloader(self):
+                return "test_loader"
+
+        class DummyEvaluator:
+            def train_decoder(self, dataloader, max_epochs, lr):
+                captured["train_decoder"] = {
+                    "dataloader": dataloader,
+                    "max_epochs": max_epochs,
+                    "lr": lr,
+                }
+                return {"train_losses": [1.0]}
+
+            def compute_feature_stds(self, dataloader):
+                captured["feature_stds_loader"] = dataloader
+                return {0: 1.0, 1: 1.0, 2: 1.0}
+
+            def evaluate(self, dataloader, mask_strategy, mask_ratio, feature_stds):
+                captured["evaluate"] = {
+                    "dataloader": dataloader,
+                    "mask_strategy": mask_strategy,
+                    "mask_ratio": mask_ratio,
+                    "feature_stds": feature_stds,
+                }
+                return {
+                    "nrmse_per_feature": {"a": 0.1, "b": 0.2, "c": 0.3},
+                    "mae_overall": 0.2,
+                    "nrmse_overall": 0.25,
+                }
+
+        dummy_evaluator = DummyEvaluator()
+
+        monkeypatch.setattr(module.pl, "seed_everything", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "validate_data_prerequisites", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "ICUDataModule", DummyDataModule)
+        monkeypatch.setattr(module, "DataLoader", lambda dataset, **kwargs: "train_stats_loader")
+        monkeypatch.setattr(module, "Subset", lambda dataset, indices: dataset)
+        monkeypatch.setattr(
+            module.ImputationEvaluator,
+            "from_mae_checkpoint",
+            staticmethod(lambda *args, **kwargs: dummy_evaluator),
+        )
+
+        cfg = OmegaConf.create(
+            {
+                "dataset": "miiv",
+                "seed": 42,
+                "data": {
+                    "processed_dir": "data/processed/miiv",
+                    "num_workers": 0,
+                },
+                "batch_size": 8,
+                "checkpoint": None,
+                "pretrain_checkpoint": "outputs/pretrain/ssl-last.ckpt",
+                "masking": {
+                    "strategies": ["random"],
+                    "mask_ratio": 0.15,
+                },
+                "reconstruction_head": {
+                    "max_epochs": 3,
+                    "lr": 1e-4,
+                },
+                "logging": {
+                    "use_wandb": False,
+                },
+                "output_dir": str(tmp_path / "test-imputation"),
+            }
+        )
+
+        module.main.__wrapped__(cfg)
+
+        assert captured["train_decoder"] == {
+            "dataloader": "train_loader",
+            "max_epochs": 3,
+            "lr": 1e-4,
+        }
+        assert captured["feature_stds_loader"] == "train_stats_loader"
+        assert captured["evaluate"]["dataloader"] == "test_loader"
+        assert captured["evaluate"]["mask_strategy"] == "random"
+        results_path = tmp_path / "test-imputation" / "imputation_results.json"
+        assert results_path.exists()
+        assert '"pretrain_checkpoint": "outputs/pretrain/ssl-last.ckpt"' in results_path.read_text()

@@ -12,6 +12,9 @@ import math
 
 import pytest
 import torch
+from torchmetrics import MetricCollection
+from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, R2Score
+
 from slices.eval.metrics import (
     AVAILABLE_METRICS,
     DEFAULT_METRICS,
@@ -19,8 +22,6 @@ from slices.eval.metrics import (
     _build_metric,
     build_metrics,
 )
-from torchmetrics import MetricCollection
-from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, R2Score
 
 
 class TestRegressionMetricConfig:

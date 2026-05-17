@@ -25,7 +25,7 @@ from slices.data.dataset import ICUDataset
 from slices.data.sliding_window import SlidingWindowDataset
 from slices.data.splits import (
     compute_patient_level_splits,
-    save_split_info,
+    save_global_split_info,
     subsample_train_indices,
 )
 
@@ -83,7 +83,7 @@ class ICUDataModule(L.LightningDataModule):
 
     Example:
         >>> dm = ICUDataModule(
-        ...     processed_dir="data/processed/mimic-iv-demo",
+        ...     processed_dir="data/processed/miiv",
         ...     task_name="mortality_24h",
         ...     batch_size=32,
         ... )
@@ -163,12 +163,24 @@ class ICUDataModule(L.LightningDataModule):
         self.window_stride = window_stride
 
         # Validate ratios
+        ratios = {
+            "train_ratio": train_ratio,
+            "val_ratio": val_ratio,
+            "test_ratio": test_ratio,
+        }
+        for name, ratio in ratios.items():
+            if ratio < 0.0 or ratio > 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {ratio}")
+
         total_ratio = train_ratio + val_ratio + test_ratio
         if not np.isclose(total_ratio, 1.0):
             raise ValueError(f"Split ratios must sum to 1.0, got {total_ratio}")
 
         # Will be set in setup()
         self.dataset: Optional[ICUDataset] = None
+        self.total_raw_stays: int = 0
+        self.normalization_train_indices: List[int] = []
+        self.full_train_indices: List[int] = []
         self.train_indices: List[int] = []
         self.val_indices: List[int] = []
         self.test_indices: List[int] = []
@@ -201,6 +213,7 @@ class ICUDataModule(L.LightningDataModule):
             self._all_stay_ids,
             self._filtered_stay_ids,
             self._excluded_stay_ids,
+            self._normalization_train_indices,
         ) = compute_patient_level_splits(
             self.processed_dir,
             self.task_name,
@@ -210,23 +223,31 @@ class ICUDataModule(L.LightningDataModule):
             self.test_ratio,
         )
 
+        # Save full train indices for normalization BEFORE subsampling.
+        # Label statistics and optimization subsets are task-filtered, but
+        # normalization must use the full unfiltered train split so AKI
+        # finetuning/supervised runs share the SSL pretraining normalizer.
+        self.full_train_indices = list(self.train_indices)
+        self.normalization_train_indices = list(self._normalization_train_indices)
+        self.total_raw_stays = len(self._all_stay_ids)
+
         # Subsample training indices for label-efficiency ablations
         if self.label_fraction < 1.0:
             self.train_indices = subsample_train_indices(
                 self.train_indices, self.label_fraction, self.seed
             )
 
-        # Create dataset with training indices for normalization
-        # IMPORTANT: Use handle_missing_labels='raise' because we already filtered
-        # missing labels in compute_patient_level_splits. If any are still missing,
-        # it indicates a bug.
+        # Create dataset with task-filtered training indices for provenance and
+        # full-cohort training indices for normalization.
+        # self.train_indices (possibly subsampled) is used by train_dataloader.
         logger.debug("[Step 2/3] Creating ICUDataset")
         self.dataset = ICUDataset(
             data_dir=self.processed_dir,
             task_name=self.task_name,
             seq_length=self.seq_length,
             normalize=self.normalize,
-            train_indices=self.train_indices,
+            train_indices=self.full_train_indices,
+            normalization_train_indices=self.normalization_train_indices,
             # Use 'raise' since we pre-filtered - any missing labels now is a bug
             handle_missing_labels="raise" if self.task_name else "filter",
             # Pass excluded stays so Dataset can validate consistency
@@ -244,28 +265,37 @@ class ICUDataModule(L.LightningDataModule):
                 "This indicates an index consistency bug."
             )
 
-        # Save split information for reproducibility
-        logger.debug("[Step 3/3] Saving split information")
-        save_split_info(
-            self.processed_dir,
-            self.dataset,
-            self.train_indices,
-            self.val_indices,
-            self.test_indices,
-            self.seed,
-            self.train_ratio,
-            self.val_ratio,
-            self.test_ratio,
-        )
+        # Save split information only when the canonical prep artifact is absent.
+        # Prepared datasets already own a stable splits.yaml, and downstream runs
+        # must not rewrite it after task filtering or label-efficiency subsampling.
+        logger.debug("[Step 3/3] Preserving canonical split information")
+        splits_path = self.processed_dir / "splits.yaml"
+        if not splits_path.exists():
+            save_global_split_info(
+                processed_dir=self.processed_dir,
+                static_df=self._static_df,
+                stay_ids=self._all_stay_ids,
+                seed=self.seed,
+                train_ratio=self.train_ratio,
+                val_ratio=self.val_ratio,
+                test_ratio=self.test_ratio,
+                dataset=self.dataset if self.label_fraction < 1.0 else None,
+                train_subset_indices=self.train_indices if self.label_fraction < 1.0 else None,
+                label_fraction=self.label_fraction,
+            )
+        else:
+            logger.debug("Canonical splits.yaml already exists; leaving it unchanged")
 
         # Free temporary data used only during setup — Dataset holds its own copies
         del self._static_df, self._labels_df
         del self._all_stay_ids, self._filtered_stay_ids, self._excluded_stay_ids
+        del self._normalization_train_indices
 
         logger.info(
             f"DataModule setup complete: "
             f"Train={len(self.train_indices):,}, Val={len(self.val_indices):,}, "
-            f"Test={len(self.test_indices):,} stays"
+            f"Test={len(self.test_indices):,}, "
+            f"NormalizerTrain={len(self.normalization_train_indices):,} stays"
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -397,6 +427,8 @@ class ICUDataModule(L.LightningDataModule):
         return {
             # Stay counts
             "train_stays": len(self.train_indices),
+            "full_train_stays": len(self.full_train_indices),
+            "normalization_train_stays": len(self.normalization_train_indices),
             "val_stays": len(self.val_indices),
             "test_stays": len(self.test_indices),
             "total_stays": total_stays,
@@ -407,6 +439,14 @@ class ICUDataModule(L.LightningDataModule):
             "total_patients": total_patients,
             # Actual ratios (for verification)
             "actual_train_ratio": len(self.train_indices) / total_stays if total_stays > 0 else 0,
+            "actual_full_train_ratio": (
+                len(self.full_train_indices) / total_stays if total_stays > 0 else 0
+            ),
+            "actual_normalization_train_ratio": (
+                len(self.normalization_train_indices) / self.total_raw_stays
+                if self.total_raw_stays > 0
+                else 0
+            ),
             "actual_val_ratio": len(self.val_indices) / total_stays if total_stays > 0 else 0,
             "actual_test_ratio": len(self.test_indices) / total_stays if total_stays > 0 else 0,
         }
@@ -416,3 +456,18 @@ class ICUDataModule(L.LightningDataModule):
         if self.dataset is None:
             raise RuntimeError("Call setup() before get_label_statistics()")
         return self.dataset.get_label_statistics()
+
+    def get_train_label_statistics(self, use_full_train: bool = False) -> Dict[str, Dict[str, Any]]:
+        """Return label statistics for the train split.
+
+        Args:
+            use_full_train: When True, compute statistics on the full patient-level
+                train split before any label-efficiency subsampling. When False,
+                compute statistics on the optimization subset actually used for
+                training in this run.
+        """
+        if self.dataset is None:
+            raise RuntimeError("Call setup() before get_train_label_statistics()")
+
+        train_indices = self.full_train_indices if use_full_train else self.train_indices
+        return self.dataset.get_label_statistics(indices=train_indices)

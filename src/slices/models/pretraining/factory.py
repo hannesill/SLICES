@@ -13,6 +13,7 @@ from .contrastive import ContrastiveConfig, ContrastiveObjective
 from .jepa import JEPAConfig, JEPAObjective
 from .mae import MAEConfig, MAEObjective
 from .smart import SMARTObjective, SMARTSSLConfig
+from .ts2vec import TS2VecConfig, TS2VecObjective
 
 # Registry of available SSL objectives
 SSL_REGISTRY: Dict[str, Type[BaseSSLObjective]] = {
@@ -20,6 +21,7 @@ SSL_REGISTRY: Dict[str, Type[BaseSSLObjective]] = {
     "smart": SMARTObjective,
     "jepa": JEPAObjective,
     "contrastive": ContrastiveObjective,
+    "ts2vec": TS2VecObjective,
 }
 
 # Registry of SSL configs
@@ -28,6 +30,7 @@ CONFIG_REGISTRY: Dict[str, Type[SSLConfig]] = {
     "smart": SMARTSSLConfig,
     "jepa": JEPAConfig,
     "contrastive": ContrastiveConfig,
+    "ts2vec": TS2VecConfig,
 }
 
 

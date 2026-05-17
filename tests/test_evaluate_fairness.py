@@ -1,0 +1,538 @@
+"""Focused tests for the standalone fairness rerun script."""
+
+import importlib
+import sys
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_SHA256_KEY,
+    FAIRNESS_ARTIFACT_PATH_KEY,
+    FAIRNESS_ARTIFACT_SHA256_KEY,
+    FAIRNESS_ARTIFACT_SOURCE_KEY,
+    FAIRNESS_CHECKPOINT_SOURCE_KEY,
+    FAIRNESS_MIN_SUBGROUP_SIZE_KEY,
+    FAIRNESS_PROTECTED_ATTRIBUTES_KEY,
+    FAIRNESS_SCHEMA_VERSION_KEY,
+    FAIRNESS_SCRIPT_VERSION,
+    FAIRNESS_SCRIPT_VERSION_KEY,
+    FAIRNESS_SUMMARY_SCHEMA_VERSION,
+    encode_protected_attributes,
+)
+
+
+def _binary_fairness_summary(attr: str, base: float = 0.7) -> dict[str, float]:
+    prefix = f"fairness/{attr}/"
+    return {
+        f"{prefix}n_valid_groups": 2,
+        f"{prefix}n_metric_valid_groups": 2,
+        f"{prefix}worst_group_auroc": base,
+        f"{prefix}worst_group_auprc": base - 0.1,
+        f"{prefix}auroc_gap": 0.05,
+        f"{prefix}auprc_gap": 0.04,
+        f"{prefix}demographic_parity_diff": 0.03,
+        f"{prefix}equalized_odds_diff": 0.02,
+        f"{prefix}disparate_impact_ratio": 0.9,
+    }
+
+
+def _regression_fairness_summary(attr: str) -> dict[str, float]:
+    prefix = f"fairness/{attr}/"
+    return {
+        f"{prefix}n_valid_groups": 2,
+        f"{prefix}worst_group_mse": 2.0,
+        f"{prefix}worst_group_mae": 1.1,
+        f"{prefix}mse_gap": 0.4,
+        f"{prefix}mae_gap": 0.2,
+    }
+
+
+def _fresh_fairness_metadata(
+    protected_attributes: list[str],
+    min_subgroup_size: int = 50,
+    artifact_path: str = "outputs/run/checkpoints/last.ckpt",
+    artifact_source: str = "recorded_final",
+    checkpoint_source: str = "final",
+    artifact_sha256: str = "abc123",
+) -> dict[str, object]:
+    metadata = {
+        "_eval_checkpoint_source": (
+            checkpoint_source if checkpoint_source in {"best", "final"} else None
+        ),
+        EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
+        FAIRNESS_SCHEMA_VERSION_KEY: FAIRNESS_SUMMARY_SCHEMA_VERSION,
+        FAIRNESS_SCRIPT_VERSION_KEY: FAIRNESS_SCRIPT_VERSION,
+        FAIRNESS_ARTIFACT_PATH_KEY: artifact_path,
+        FAIRNESS_ARTIFACT_SHA256_KEY: artifact_sha256,
+        FAIRNESS_ARTIFACT_SOURCE_KEY: artifact_source,
+        FAIRNESS_CHECKPOINT_SOURCE_KEY: checkpoint_source,
+        FAIRNESS_PROTECTED_ATTRIBUTES_KEY: encode_protected_attributes(protected_attributes),
+        FAIRNESS_MIN_SUBGROUP_SIZE_KEY: min_subgroup_size,
+    }
+    return {key: value for key, value in metadata.items() if value is not None}
+
+
+def test_default_phases_include_baseline():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    assert "baseline" in mod.DEFAULT_PHASES
+
+
+def test_default_experiment_classes_include_classical_baselines():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    assert "classical_baselines" in mod.DEFAULT_EXPERIMENT_CLASSES
+
+
+def test_default_experiment_classes_include_downstream_families():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    assert {"label_efficiency", "cross_dataset_transfer", "hp_robustness"}.issubset(
+        set(mod.DEFAULT_EXPERIMENT_CLASSES)
+    )
+
+
+def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluate_fairness.py", "--revision", "thesis-v1", "--allow-incomplete"],
+    )
+
+    args = mod.parse_args()
+
+    assert args.allow_incomplete is True
+    assert args.project == "slices-thesis"
+
+
+def test_main_exits_nonzero_when_no_runs_match(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    monkeypatch.setattr(sys, "argv", ["evaluate_fairness.py", "--revision", "thesis-v1"])
+    monkeypatch.setattr(mod, "fetch_eval_runs", lambda **_: [])
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.main()
+
+    assert excinfo.value.code == 1
+
+
+def test_resolve_evaluation_artifact_supports_xgboost(tmp_path):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run_dir = tmp_path / "run-xgb"
+    run_dir.mkdir(parents=True)
+    model_path = run_dir / "xgboost_model.json"
+    model_path.write_text("{}")
+
+    run = SimpleNamespace(
+        id="run-xgb",
+        config={
+            "paradigm": "xgboost",
+            "output_dir": "outputs/run-xgb",
+        },
+        summary_metrics={},
+    )
+
+    artifact_path, source = mod.resolve_evaluation_artifact(
+        run,
+        outputs_root=str(tmp_path),
+        task_type="binary",
+    )
+
+    assert artifact_path == model_path
+    assert source == "xgboost_model"
+
+
+def test_build_fairness_summary_metadata_stamps_artifact_and_settings(tmp_path):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    ckpt_path = tmp_path / "outputs" / "run" / "checkpoints" / "best.ckpt"
+    ckpt_path.parent.mkdir(parents=True)
+    ckpt_path.write_text("best checkpoint")
+    run = SimpleNamespace(
+        config={"paradigm": "mae", "output_dir": "outputs/run"},
+        summary_metrics={
+            "_eval_checkpoint_source": "best",
+            "_best_ckpt_path": "outputs/run/checkpoints/best.ckpt",
+        },
+    )
+
+    metadata = mod.build_fairness_summary_metadata(
+        run,
+        ckpt_path,
+        "recorded_best",
+        ["gender", "age_group", "race"],
+        50,
+    )
+
+    assert metadata[FAIRNESS_ARTIFACT_PATH_KEY] == str(ckpt_path)
+    assert metadata[FAIRNESS_ARTIFACT_SHA256_KEY]
+    assert metadata[FAIRNESS_ARTIFACT_SOURCE_KEY] == "recorded_best"
+    assert metadata[FAIRNESS_CHECKPOINT_SOURCE_KEY] == "best"
+    assert metadata[FAIRNESS_SCRIPT_VERSION_KEY] == FAIRNESS_SCRIPT_VERSION
+    assert metadata[FAIRNESS_PROTECTED_ATTRIBUTES_KEY] == encode_protected_attributes(
+        ["gender", "age_group", "race"]
+    )
+    assert metadata[FAIRNESS_MIN_SUBGROUP_SIZE_KEY] == 50
+
+
+def test_write_fairness_to_wandb_replaces_existing_fairness_keys_by_default(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    class FakeSummary(dict):
+        def save(self):
+            self["saved"] = True
+
+    fake_summary = FakeSummary(
+        {
+            "fairness/race/worst_group_auroc": 0.11,
+            "_fairness_old_setting": "stale",
+            "test/auprc": 0.42,
+        }
+    )
+
+    class FakeRun:
+        summary = fake_summary
+
+    class FakeApi:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def run(self, run_path):
+            assert run_path == "entity/project/run"
+            return FakeRun()
+
+    fake_wandb = SimpleNamespace(Api=FakeApi)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    mod.write_fairness_to_wandb(
+        "entity/project/run",
+        {
+            "fairness/gender/n_valid_groups": 2,
+            "_fairness_summary_schema_version": "fresh",
+        },
+    )
+
+    assert fake_summary["fairness/race/worst_group_auroc"] is None
+    assert fake_summary["_fairness_old_setting"] is None
+    assert fake_summary["fairness/gender/n_valid_groups"] == 2
+    assert fake_summary["test/auprc"] == 0.42
+    assert fake_summary["saved"] is True
+
+
+def test_has_fairness_metrics_requires_requested_attribute_completeness():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender", 0.71),
+            **_binary_fairness_summary("age_group", 0.69),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender", "age_group"]) is True
+    assert mod.has_fairness_metrics(run, ["gender", "age_group", "race"]) is False
+
+
+def test_has_fairness_metrics_ignores_race_for_eicu():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "eicu", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender", 0.71),
+            **_binary_fairness_summary("age_group", 0.69),
+            **_fresh_fairness_metadata(["gender", "age_group", "race"]),
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender", "age_group", "race"]) is True
+
+
+def test_has_fairness_metrics_rejects_partial_binary_summaries():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            "fairness/gender/n_valid_groups": 2,
+            "fairness/gender/worst_group_auroc": 0.71,
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"]) is False
+
+
+def test_has_fairness_metrics_accepts_written_nan_summary_values():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    summary = _binary_fairness_summary("gender")
+    summary["fairness/gender/worst_group_auroc"] = float("nan")
+    summary.update(_fresh_fairness_metadata(["gender"]))
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics=summary,
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"]) is True
+
+
+def test_has_fairness_metrics_rejects_complete_but_unstamped_summaries():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics=_binary_fairness_summary("gender"),
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"]) is False
+
+
+def test_has_fairness_metrics_rejects_stale_metadata_settings():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender"),
+            **_fresh_fairness_metadata(["gender"], min_subgroup_size=25),
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"], min_subgroup_size=50) is False
+    assert any(
+        "min subgroup size mismatch" in issue
+        for issue in mod.fairness_summary_metadata_issues(run, ["gender"], 50)
+    )
+
+
+def test_has_fairness_metrics_rejects_artifact_digest_mismatch():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(
+        config={"dataset": "miiv", "task": {"task_type": "binary"}},
+        summary_metrics={
+            **_binary_fairness_summary("gender"),
+            **_fresh_fairness_metadata(["gender"], artifact_sha256="old-digest"),
+            EVAL_ARTIFACT_SHA256_KEY: "new-digest",
+        },
+    )
+
+    assert mod.has_fairness_metrics(run, ["gender"], min_subgroup_size=50) is False
+    assert any(
+        "artifact sha256 mismatch" in issue
+        for issue in mod.fairness_summary_metadata_issues(run, ["gender"], 50)
+    )
+
+
+def test_has_fairness_metrics_requires_regression_metric_family():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    complete = SimpleNamespace(
+        config={
+            "dataset": "miiv",
+            "task": {"task_name": "los_remaining", "task_type": "regression"},
+        },
+        summary_metrics={
+            **_regression_fairness_summary("gender"),
+            **_regression_fairness_summary("age_group"),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
+        },
+    )
+    partial = SimpleNamespace(
+        config={
+            "dataset": "miiv",
+            "task": {"task_name": "los_remaining", "task_type": "regression"},
+        },
+        summary_metrics={
+            "fairness/gender/n_valid_groups": 2,
+            "fairness/gender/worst_group_mse": 2.0,
+            **_regression_fairness_summary("age_group"),
+            **_fresh_fairness_metadata(["gender", "age_group"]),
+        },
+    )
+
+    assert mod.has_fairness_metrics(complete, ["gender", "age_group"]) is True
+    assert mod.has_fairness_metrics(partial, ["gender", "age_group"]) is False
+
+
+def test_missing_fairness_report_requirements_flags_missing_requested_attribute():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "miiv", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "n_metric_valid_groups": 2,
+            "worst_group_auroc": 0.71,
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender", "race"])
+
+    assert "race: no valid fairness groups" in missing
+
+
+def test_missing_fairness_report_requirements_ignores_eicu_race():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "eicu", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "n_metric_valid_groups": 2,
+            "worst_group_auroc": 0.71,
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender", "race"])
+
+    assert missing == []
+
+
+def test_missing_fairness_report_requirements_accepts_written_nan_required_metric():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    run = SimpleNamespace(config={"dataset": "miiv", "task": {"task_type": "binary"}})
+    report = {
+        "gender": {
+            "n_valid_groups": 2,
+            "n_metric_valid_groups": 1,
+            "worst_group_auroc": float("nan"),
+            "worst_group_auprc": 0.61,
+            "auroc_gap": 0.05,
+            "auprc_gap": 0.04,
+            "demographic_parity_diff": 0.03,
+            "equalized_odds_diff": 0.02,
+            "disparate_impact_ratio": 0.9,
+        }
+    }
+
+    missing = mod.missing_fairness_report_requirements(run, report, ["gender"])
+
+    assert missing == []
+
+
+def test_filter_thesis_task_runs_drops_non_thesis_tasks():
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+
+    main = SimpleNamespace(config={"task": {"task_name": "mortality_24h"}})
+    extension = SimpleNamespace(config={"task": {"task_name": "sepsis"}})
+
+    assert mod.filter_thesis_task_runs([main, extension]) == [main]
+
+
+def test_fairness_matrix_coverage_accepts_complete_scoped_corpus(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    export_mod = importlib.import_module("scripts.export_results")
+    row = {
+        "experiment_class": "core_ssl_benchmark",
+        "experiment_type": "core_ssl_benchmark",
+        "experiment_subtype": None,
+        "paradigm": "mae",
+        "dataset": "miiv",
+        "task": "mortality_24h",
+        "protocol": "full_finetune",
+        "label_fraction": 1.0,
+        "model_size": "default",
+        "source_dataset": None,
+        "phase": "finetune",
+        "upstream_pretrain_lr": None,
+        "upstream_pretrain_mask_ratio": None,
+        "seed": 42,
+    }
+    monkeypatch.setattr(export_mod, "build_expected_matrix_df", lambda **_: pd.DataFrame([row]))
+    run = SimpleNamespace(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "paradigm": "mae",
+            "dataset": "miiv",
+            "phase": "finetune",
+            "protocol": "full_finetune",
+            "seed": 42,
+            "task": {"task_name": "mortality_24h"},
+        },
+        tags=[],
+    )
+
+    issues = mod.fairness_matrix_coverage_issues(
+        [run],
+        experiment_classes=["core_ssl_benchmark"],
+        paradigms=None,
+        datasets=None,
+        phases=["finetune"],
+    )
+
+    assert issues == []
+
+
+def test_fairness_matrix_coverage_flags_missing_scoped_rows(monkeypatch):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    export_mod = importlib.import_module("scripts.export_results")
+    expected = {
+        "experiment_class": "core_ssl_benchmark",
+        "experiment_type": "core_ssl_benchmark",
+        "experiment_subtype": None,
+        "paradigm": "mae",
+        "dataset": "miiv",
+        "task": "mortality_24h",
+        "protocol": "full_finetune",
+        "label_fraction": 1.0,
+        "model_size": "default",
+        "source_dataset": None,
+        "phase": "finetune",
+        "upstream_pretrain_lr": None,
+        "upstream_pretrain_mask_ratio": None,
+        "seed": 42,
+    }
+    monkeypatch.setattr(
+        export_mod, "build_expected_matrix_df", lambda **_: pd.DataFrame([expected])
+    )
+
+    issues = mod.fairness_matrix_coverage_issues(
+        [],
+        experiment_classes=["core_ssl_benchmark"],
+        paradigms=None,
+        datasets=None,
+        phases=["finetune"],
+    )
+
+    assert any("missing 1/1 expected downstream matrix rows" in issue for issue in issues)
+
+
+def test_validate_evaluation_artifact_digest_rejects_stale_local_file(tmp_path):
+    mod = importlib.import_module("scripts.eval.evaluate_fairness")
+    artifact = tmp_path / "outputs" / "run" / "checkpoints" / "last.ckpt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("local stale artifact")
+    run = SimpleNamespace(
+        id="run",
+        config={"paradigm": "mae", "output_dir": "outputs/run"},
+        summary_metrics={
+            "_eval_checkpoint_source": "final",
+            EVAL_ARTIFACT_SHA256_KEY: "logged-digest",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        mod.validate_evaluation_artifact_digest(run, artifact)

@@ -6,6 +6,7 @@ Tests the factory pattern implementations for encoders, task heads, and SSL obje
 import pytest
 import torch
 import torch.nn as nn
+
 from slices.models.encoders.factory import (
     ENCODER_CONFIG_REGISTRY,
     ENCODER_REGISTRY,

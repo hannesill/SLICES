@@ -8,8 +8,11 @@ Tests cover:
 - Error handling
 """
 
+import numpy as np
 import pytest
 import torch
+from torchmetrics import MetricCollection
+
 from slices.eval.metrics import (
     AVAILABLE_METRICS,
     DEFAULT_METRICS,
@@ -18,7 +21,6 @@ from slices.eval.metrics import (
     build_metrics,
     get_default_metrics,
 )
-from torchmetrics import MetricCollection
 
 
 class TestMetricConfig:
@@ -341,11 +343,39 @@ class TestConstants:
             for metric in defaults:
                 assert metric in available
 
-    def test_binary_defaults_minimal(self):
-        """Test binary defaults are minimal."""
+    def test_binary_defaults_match_public_export_surface(self):
+        """Test binary defaults include threshold and calibration metrics."""
         defaults = DEFAULT_METRICS["binary"]
-        assert len(defaults) <= 4  # Core discrimination + calibration metrics
-        assert "auroc" in defaults  # Core clinical metric
+        assert defaults == [
+            "auroc",
+            "auprc",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+            "specificity",
+            "brier_score",
+            "ece",
+        ]
+
+    def test_xgboost_binary_metrics_match_publication_binary_surface(self):
+        """XGBoost binary metrics should match documented publication metric keys."""
+        from pathlib import Path
+
+        from scripts.training.xgboost_baseline import _binary_classification_metrics
+
+        y_true = np.array([0, 0, 1, 1])
+        y_pred_proba = np.array([0.05, 0.35, 0.65, 0.95])
+        metrics = _binary_classification_metrics(y_true, y_pred_proba)
+        expected_keys = {f"test/{metric_name}" for metric_name in DEFAULT_METRICS["binary"]}
+
+        assert expected_keys.issubset(metrics)
+
+        config_text = Path("configs/eval/default.yaml").read_text()
+        readme_text = Path("src/slices/eval/README.md").read_text()
+        for metric_name in DEFAULT_METRICS["binary"]:
+            assert metric_name in config_text
+            assert metric_name in readme_text
 
     def test_all_task_types_covered(self):
         """Test all task types have entries."""

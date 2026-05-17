@@ -19,10 +19,12 @@ import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
+
 from slices.data.config_schemas import DataConfig
 from slices.data.datamodule import ICUDataModule
 from slices.training import SSLPretrainModule
 from slices.training.utils import (
+    WandbEntityNotFoundError,
     setup_pretrain_callbacks,
     setup_wandb_logger,
     validate_data_prerequisites,
@@ -33,6 +35,7 @@ _SSL_MODEL_COMPAT = {
     "mae": {"transformer"},
     "jepa": {"transformer"},
     "contrastive": {"transformer"},
+    "ts2vec": {"transformer"},
     "smart": {"smart"},
 }
 
@@ -150,7 +153,11 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     callbacks = setup_pretrain_callbacks(cfg)
-    logger = setup_wandb_logger(cfg)
+    try:
+        logger = setup_wandb_logger(cfg)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        raise SystemExit(1) from exc
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
@@ -185,7 +192,10 @@ def main(cfg: DictConfig) -> None:
     print("4. Starting Training")
     print("=" * 80)
 
-    trainer.fit(model, datamodule=datamodule)
+    ckpt_path = cfg.get("ckpt_path", None)
+    if ckpt_path:
+        print(f"  Resuming trainer state from: {ckpt_path}")
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # =========================================================================
     # 5. Save Encoder

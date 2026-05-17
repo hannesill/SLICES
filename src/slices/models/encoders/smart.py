@@ -84,8 +84,9 @@ class SeqAttentionBlock(nn.Module):
     using additive observation-based attention biases (SMART's key innovation).
 
     The attention mask uses an additive scheme where mask[i] + mask[j] creates
-    graded attention: 0 (neither observed) → blocked, 1 (one observed) → partial,
-    2 (both observed) → full attention.
+    graded finite attention bias: 0 (neither observed) is the lowest bias,
+    1 (one observed) is intermediate, and 2 (both observed) is highest.
+    Padding remains hard-blocked, but missing/missing pairs are not.
     """
 
     def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1) -> None:
@@ -141,8 +142,9 @@ class SeqAttentionBlock(nn.Module):
         obs_mask_extended = torch.cat([query_observed, obs_mask], dim=2)  # (B, V, T+1)
         obs_mask_flat = obs_mask_extended.reshape(B * V, T_plus_1).float()  # (B*V, T+1)
 
-        # Additive mask: mask[i] + mask[j] gives 0, 1, or 2
-        # This creates graded attention bias (higher = more attention)
+        # Additive mask: mask[i] + mask[j] gives a finite 0, 1, or 2 bias.
+        # This is graded attention bias (higher = more attention), not a hard
+        # block for neither-observed timestep pairs.
         attn_bias = obs_mask_flat.unsqueeze(-1) + obs_mask_flat.unsqueeze(-2)  # (B*V, T+1, T+1)
 
         # Handle padding mask if provided (add -inf for padded positions)
@@ -266,7 +268,6 @@ class VarAttentionBlock(nn.Module):
         scale = self.d_head**-0.5
         attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, n_heads, V, V)
         attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
         attn_out = torch.matmul(attn_weights, v)  # (B, n_heads, V, (T+1)*d_head)
 
         # Unpack temporal dimension from output
@@ -412,10 +413,11 @@ class SMARTEncoder(BaseEncoder):
         nn.init.normal_(self.query, std=0.02)
 
         # Positional encoding for temporal dimension
+        # Original SMART has no dropout in positional encoding
         self.pos_encoder = PositionalEncoding(
             d_model=config.d_model,
             max_seq_length=config.max_seq_length + 1,  # +1 for query token
-            dropout=config.dropout,
+            dropout=0.0,
         )
 
         # MART blocks
@@ -431,8 +433,9 @@ class SMARTEncoder(BaseEncoder):
             ]
         )
 
-        # Final layer norm
-        self.final_norm = nn.LayerNorm(config.d_model)
+    def handles_missingness_intrinsically(self) -> bool:
+        """SMART embeds value and mask pairs jointly at the input layer."""
+        return True
 
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
@@ -492,9 +495,6 @@ class SMARTEncoder(BaseEncoder):
         # Apply MART blocks
         for block in self.blocks:
             x = block(x, mask, padding_mask)
-
-        # Final layer norm
-        x = self.final_norm(x)
 
         # Apply pooling
         return self._apply_pooling(x, mask)

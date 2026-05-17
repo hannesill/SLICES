@@ -16,7 +16,7 @@
 #'   Rscript scripts/preprocessing/extract_with_ricu.R \
 #'     --dataset miiv \
 #'     --output_dir data/ricu_output/miiv \
-#'     --seq_length_hours 48
+#'     --raw_export_horizon_hours 48
 
 # Auto-install missing packages
 required_packages <- c("ricu", "arrow", "yaml", "data.table", "optparse", "units")
@@ -45,8 +45,10 @@ option_list <- list(
               help = "RICU source name (miiv, eicu, hirid, aumc, mimic, sic)"),
   make_option("--output_dir", type = "character", default = NULL,
               help = "Output directory for parquet files"),
-  make_option("--seq_length_hours", type = "integer", default = 72L,
-              help = "Max hours per stay [default: %default]"),
+  make_option("--raw_export_horizon_hours", type = "integer", default = NULL,
+              help = "Max hours of raw timeseries to export per stay [default: 72]"),
+  make_option("--seq_length_hours", type = "integer", default = NULL,
+              help = "DEPRECATED alias for --raw_export_horizon_hours"),
   make_option("--raw_data_dir", type = "character", default = NULL,
               help = "Path to raw CSV files for ricu import (auto-detected if not set)")
 )
@@ -615,9 +617,10 @@ extract_mortality_data <- function(dataset, dict) {
     extract_mortality_generic(dataset, dict)
   )
 
-  # Ensure expected columns
-  expected <- c("stay_id", "date_of_death", "hospital_expire_flag",
-                "dischtime", "discharge_location")
+  # Ensure expected columns (new precision-aware schema + legacy)
+  expected <- c("stay_id", "date_of_death", "death_time", "death_date",
+                "death_time_precision", "death_source",
+                "hospital_expire_flag", "dischtime", "discharge_location")
   for (col in expected) {
     if (!col %in% names(result)) result[[col]] <- NA
   }
@@ -636,6 +639,7 @@ extract_mortality_miiv <- function(dataset, dict) {
 
   df <- data.frame(stay_id = icu$stay_id, stringsAsFactors = FALSE)
 
+  # Get date-only dod from patients table
   if (!is.null(pat)) {
     pat_sub <- pat[, intersect(c("subject_id", "dod"), names(pat)),
                    drop = FALSE]
@@ -646,10 +650,11 @@ extract_mortality_miiv <- function(dataset, dict) {
     names(df)[names(df) == "dod"] <- "date_of_death"
   }
 
+  # Get deathtime + other columns from admissions table
   if (!is.null(adm)) {
     adm_cols <- intersect(
       c("hadm_id", "hospital_expire_flag", "dischtime",
-        "discharge_location"),
+        "discharge_location", "deathtime"),
       names(adm)
     )
     if (length(adm_cols) > 1) {
@@ -661,6 +666,38 @@ extract_mortality_miiv <- function(dataset, dict) {
       df$hadm_id <- NULL
     }
   }
+
+  # Build precision-aware death schema:
+  # - death_time: exact timestamp from admissions.deathtime (preferred)
+  # - death_date: date-only from patients.dod
+  # - death_time_precision: "timestamp" / "date" / "unknown"
+  # - death_source: which column the death info comes from
+  has_deathtime <- "deathtime" %in% names(df) & !is.na(df$deathtime)
+  has_dod <- "date_of_death" %in% names(df) & !is.na(df$date_of_death)
+
+  df$death_time <- as.POSIXct(rep(NA, nrow(df)), tz = "UTC")
+  df$death_date <- as.Date(rep(NA, nrow(df)))
+  df$death_time_precision <- NA_character_
+  df$death_source <- NA_character_
+
+  # Prefer admissions.deathtime (exact timestamp)
+  if ("deathtime" %in% names(df)) {
+    idx_dt <- !is.na(df$deathtime)
+    df$death_time[idx_dt] <- df$deathtime[idx_dt]
+    df$death_time_precision[idx_dt] <- "timestamp"
+    df$death_source[idx_dt] <- "admissions.deathtime"
+  }
+
+  # Fall back to patients.dod (date-only) for rows without deathtime
+  if ("date_of_death" %in% names(df)) {
+    idx_dod_only <- is.na(df$death_time) & !is.na(df$date_of_death)
+    df$death_date[idx_dod_only] <- as.Date(df$date_of_death[idx_dod_only])
+    df$death_time_precision[idx_dod_only] <- "date"
+    df$death_source[idx_dod_only] <- "patients.dod"
+  }
+
+  # Clean up intermediate column
+  df$deathtime <- NULL
 
   df
 }
@@ -689,7 +726,7 @@ extract_mortality_mimic <- function(dataset, dict) {
   if (!is.null(adm)) {
     adm_cols <- intersect(
       c("hadm_id", "hospital_expire_flag", "dischtime",
-        "discharge_location"),
+        "discharge_location", "deathtime"),
       names(adm)
     )
     if (length(adm_cols) > 1) {
@@ -702,6 +739,28 @@ extract_mortality_mimic <- function(dataset, dict) {
       df$hadm_id <- NULL
     }
   }
+
+  # Build precision-aware death schema (same logic as miiv)
+  df$death_time <- as.POSIXct(rep(NA, nrow(df)), tz = "UTC")
+  df$death_date <- as.Date(rep(NA, nrow(df)))
+  df$death_time_precision <- NA_character_
+  df$death_source <- NA_character_
+
+  if ("deathtime" %in% names(df)) {
+    idx_dt <- !is.na(df$deathtime)
+    df$death_time[idx_dt] <- df$deathtime[idx_dt]
+    df$death_time_precision[idx_dt] <- "timestamp"
+    df$death_source[idx_dt] <- "admissions.deathtime"
+  }
+
+  if ("date_of_death" %in% names(df)) {
+    idx_dod_only <- is.na(df$death_time) & !is.na(df$date_of_death)
+    df$death_date[idx_dod_only] <- as.Date(df$date_of_death[idx_dod_only])
+    df$death_time_precision[idx_dod_only] <- "date"
+    df$death_source[idx_dod_only] <- "patients.dod"
+  }
+
+  df$deathtime <- NULL
 
   df
 }
@@ -716,41 +775,125 @@ extract_mortality_eicu <- function(dataset, dict) {
     names(pat)[1]
   }
 
-  # eICU uses status strings and offsets rather than timestamps.
-  # We derive date_of_death from hospitaldischargeoffset for expired patients,
-  # using the same synthetic epoch as the stays extraction so timelines are
-  # consistent (intime = epoch, outtime = epoch + unitdischargeoffset*60).
-  hosp_flag <- if ("hospitaldischargestatus" %in% names(pat)) {
-    as.integer(tolower(pat$hospitaldischargestatus) == "expired")
-  } else {
-    NA_integer_
+  # eICU uses status/location strings and offsets rather than timestamps.
+  # Preserve the hospital mortality outcome as tri-state:
+  #   1  = death evidence from discharge status/location
+  #   0  = explicit alive hospital discharge status
+  #   NA = unknown outcome
+  # This avoids converting missing/unknown statuses into false survivors, and
+  # it recovers rows where hospitaldischargestatus is missing but discharge
+  # location says Death.
+  normalize_text <- function(x) {
+    out <- tolower(trimws(as.character(x)))
+    out[out %in% c("", "na", "nan", "null", "unknown")] <- NA_character_
+    out
+  }
+  get_text_col <- function(col) {
+    if (col %in% names(pat)) {
+      as.character(pat[[col]])
+    } else {
+      rep(NA_character_, nrow(pat))
+    }
+  }
+  get_numeric_col <- function(col) {
+    if (col %in% names(pat)) {
+      suppressWarnings(as.numeric(pat[[col]]))
+    } else {
+      rep(NA_real_, nrow(pat))
+    }
   }
 
+  hospital_status <- get_text_col("hospitaldischargestatus")
+  unit_status <- get_text_col("unitdischargestatus")
+  hospital_location <- get_text_col("hospitaldischargelocation")
+  unit_location <- get_text_col("unitdischargelocation")
+
+  hospital_status_norm <- normalize_text(hospital_status)
+  unit_status_norm <- normalize_text(unit_status)
+  hospital_location_norm <- normalize_text(hospital_location)
+  unit_location_norm <- normalize_text(unit_location)
+
+  death_values <- c("expired", "death", "died", "deceased", "dead")
+  alive_values <- c("alive")
+
+  hospital_status_death <- hospital_status_norm %in% death_values
+  unit_status_death <- unit_status_norm %in% death_values
+  hospital_location_death <- hospital_location_norm %in% death_values
+  unit_location_death <- unit_location_norm %in% death_values
+
+  death_evidence <- hospital_status_death | unit_status_death |
+    hospital_location_death | unit_location_death
+  explicit_alive <- hospital_status_norm %in% alive_values
+
+  hosp_flag <- rep(NA_integer_, nrow(pat))
+  hosp_flag[explicit_alive] <- 0L
+  hosp_flag[death_evidence] <- 1L
+
+  discharge_location <- hospital_location
+  use_unit_location <- is.na(discharge_location) | trimws(discharge_location) == ""
+  discharge_location[use_unit_location] <- unit_location[use_unit_location]
+  death_location <- ifelse(hospital_location_death, hospital_location,
+                           ifelse(unit_location_death, unit_location, NA_character_))
+  use_death_location <- death_evidence & !is.na(death_location)
+  discharge_location[use_death_location] <- death_location[use_death_location]
+
+  # Derive date_of_death/death_time from discharge offsets for death-evidence
+  # rows. Hospital death evidence prefers hospitaldischargeoffset; unit death
+  # evidence can use unitdischargeoffset if hospital offset is unavailable.
+  # We use the same synthetic epoch as the stays extraction so that windowed
+  # mortality tasks (e.g., mortality_24h) can compute whether death falls
+  # within the prediction window.
   epoch <- as.POSIXct("2000-01-01 00:00:00", tz = "UTC")
-  expired <- !is.na(hosp_flag) & hosp_flag == 1L
+  hospital_offset <- get_numeric_col("hospitaldischargeoffset")
+  unit_offset <- get_numeric_col("unitdischargeoffset")
 
-  # For expired patients, hospital discharge time ≈ death time
+  death_offset <- rep(NA_real_, nrow(pat))
+  hospital_death_evidence <- hospital_status_death | hospital_location_death
+  unit_death_evidence <- unit_status_death | unit_location_death
+  death_offset[hospital_death_evidence] <- hospital_offset[hospital_death_evidence]
+  needs_unit_offset <- is.na(death_offset) & unit_death_evidence
+  death_offset[needs_unit_offset] <- unit_offset[needs_unit_offset]
+  needs_hospital_fallback <- is.na(death_offset) & death_evidence
+  death_offset[needs_hospital_fallback] <- hospital_offset[needs_hospital_fallback]
+  needs_unit_fallback <- is.na(death_offset) & death_evidence
+  death_offset[needs_unit_fallback] <- unit_offset[needs_unit_fallback]
+
   dod <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
-  if ("hospitaldischargeoffset" %in% names(pat)) {
-    dod[expired] <- epoch + pat$hospitaldischargeoffset[expired] * 60
-  }
+  has_death_offset <- death_evidence & !is.na(death_offset)
+  dod[has_death_offset] <- epoch + death_offset[has_death_offset] * 60
 
-  # dischtime from hospitaldischargeoffset for all patients
+  # Also derive dischtime for all rows from hospital offset, falling back to
+  # unit offset when hospital discharge timing is unavailable.
+  discharge_offset <- hospital_offset
+  missing_discharge_offset <- is.na(discharge_offset)
+  discharge_offset[missing_discharge_offset] <- unit_offset[missing_discharge_offset]
   dischtime <- as.POSIXct(rep(NA, nrow(pat)), tz = "UTC")
-  if ("hospitaldischargeoffset" %in% names(pat)) {
-    dischtime <- epoch + pat$hospitaldischargeoffset * 60
-  }
+  has_discharge_offset <- !is.na(discharge_offset)
+  dischtime[has_discharge_offset] <- epoch + discharge_offset[has_discharge_offset] * 60
+
+  death_source <- rep(NA_character_, nrow(pat))
+  death_source[hospital_status_death] <- "patient.hospitaldischargestatus"
+  death_source[is.na(death_source) & hospital_location_death] <-
+    "patient.hospitaldischargelocation"
+  death_source[is.na(death_source) & unit_status_death] <- "patient.unitdischargestatus"
+  death_source[is.na(death_source) & unit_location_death] <- "patient.unitdischargelocation"
 
   df <- data.frame(
     stay_id              = pat[[id_col]],
     date_of_death        = dod,
     hospital_expire_flag = hosp_flag,
     dischtime            = dischtime,
-    discharge_location   = if ("unitdischargelocation" %in% names(pat)) {
-      pat$unitdischargelocation
-    } else {
-      NA_character_
-    },
+    discharge_location   = discharge_location,
+    # Precision-aware schema: eICU timestamps are derived from offsets
+    # (minute-level precision) when an offset is available.
+    death_time           = dod,
+    death_date           = as.Date(rep(NA, nrow(pat))),
+    death_time_precision = ifelse(
+      has_death_offset,
+      "timestamp",
+      ifelse(death_evidence, "unknown", NA_character_)
+    ),
+    death_source         = death_source,
     stringsAsFactors = FALSE
   )
   df
@@ -762,12 +905,17 @@ extract_mortality_generic <- function(dataset, dict) {
   if (!"death" %in% avail) {
     message("  Warning: 'death' concept not available; returning empty mortality.")
     wins <- stay_windows(dataset, interval = hours(1L))
+    n <- nrow(as.data.frame(wins))
     return(data.frame(
       stay_id              = as.data.frame(wins)[[id_var(wins)]],
-      date_of_death        = NA,
+      date_of_death        = as.POSIXct(rep(NA, n), tz = "UTC"),
       hospital_expire_flag = NA_integer_,
-      dischtime            = NA,
+      dischtime            = as.POSIXct(rep(NA, n), tz = "UTC"),
       discharge_location   = NA_character_,
+      death_time           = as.POSIXct(rep(NA, n), tz = "UTC"),
+      death_date           = as.Date(rep(NA, n)),
+      death_time_precision = NA_character_,
+      death_source         = NA_character_,
       stringsAsFactors     = FALSE
     ))
   }
@@ -775,13 +923,18 @@ extract_mortality_generic <- function(dataset, dict) {
   death_raw <- load_concepts("death", src = dataset, concepts = dict)
   death_df <- as.data.frame(death_raw)
   id_name <- id_var(death_raw)
+  n <- nrow(death_df)
 
   df <- data.frame(
     stay_id              = death_df[[id_name]],
-    date_of_death        = NA,
+    date_of_death        = as.POSIXct(rep(NA, n), tz = "UTC"),
     hospital_expire_flag = as.integer(death_df$death),
-    dischtime            = NA,
+    dischtime            = as.POSIXct(rep(NA, n), tz = "UTC"),
     discharge_location   = NA_character_,
+    death_time           = as.POSIXct(rep(NA, n), tz = "UTC"),
+    death_date           = as.Date(rep(NA, n)),
+    death_time_precision = NA_character_,
+    death_source         = NA_character_,
     stringsAsFactors     = FALSE
   )
   df
@@ -916,15 +1069,16 @@ extract_diagnoses_eicu <- function(dataset) {
 # ---------------------------------------------------------------------------
 
 write_metadata <- function(output_dir, dataset, concept_cols,
-                           seq_length_hours, n_stays) {
+                           raw_export_horizon_hours, n_stays) {
   message("[6/6] Writing metadata...")
   metadata <- list(
-    dataset           = dataset,
-    feature_names     = as.list(concept_cols),
-    n_features        = length(concept_cols),
-    seq_length_hours  = seq_length_hours,
-    n_stays           = n_stays,
-    ricu_version      = as.character(packageVersion("ricu"))
+    dataset                  = dataset,
+    feature_names            = as.list(concept_cols),
+    n_features               = length(concept_cols),
+    seq_length_hours         = raw_export_horizon_hours,
+    raw_export_horizon_hours = raw_export_horizon_hours,
+    n_stays                  = n_stays,
+    ricu_version             = as.character(packageVersion("ricu"))
   )
   write_yaml(metadata, file.path(output_dir, "ricu_metadata.yaml"))
 }
@@ -934,13 +1088,37 @@ write_metadata <- function(output_dir, dataset, concept_cols,
 # ---------------------------------------------------------------------------
 
 main <- function(opts) {
-  dataset           <- opts$dataset
-  output_dir        <- opts$output_dir
-  seq_length_hours  <- opts$seq_length_hours
+  dataset <- opts$dataset
+  output_dir <- opts$output_dir
+
+  raw_export_horizon_hours <- opts$raw_export_horizon_hours
+  deprecated_seq_length_hours <- opts$seq_length_hours
+  if (is.null(raw_export_horizon_hours)) {
+    if (!is.null(deprecated_seq_length_hours)) {
+      raw_export_horizon_hours <- deprecated_seq_length_hours
+      warning(
+        "--seq_length_hours is deprecated; use --raw_export_horizon_hours instead.",
+        call. = FALSE
+      )
+    } else {
+      raw_export_horizon_hours <- 72L
+    }
+  } else if (!is.null(deprecated_seq_length_hours) &&
+             raw_export_horizon_hours != deprecated_seq_length_hours) {
+    stop(
+      paste0(
+        "Conflicting values provided for --raw_export_horizon_hours and ",
+        "--seq_length_hours. Use only --raw_export_horizon_hours."
+      )
+    )
+  }
 
   # Validate arguments
   if (is.null(dataset) || is.null(output_dir)) {
     stop("Both --dataset and --output_dir are required.")
+  }
+  if (raw_export_horizon_hours <= 0) {
+    stop("--raw_export_horizon_hours must be a positive integer.")
   }
   if (!dataset %in% VALID_DATASETS) {
     stop(sprintf("Invalid dataset '%s'. Valid: %s",
@@ -1053,8 +1231,8 @@ main <- function(opts) {
   }
 
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  message(sprintf("=== RICU extraction: dataset=%s, output=%s, hours=%d ===",
-                  dataset, output_dir, seq_length_hours))
+  message(sprintf("=== RICU extraction: dataset=%s, output=%s, raw_hours=%d ===",
+                  dataset, output_dir, raw_export_horizon_hours))
 
   # Parse the concept dictionary once, bypassing RICU's availability gate
   # which can fail even after successful import_src().
@@ -1068,7 +1246,7 @@ main <- function(opts) {
 
   # 2. Extract timeseries (writes parquet directly to avoid full-table merge)
   ts_path <- file.path(output_dir, "ricu_timeseries.parquet")
-  ts_result <- extract_timeseries(dataset, concepts, seq_length_hours, dict,
+  ts_result <- extract_timeseries(dataset, concepts, raw_export_horizon_hours, dict,
                                    output_path = ts_path)
   concept_cols <- ts_result$concept_cols
   n_stays <- ts_result$n_stays
@@ -1090,7 +1268,7 @@ main <- function(opts) {
 
   # 6. Write metadata
   write_metadata(output_dir, dataset, concept_cols,
-                 seq_length_hours, n_stays)
+                 raw_export_horizon_hours, n_stays)
 
   message("=== Extraction complete. ===")
   message(sprintf("  Output: %s", output_dir))

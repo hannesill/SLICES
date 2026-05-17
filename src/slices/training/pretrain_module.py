@@ -15,6 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective, get_ssl_config_class
 from slices.training.config_schemas import OptimizerConfig as OptimizerConfigSchema
+from slices.training.config_schemas import PretrainTrainingConfig as PretrainTrainingConfigSchema
 from slices.training.config_schemas import SchedulerConfig as SchedulerConfigSchema
 from slices.training.utils import build_optimizer, build_scheduler, save_encoder_checkpoint
 
@@ -77,6 +78,10 @@ class SSLPretrainModule(pl.LightningModule):
         self.ssl_objective = build_ssl_objective(self.encoder, ssl_config)
 
         # Validate and store config for optimizer
+        if config.get("training") is not None:
+            training_dict = OmegaConf.to_container(config.training, resolve=True)
+            PretrainTrainingConfigSchema(**training_dict)
+
         optimizer_dict = OmegaConf.to_container(config.optimizer, resolve=True)
         OptimizerConfigSchema(**optimizer_dict)
 
@@ -175,13 +180,10 @@ class SSLPretrainModule(pl.LightningModule):
         """
         # Update momentum encoder if the SSL objective supports it
         if hasattr(self.ssl_objective, "momentum_update"):
-            # Calculate training progress as fraction [0, 1]
-            if self.trainer.max_steps is not None and self.trainer.max_steps > 0:
-                progress = self.trainer.global_step / self.trainer.max_steps
-            else:
-                # Fallback: use epoch-based progress
-                max_epochs = self.trainer.max_epochs if self.trainer.max_epochs is not None else 1
-                progress = self.trainer.current_epoch / max(1, max_epochs)
+            # Per-step linear progress [0, 1] — matches original SMART which
+            # updates momentum after every batch, not every epoch.
+            total_steps = self.trainer.estimated_stepping_batches
+            progress = min(self.trainer.global_step / max(1, total_steps), 1.0)
             self.ssl_objective.momentum_update(progress=progress)
 
     def validation_step(

@@ -1,14 +1,15 @@
 # Downstream Task Finetuning Configuration
 #
 # This config orchestrates finetuning a pretrained encoder on downstream tasks.
-# By default, the encoder is frozen and only the task head is trained (linear probing).
+# By default, the encoder is frozen and only the task head is trained. Use
+# protocol=linear_probe or protocol=full_finetune for benchmark-safe manual launches.
 #
 # Example usage:
-#   # Linear probing (frozen encoder, default)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt
+#   # Linear probe (frozen encoder, linear head, 50 epochs, lr=1e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=linear_probe
 #
-#   # Full finetuning (train encoder + head)
-#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.freeze_encoder=false
+#   # Full finetune (unfrozen encoder, MLP head, 100 epochs, lr=3e-4)
+#   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt protocol=full_finetune
 #
 #   # Gradual unfreezing (freeze for N epochs, then unfreeze)
 #   uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/encoder.pt training.unfreeze_epoch=5
@@ -24,6 +25,7 @@ defaults:
   - model: transformer
   - tasks: mortality_24h
   - _self_
+  - optional protocol: null
 
 # Project info
 project_name: slices
@@ -35,32 +37,33 @@ dataset: miiv  # miiv | eicu | combined
 # Paradigm — auto-detected from checkpoint in finetune.py; override with paradigm=jepa etc.
 paradigm: mae
 
-# Experiment sprint (for W&B filtering, e.g. sprint=1)
-sprint: null
-
-# Revision tracking (for rerunning sprints with changed settings)
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
 # Random seed for reproducibility
 seed: 42
 
-# Checkpoint path (encoder weights from pretraining)
-# Can be either:
+# Checkpoint path (encoder weights from pretraining). Provide exactly one:
 #   - encoder.pt file: checkpoint=outputs/encoder.pt
 #   - full .ckpt file: pretrain_checkpoint=outputs/ssl-epoch=099.ckpt
 checkpoint: null
 pretrain_checkpoint: null
 
+# Resume this downstream trainer from an interrupted run.
+ckpt_path: null
+
 # Output directory (Hydra will create timestamped subdirs)
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
-# Encoder configuration inherited from configs/model/observation_transformer.yaml
+# Encoder configuration inherited from configs/model/transformer.yaml
 # For SSL finetuning, the v3 checkpoint overrides this with the saved encoder config.
 
 # Task configuration inherited from configs/tasks/*.yaml
-# Override with: task=mortality_hospital, task=los_remaining, etc.
+# Override with: tasks=mortality_hospital, tasks=los_remaining, etc.
 
 # Label fraction for label-efficiency ablations
 # 1.0 = use all training data (default)
@@ -84,6 +87,10 @@ training:
   # Use learned missing token from pretraining
   use_missing_token: true
 
+  # If best-checkpoint reload fails before test-time evaluation, optionally
+  # fall back to the final in-memory model instead of failing closed.
+  allow_best_ckpt_fallback: false
+
   # Class weighting for imbalanced tasks
   # null: no weighting (default)
   # "balanced": auto-compute inverse frequency weights from training labels
@@ -100,7 +107,8 @@ training:
   accumulate_grad_batches: 1
 
   # Early stopping
-  # Monitor/mode are set automatically by task type in setup_callbacks():
+  # Monitor/mode default to task.primary_metric when provided.
+  # Otherwise setup_callbacks() falls back to:
   #   classification -> val/auprc (max), regression -> val/mse (min)
   # Override here only if you need a non-default metric.
   early_stopping_patience: 10
@@ -136,7 +144,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: s${sprint}_finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
+  run_name: ${experiment_class}_finetune_${dataset}_${paradigm}_${task.task_name}_seed${seed}
   wandb_group: finetune_${dataset}_${paradigm}_${task.task_name}
   wandb_tags:
     - "phase:finetune"

@@ -15,13 +15,13 @@ Prerequisites:
 
 Usage:
     # Default: random masks (generalization test)
-    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv
+    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv
 
     # Fixed mask (true overfitting test)
-    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv --fixed-mask
+    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv --fixed-mask
 
     # Test encoder-decoder without SSL masking
-    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv --autoencoder
+    uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv --autoencoder
 """
 
 import sys
@@ -35,11 +35,12 @@ import polars as pl
 import torch
 import torch.nn as nn
 import yaml
+from torch.utils.data import DataLoader, TensorDataset
+
 from slices.data.transforms import create_ssl_mask
 from slices.models.encoders import build_encoder
 from slices.models.pretraining import build_ssl_objective
 from slices.models.pretraining.mae import MAEConfig
-from torch.utils.data import DataLoader, TensorDataset
 
 SEED = 42
 
@@ -62,7 +63,7 @@ def load_subset(
 ) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
     """Load a small subset using prepared normalization stats.
 
-    Applies forward-fill imputation to match the actual pipeline behavior.
+    Applies normalize-then-zero-fill preprocessing to match the actual pipeline.
 
     Args:
         processed_dir: Path to processed data directory.
@@ -115,16 +116,8 @@ def load_subset(
                     ts_tensor[t, f] = float("nan")
                 mask_tensor[t, f] = bool(mask_data[t][f])
 
-        # Forward-fill imputation (matches actual pipeline)
-        for f in range(n_features):
-            last_valid = means[f].item()
-            for t in range(seq_length):
-                if not torch.isnan(ts_tensor[t, f]):
-                    last_valid = ts_tensor[t, f].item()
-                else:
-                    ts_tensor[t, f] = last_valid
-
         ts_tensor = (ts_tensor - means) / stds
+        ts_tensor = torch.nan_to_num(ts_tensor, nan=0.0)
 
         timeseries_list.append(ts_tensor)
         mask_list.append(mask_tensor)
@@ -487,13 +480,13 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Test generalization learning (random masks)
-  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv
+  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv
 
   # Test architecture can overfit (fixed mask)
-  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv --fixed-mask
+  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv --fixed-mask
 
   # Test encoder-decoder without SSL
-  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/mimic-iv --autoencoder
+  uv run python scripts/sanity_checks/sc_mae_pretraining.py data/processed/miiv --autoencoder
         """,
     )
     parser.add_argument("processed_dir", help="Path to processed data directory")

@@ -8,8 +8,73 @@ import polars as pl
 import pytest
 import torch
 import yaml
+
 from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.data.dataset import ICUDataset
+from slices.data.splits import compute_patient_level_splits, load_cached_splits
+
+
+def _patients_for_indices(
+    static_df: pl.DataFrame,
+    stay_ids: list[int],
+    indices: list[int],
+) -> set[int]:
+    stay_to_patient = dict(zip(static_df["stay_id"].to_list(), static_df["patient_id"].to_list()))
+    return {stay_to_patient[stay_ids[i]] for i in indices}
+
+
+def _write_split_matrix_fixture(data_dir, task_names: list[str]) -> None:
+    """Create a small processed dataset with task-specific label missingness."""
+    data_dir.mkdir(parents=True)
+
+    n_stays = 30
+    stay_ids = list(range(1, n_stays + 1))
+    patient_ids = [stay_id + 1000 for stay_id in stay_ids]
+
+    with open(data_dir / "metadata.yaml", "w") as f:
+        yaml.dump(
+            {
+                "dataset": data_dir.name,
+                "feature_set": "core",
+                "feature_names": ["heart_rate"],
+                "n_features": 1,
+                "seq_length_hours": 2,
+                "min_stay_hours": 1,
+                "task_names": task_names,
+                "n_stays": n_stays,
+            },
+            f,
+        )
+
+    pl.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "patient_id": patient_ids,
+            "age": [60] * n_stays,
+            "gender": ["F" if i % 2 else "M" for i in stay_ids],
+        }
+    ).write_parquet(data_dir / "static.parquet")
+
+    pl.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "timeseries": [[[float(i)], [float(i + 1)]] for i in stay_ids],
+            "mask": [[[True], [True]] for _ in stay_ids],
+        }
+    ).write_parquet(data_dir / "timeseries.parquet")
+
+    labels = {"stay_id": stay_ids}
+    for task_idx, task_name in enumerate(task_names):
+        values = []
+        for stay_id in stay_ids:
+            if (stay_id + task_idx) % 5 == 0:
+                values.append(None)
+            elif task_name == "los_remaining":
+                values.append(float((stay_id % 7) + 1))
+            else:
+                values.append(stay_id % 2)
+        labels[task_name] = values
+    pl.DataFrame(labels).write_parquet(data_dir / "labels.parquet")
 
 
 @pytest.fixture
@@ -24,7 +89,7 @@ def mock_extracted_data(tmp_path):
         "feature_set": "core",
         "feature_names": ["heart_rate", "sbp", "resp_rate"],
         "n_features": 3,
-        "seq_length_hours": 48,
+        "seq_length_hours": 24,
         "min_stay_hours": 6,
         "task_names": ["mortality_24h", "mortality_hospital"],
         "n_stays": 10,
@@ -57,8 +122,8 @@ def mock_extracted_data(tmp_path):
     static_df.write_parquet(data_dir / "static.parquet")
 
     # Create timeseries (dense format with nested lists)
-    # Each stay has 48 hours x 3 features
-    seq_length = 48
+    # Each stay has 24 hours x 3 features
+    seq_length = 24
     n_features = 3
 
     timeseries_data = []
@@ -107,7 +172,7 @@ class TestICUDataset:
 
         assert len(dataset) == 10
         assert dataset.n_features == 3
-        assert dataset.seq_length == 48
+        assert dataset.seq_length == 24
         assert dataset.feature_names == ["heart_rate", "sbp", "resp_rate"]
         assert dataset.task_names == ["mortality_24h", "mortality_hospital"]
 
@@ -150,8 +215,8 @@ class TestICUDataset:
         assert "static" in sample
 
         # Check shapes
-        assert sample["timeseries"].shape == (48, 3)
-        assert sample["mask"].shape == (48, 3)
+        assert sample["timeseries"].shape == (24, 3)
+        assert sample["mask"].shape == (24, 3)
 
         # Check types
         assert sample["timeseries"].dtype == torch.float32
@@ -159,8 +224,8 @@ class TestICUDataset:
         assert isinstance(sample["stay_id"], int)
         assert sample["label"].dtype == torch.float32
 
-    def test_zero_fill_after_preprocessing(self, mock_extracted_data):
-        """Test that zero-fill removes all NaN values."""
+    def test_mean_imputation_after_preprocessing(self, mock_extracted_data):
+        """Missing values should be imputed with feature means when normalize=False."""
         dataset = ICUDataset(
             mock_extracted_data,
             task_name="mortality_24h",
@@ -169,14 +234,29 @@ class TestICUDataset:
 
         sample = dataset[0]
 
-        # After zero-fill, there should be no NaN values
+        # After imputation, there should be no NaN values
         assert not torch.isnan(sample["timeseries"]).any()
 
-        # Missing positions (mask=False) should be zero
-        mask = sample["mask"]
-        missing_values = sample["timeseries"][~mask]
-        if len(missing_values) > 0:
-            assert (missing_values == 0.0).all()
+        # Missing positions should receive the per-feature imputation value.
+        missing_mask = ~sample["mask"]
+        if missing_mask.any():
+            expected = dataset.feature_means.unsqueeze(0).expand(dataset.seq_length, -1)
+            assert torch.allclose(sample["timeseries"][missing_mask], expected[missing_mask])
+
+    def test_train_scoped_imputation_means_are_used_when_available(self, mock_extracted_data):
+        """normalize=False should still use train-split means when train_indices are provided."""
+        dataset = ICUDataset(
+            mock_extracted_data,
+            task_name="mortality_24h",
+            normalize=False,
+            train_indices=[0, 1, 2, 3],
+        )
+
+        sample = dataset[5]
+        missing_mask = ~sample["mask"]
+        if missing_mask.any():
+            expected = dataset.feature_means.unsqueeze(0).expand(dataset.seq_length, -1)
+            assert torch.allclose(sample["timeseries"][missing_mask], expected[missing_mask])
 
     def test_normalization(self, mock_extracted_data):
         """Test that normalization is applied correctly."""
@@ -218,6 +298,71 @@ class TestICUDataset:
         assert stats["mortality_24h"]["negative"] == 7
         assert stats["mortality_24h"]["prevalence"] == pytest.approx(0.3)
 
+    def test_get_label_statistics_regression_task(self, tmp_path):
+        """Regression tasks should report numeric summaries, not binary prevalence."""
+        data_dir = tmp_path / "processed_regression"
+        data_dir.mkdir(parents=True)
+
+        metadata = {
+            "dataset": "mock",
+            "feature_set": "core",
+            "feature_names": ["heart_rate"],
+            "n_features": 1,
+            "seq_length_hours": 4,
+            "min_stay_hours": 4,
+            "task_names": ["los_remaining"],
+            "n_stays": 3,
+        }
+
+        with open(data_dir / "metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "patient_id": [11, 12, 13],
+                "age": [60, 61, 62],
+                "gender": ["M", "F", "M"],
+            }
+        )
+        static_df.write_parquet(data_dir / "static.parquet")
+
+        timeseries_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "timeseries": [
+                    [[1.0], [2.0], [3.0], [4.0]],
+                    [[2.0], [3.0], [4.0], [5.0]],
+                    [[3.0], [4.0], [5.0], [6.0]],
+                ],
+                "mask": [
+                    [[True], [True], [True], [True]],
+                    [[True], [True], [True], [True]],
+                    [[True], [True], [True], [True]],
+                ],
+            }
+        )
+        timeseries_df.write_parquet(data_dir / "timeseries.parquet")
+
+        labels_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "los_remaining": [1.5, 2.5, 4.0],
+            }
+        )
+        labels_df.write_parquet(data_dir / "labels.parquet")
+
+        dataset = ICUDataset(data_dir, task_name="los_remaining", normalize=False)
+        stats = dataset.get_label_statistics()
+
+        assert stats["los_remaining"]["task_type"] == "regression"
+        assert stats["los_remaining"]["total"] == 3
+        assert stats["los_remaining"]["mean"] == pytest.approx((1.5 + 2.5 + 4.0) / 3)
+        assert stats["los_remaining"]["min"] == pytest.approx(1.5)
+        assert stats["los_remaining"]["max"] == pytest.approx(4.0)
+        assert "positive" not in stats["los_remaining"]
+        assert "prevalence" not in stats["los_remaining"]
+
     def test_override_seq_length(self, mock_extracted_data):
         """Test that seq_length can be overridden."""
         dataset = ICUDataset(
@@ -258,7 +403,8 @@ class TestICUDataset:
         assert "static" in sample
         assert "age" in sample["static"]
         assert "gender" in sample["static"]
-        assert "los_days" in sample["static"]
+        assert "los_days" not in sample["static"]
+        assert "los_days" in dataset.static_df.columns
 
     def test_normalize_without_train_indices_raises_error(self, mock_extracted_data):
         """Test that normalize=True without train_indices raises ValueError (Issue #4 fix).
@@ -624,7 +770,7 @@ class TestICUDataModule:
 
         # Check batch size (may be smaller due to drop_last=True and small dataset)
         assert batch["timeseries"].shape[0] <= 2
-        assert batch["timeseries"].shape[1] == 48
+        assert batch["timeseries"].shape[1] == 24
         assert batch["timeseries"].shape[2] == 3
 
     def test_reproducible_splits(self, mock_extracted_data):
@@ -704,6 +850,14 @@ class TestICUDataModule:
                 test_ratio=0.3,  # Sum = 1.1
             )
 
+        with pytest.raises(ValueError, match="train_ratio must be in \\[0, 1\\]"):
+            ICUDataModule(
+                processed_dir=".",
+                train_ratio=1.2,
+                val_ratio=-0.1,
+                test_ratio=-0.1,
+            )
+
     def test_train_dataloader_before_setup_raises_error(self, mock_extracted_data):
         """Test that calling train_dataloader before setup raises RuntimeError."""
         dm = ICUDataModule(
@@ -752,7 +906,7 @@ class TestICUDataModule:
         )
         dm.setup()
 
-        assert dm.get_seq_length() == 48
+        assert dm.get_seq_length() == 24
 
     def test_get_label_statistics(self, mock_extracted_data):
         """Test get_label_statistics returns correct information."""
@@ -769,6 +923,28 @@ class TestICUDataModule:
         assert "total" in stats["mortality_24h"]
         assert "positive" in stats["mortality_24h"]
         assert "prevalence" in stats["mortality_24h"]
+
+    def test_get_train_label_statistics_uses_optimization_subset(self, mock_extracted_data):
+        """Train label statistics should match the actual optimization subset."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm.setup()
+
+        subset_stats = dm.get_train_label_statistics()
+        full_train_stats = dm.get_train_label_statistics(use_full_train=True)
+
+        subset_stay_ids = [dm.dataset.stay_ids[i] for i in dm.train_indices]
+        subset_labels = dm.dataset.labels_df.filter(pl.col("stay_id").is_in(subset_stay_ids))
+        expected_positive = int((subset_labels["mortality_24h"] == 1).sum())
+
+        assert subset_stats["mortality_24h"]["total"] == len(dm.train_indices)
+        assert subset_stats["mortality_24h"]["positive"] == expected_positive
+        assert full_train_stats["mortality_24h"]["total"] == len(dm.full_train_indices)
+        assert full_train_stats["mortality_24h"]["total"] >= subset_stats["mortality_24h"]["total"]
 
     def test_custom_split_ratios(self, mock_extracted_data):
         """Test custom split ratios are applied."""
@@ -874,6 +1050,236 @@ class TestICUDataModule:
         assert dm1.train_indices == dm2.train_indices, "Train indices should match after reload"
         assert dm1.val_indices == dm2.val_indices, "Val indices should match after reload"
         assert dm1.test_indices == dm2.test_indices, "Test indices should match after reload"
+
+    def test_cached_full_cohort_splits_are_filtered_within_patient_sets(self, mock_extracted_data):
+        """Task-filtered cohorts should reuse the full-cohort patient assignment."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name=None,
+            seed=42,
+        )
+        dm.setup()
+
+        metadata_path = mock_extracted_data / "metadata.yaml"
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+        metadata["task_names"] = [*metadata["task_names"], "aki_kdigo"]
+        with open(metadata_path, "w") as f:
+            yaml.safe_dump(metadata, f)
+
+        labels_path = mock_extracted_data / "labels.parquet"
+        labels_df = pl.read_parquet(labels_path).with_columns(
+            pl.Series(
+                "aki_kdigo",
+                [None, None, 0, 1, 1, 0, 1, 1, 0, 0],
+                dtype=pl.Int64,
+            )
+        )
+        labels_df.write_parquet(labels_path)
+
+        static_df = pl.read_parquet(
+            mock_extracted_data / "static.parquet",
+            columns=["stay_id", "patient_id"],
+        )
+        all_stay_ids = pl.read_parquet(
+            mock_extracted_data / "timeseries.parquet",
+            columns=["stay_id"],
+        )["stay_id"].to_list()
+        filtered_stay_ids = labels_df.filter(pl.col("aki_kdigo").is_not_null())["stay_id"].to_list()
+
+        cached = load_cached_splits(
+            processed_dir=mock_extracted_data,
+            static_df=static_df,
+            stay_ids=filtered_stay_ids,
+            seed=42,
+            train_ratio=0.7,
+            val_ratio=0.15,
+            test_ratio=0.15,
+            cohort_stay_ids=all_stay_ids,
+        )
+
+        assert cached is not None
+        train_indices, val_indices, test_indices = cached
+
+        with open(mock_extracted_data / "splits.yaml") as f:
+            cached_yaml = yaml.safe_load(f)
+
+        ssl_train_patients = set(cached_yaml["train_patients"])
+        downstream_train_patients = _patients_for_indices(
+            static_df, filtered_stay_ids, train_indices
+        )
+        downstream_val_patients = _patients_for_indices(static_df, filtered_stay_ids, val_indices)
+        downstream_test_patients = _patients_for_indices(static_df, filtered_stay_ids, test_indices)
+
+        assert downstream_train_patients.issubset(ssl_train_patients)
+        assert downstream_val_patients.issubset(set(cached_yaml["val_patients"]))
+        assert downstream_test_patients.issubset(set(cached_yaml["test_patients"]))
+        assert ssl_train_patients.isdisjoint(downstream_val_patients)
+        assert ssl_train_patients.isdisjoint(downstream_test_patients)
+
+    def test_aki_normalization_uses_full_ssl_train_split(self, tmp_path):
+        """AKI normalizer should use the full SSL train cohort, not AKI-labelable train."""
+        data_dir = tmp_path / "aki_normalization"
+        _write_split_matrix_fixture(data_dir, ["aki_kdigo"])
+
+        ssl_dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name=None,
+            seed=42,
+            train_ratio=1.0,
+            val_ratio=0.0,
+            test_ratio=0.0,
+            normalize=True,
+        )
+        ssl_dm.setup()
+
+        aki_dm = ICUDataModule(
+            processed_dir=data_dir,
+            task_name="aki_kdigo",
+            seed=42,
+            train_ratio=1.0,
+            val_ratio=0.0,
+            test_ratio=0.0,
+            normalize=True,
+        )
+        aki_dm.setup()
+
+        assert len(ssl_dm.normalization_train_indices) == len(ssl_dm.train_indices)
+        assert aki_dm.normalization_train_indices == ssl_dm.normalization_train_indices
+        assert len(aki_dm.normalization_train_indices) == len(ssl_dm.train_indices)
+        assert len(aki_dm.full_train_indices) < len(aki_dm.normalization_train_indices)
+        assert len(aki_dm.full_train_indices) == len(aki_dm.dataset.train_indices)
+        assert aki_dm.dataset.normalization_train_indices == ssl_dm.normalization_train_indices
+        assert torch.allclose(aki_dm.dataset.feature_means, ssl_dm.dataset.feature_means)
+        assert torch.allclose(aki_dm.dataset.feature_stds, ssl_dm.dataset.feature_stds)
+
+        stats_counts = set()
+        for stats_path in data_dir.glob("normalization_stats_*.yaml"):
+            with open(stats_path) as f:
+                stats_counts.add(yaml.safe_load(f)["train_indices_count"])
+
+        assert len(ssl_dm.train_indices) in stats_counts
+        assert len(aki_dm.full_train_indices) not in stats_counts
+
+    def test_ssl_train_disjoint_from_task_filtered_eval_splits_for_runner_matrix(self, tmp_path):
+        """Every thesis dataset/task/seed should share the global patient split."""
+        from scripts.internal.run_experiments import DATASETS, SEEDS_EXTENDED, TASKS
+
+        for dataset_name in DATASETS:
+            data_dir = tmp_path / dataset_name
+            _write_split_matrix_fixture(data_dir, TASKS)
+
+            for seed in SEEDS_EXTENDED:
+                (
+                    ssl_train_indices,
+                    _,
+                    _,
+                    ssl_static_df,
+                    _,
+                    ssl_stay_ids,
+                    _,
+                    _,
+                    _,
+                ) = compute_patient_level_splits(
+                    data_dir,
+                    task_name=None,
+                    seed=seed,
+                    train_ratio=0.7,
+                    val_ratio=0.15,
+                    test_ratio=0.15,
+                )
+                ssl_train_patients = _patients_for_indices(
+                    ssl_static_df,
+                    ssl_stay_ids,
+                    ssl_train_indices,
+                )
+
+                for task_name in TASKS:
+                    (
+                        _,
+                        downstream_val_indices,
+                        downstream_test_indices,
+                        downstream_static_df,
+                        _,
+                        _,
+                        downstream_stay_ids,
+                        _,
+                        _,
+                    ) = compute_patient_level_splits(
+                        data_dir,
+                        task_name=task_name,
+                        seed=seed,
+                        train_ratio=0.7,
+                        val_ratio=0.15,
+                        test_ratio=0.15,
+                    )
+                    downstream_val_patients = _patients_for_indices(
+                        downstream_static_df,
+                        downstream_stay_ids,
+                        downstream_val_indices,
+                    )
+                    downstream_test_patients = _patients_for_indices(
+                        downstream_static_df,
+                        downstream_stay_ids,
+                        downstream_test_indices,
+                    )
+
+                    assert ssl_train_patients.isdisjoint(
+                        downstream_val_patients
+                    ), f"{dataset_name}/{task_name}/seed{seed}: SSL train overlaps val"
+                    assert ssl_train_patients.isdisjoint(
+                        downstream_test_patients
+                    ), f"{dataset_name}/{task_name}/seed{seed}: SSL train overlaps test"
+
+    def test_label_efficiency_splits_preserve_full_split_provenance(self, mock_extracted_data):
+        """splits.yaml should keep the full split and record the train subset separately."""
+        dm = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm.setup()
+
+        with open(mock_extracted_data / "splits.yaml") as f:
+            saved_splits = yaml.safe_load(f)
+
+        full_train_patients = sorted(
+            {
+                dm.dataset.static_df.filter(pl.col("stay_id") == dm.dataset.stay_ids[i])[
+                    "patient_id"
+                ].item()
+                for i in dm.full_train_indices
+            }
+        )
+        subset_stay_ids = sorted(dm.dataset.stay_ids[i] for i in dm.train_indices)
+
+        assert saved_splits["train_stays"] == len(dm.full_train_indices)
+        assert saved_splits["train_patients"] == full_train_patients
+        assert saved_splits["train_subset_stays"] == len(dm.train_indices)
+        assert sorted(saved_splits["train_subset_stay_ids"]) == subset_stay_ids
+
+    def test_existing_splits_yaml_is_not_rewritten_by_label_efficiency_runs(
+        self, mock_extracted_data
+    ):
+        """Prepared canonical splits.yaml should remain stable across downstream runs."""
+        dm_full = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+        )
+        dm_full.setup()
+        canonical_text = (mock_extracted_data / "splits.yaml").read_text()
+
+        dm_subset = ICUDataModule(
+            processed_dir=mock_extracted_data,
+            task_name="mortality_24h",
+            seed=42,
+            label_fraction=0.5,
+        )
+        dm_subset.setup()
+
+        assert (mock_extracted_data / "splits.yaml").read_text() == canonical_text
 
 
 class TestCollateFn:
@@ -1019,8 +1425,9 @@ class TestCollateFn:
             train_indices=[0, 1, 2, 3],  # Only first 4 samples are training
         )
 
-        stats_file = data_dir / "normalization_stats.yaml"
-        assert stats_file.exists(), "normalization_stats.yaml should be created"
+        # Stats are now hash-keyed: normalization_stats_<hash>.yaml
+        stats_files = list(data_dir.glob("normalization_stats_*.yaml"))
+        assert len(stats_files) >= 1, "normalization_stats_<hash>.yaml should be created"
 
         # Get stats from first dataset
         means1 = dataset1.feature_means.clone()
@@ -1250,14 +1657,17 @@ class TestDatasetImportWarnings:
                         if child.module == "warnings":
                             inline_imports.append(node.name)
 
-        assert len(inline_imports) == 0, (
-            f"Found 'import warnings' inside functions: {inline_imports}. " "Move to module level."
-        )
+        assert (
+            len(inline_imports) == 0
+        ), f"Found 'import warnings' inside functions: {inline_imports}. Move to module level."
 
-    def test_module_level_import_exists(self):
-        """dataset.py should have warnings imported at module level."""
-        import slices.data.dataset as mod
+    def test_tensor_cache_has_warnings_import(self):
+        """tensor_cache.py should have warnings imported at module level.
+
+        Warning logic for normalization stats lives in tensor_cache.py, not dataset.py.
+        """
+        import slices.data.tensor_cache as mod
 
         assert hasattr(mod, "warnings") or "warnings" in dir(
             mod
-        ), "dataset.py should import warnings at module level"
+        ), "tensor_cache.py should import warnings at module level"

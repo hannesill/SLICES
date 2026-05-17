@@ -234,6 +234,10 @@ class TransformerEncoder(BaseEncoder):
         else:
             self.final_norm = nn.Identity()
 
+    def handles_missingness_intrinsically(self) -> bool:
+        """Observation-aware transformers consume masks in the input projection."""
+        return self.config.obs_aware
+
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
         if self.config.d_model % self.config.n_heads != 0:
@@ -287,13 +291,14 @@ class TransformerEncoder(BaseEncoder):
         # Add sinusoidal time PE
         tokens = tokens + self.time_pe[:T].unsqueeze(0)  # (B, T, d_model)
 
-        # Fixed-length: all timesteps valid
-        padding_mask = torch.ones(B, T, dtype=torch.bool, device=device)
+        # Fully unobserved hours are not eligible SSL tokens.
+        padding_mask = obs_mask.any(dim=-1)
 
         token_info = {
             "timestep_idx": torch.arange(T, device=device).unsqueeze(0).expand(B, -1),
             "values": x,
             "obs_mask": obs_mask,
+            "valid_timestep_mask": padding_mask,
         }
 
         return tokens, padding_mask, token_info
@@ -312,8 +317,7 @@ class TransformerEncoder(BaseEncoder):
         Returns:
             (B, N, d_model) encoded tokens.
         """
-        # Convert to PyTorch convention: True = ignore
-        key_padding_mask = ~padding_mask
+        key_padding_mask = self._key_padding_mask_for_attention(padding_mask)
 
         x = tokens
         for layer in self.layers:
@@ -377,7 +381,7 @@ class TransformerEncoder(BaseEncoder):
         # Our convention: True = valid, False = padding
         # PyTorch convention: True = padding (ignore), False = valid
         if padding_mask is not None:
-            key_padding_mask = ~padding_mask  # Invert
+            key_padding_mask = self._key_padding_mask_for_attention(padding_mask)
         else:
             key_padding_mask = None
 
@@ -407,6 +411,22 @@ class TransformerEncoder(BaseEncoder):
             Pooled tensor of shape (B, d_model) or (B, T, d_model) if no pooling.
         """
         return apply_pooling(x, self.config.pooling, padding_mask)
+
+    @staticmethod
+    def _key_padding_mask_for_attention(padding_mask: torch.Tensor) -> torch.Tensor:
+        """Convert valid-token masks to PyTorch attention masks without all-masked rows.
+
+        PyTorch attention returns NaNs when a sample has every key masked. Fully
+        unobserved ICU stays can create that case. We expose one finite dummy token
+        to attention, while downstream pooling/loss code still receives the original
+        padding mask and therefore treats the sample as having no valid timesteps.
+        """
+        key_padding_mask = ~padding_mask.to(dtype=torch.bool)
+        all_masked = key_padding_mask.all(dim=1)
+        if all_masked.any():
+            key_padding_mask = key_padding_mask.clone()
+            key_padding_mask[all_masked, 0] = False
+        return key_padding_mask
 
     def get_output_dim(self) -> int:
         """Return the output dimension of the encoder.
