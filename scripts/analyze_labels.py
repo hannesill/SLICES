@@ -4,22 +4,23 @@
 This script provides comprehensive statistics about task labels including:
 - Available tasks and their types
 - Class distributions (counts and percentages)
+- Continuous-label summaries for regression tasks
 - Missing label counts
 - Per-split statistics (train/val/test)
 - Class imbalance metrics
 
 Example usage:
     # Analyze labels in processed directory
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo
+    uv run python scripts/analyze_labels.py data/processed/miiv
 
     # Analyze specific task
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --task mortality_24h
+    uv run python scripts/analyze_labels.py data/processed/miiv --task mortality_24h
 
     # Show per-split statistics
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --splits
+    uv run python scripts/analyze_labels.py data/processed/miiv --splits
 
     # Export to JSON
-    uv run python scripts/analyze_labels.py data/processed/mimic-iv-demo --output stats.json
+    uv run python scripts/analyze_labels.py data/processed/miiv --output stats.json
 """
 
 import argparse
@@ -30,6 +31,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import polars as pl
 import yaml
+
+from slices.data.utils import get_package_data_dir
 
 
 def load_labels(processed_dir: Path) -> pl.DataFrame:
@@ -66,6 +69,21 @@ def load_metadata(processed_dir: Path) -> Dict[str, Any]:
 
     with open(metadata_path) as f:
         return yaml.safe_load(f) or {}
+
+
+def load_task_config(task_name: str) -> Dict[str, Any]:
+    """Load task metadata from the package YAML."""
+    config_path = get_package_data_dir() / "tasks" / f"{task_name}.yaml"
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_task_quality_checks(task_name: str) -> Dict[str, Any]:
+    """Load optional warning thresholds for a task from the package YAML."""
+    return load_task_config(task_name).get("quality_checks", {}) or {}
 
 
 def get_task_columns(labels_df: pl.DataFrame) -> List[str]:
@@ -179,9 +197,45 @@ def compute_auroc_ci_width(
     return lower, upper
 
 
+def infer_task_type(valid_labels: pl.Series, configured_task_type: Optional[str] = None) -> str:
+    """Infer task type when the task YAML does not provide it."""
+    if configured_task_type:
+        return configured_task_type
+
+    values = valid_labels.to_numpy()
+    if len(values) == 0:
+        return "unknown"
+
+    finite = values[np.isfinite(values.astype(float))]
+    if len(finite) == 0:
+        return "unknown"
+
+    unique = np.unique(finite)
+    integer_like = np.allclose(unique, np.round(unique))
+    if integer_like and len(unique) <= 20:
+        return "binary" if set(unique.astype(int)).issubset({0, 1}) else "multiclass"
+    return "regression"
+
+
+def summarize_numeric_labels(labels: np.ndarray) -> Dict[str, float]:
+    """Return descriptive statistics for continuous labels."""
+    labels = labels.astype(float)
+    return {
+        "mean": round(float(np.mean(labels)), 4),
+        "std": round(float(np.std(labels, ddof=1)), 4) if len(labels) > 1 else 0.0,
+        "min": round(float(np.min(labels)), 4),
+        "q25": round(float(np.percentile(labels, 25)), 4),
+        "median": round(float(np.median(labels)), 4),
+        "q75": round(float(np.percentile(labels, 75)), 4),
+        "max": round(float(np.max(labels)), 4),
+    }
+
+
 def analyze_task(
     labels_df: pl.DataFrame,
     task_name: str,
+    task_type: Optional[str] = None,
+    quality_checks: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Analyze a single task's label distribution.
 
@@ -211,11 +265,34 @@ def analyze_task(
         "valid_labels": valid_count,
         "missing_labels": missing_count,
         "missing_percentage": (missing_count / total_stays * 100) if total_stays > 0 else 0,
+        "quality_checks": quality_checks or {},
+        "quality_warnings": [],
     }
 
     if valid_count == 0:
+        stats["task_type"] = task_type or "unknown"
         stats["class_distribution"] = {}
         stats["n_classes"] = 0
+        return stats
+
+    inferred_task_type = infer_task_type(valid_labels, task_type)
+    stats["task_type"] = inferred_task_type
+
+    if inferred_task_type == "regression":
+        values = valid_labels.to_numpy().astype(float)
+        stats["label_summary"] = summarize_numeric_labels(values)
+        stats["n_classes"] = None
+        stats["class_distribution"] = {}
+        if quality_checks:
+            max_missing_percentage = quality_checks.get("max_missing_percentage")
+            if max_missing_percentage is not None and stats["missing_percentage"] > float(
+                max_missing_percentage
+            ):
+                stats["quality_warnings"].append(
+                    "Missing label rate "
+                    f"{stats['missing_percentage']:.1f}% exceeds the configured "
+                    f"maximum of {float(max_missing_percentage):.1f}%."
+                )
         return stats
 
     # Get unique classes and their counts
@@ -254,12 +331,24 @@ def analyze_task(
             1: round(valid_count / (2 * positive_count), 4) if positive_count > 0 else 1.0,
         }
 
+    if quality_checks:
+        max_missing_percentage = quality_checks.get("max_missing_percentage")
+        if max_missing_percentage is not None and stats["missing_percentage"] > float(
+            max_missing_percentage
+        ):
+            stats["quality_warnings"].append(
+                "Missing label rate "
+                f"{stats['missing_percentage']:.1f}% exceeds the configured "
+                f"maximum of {float(max_missing_percentage):.1f}%."
+            )
+
     return stats
 
 
 def analyze_splits(
     processed_dir: Path,
     task_name: str,
+    task_type: Optional[str] = None,
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
@@ -310,7 +399,10 @@ def analyze_splits(
         for idx in indices:
             sample = datamodule.dataset[idx]
             if "label" in sample and sample["label"] is not None:
-                labels.append(int(sample["label"]))
+                value = sample["label"]
+                if hasattr(value, "item"):
+                    value = value.item()
+                labels.append(float(value))
 
         if not labels:
             split_stats[split_name] = {
@@ -320,8 +412,21 @@ def analyze_splits(
             }
             continue
 
-        labels_array = np.array(labels)
-        labels_series = pl.Series(labels)
+        labels_array = np.array(labels, dtype=float)
+        split_task_type = infer_task_type(pl.Series(labels_array), task_type)
+
+        if split_task_type == "regression":
+            split_stats[split_name] = {
+                "n_samples": len(indices),
+                "n_valid_labels": len(labels),
+                "task_type": split_task_type,
+                "label_summary": summarize_numeric_labels(labels_array),
+                "class_distribution": {},
+            }
+            continue
+
+        class_labels = labels_array.astype(int)
+        labels_series = pl.Series(class_labels)
         class_counts = labels_series.value_counts().sort("count", descending=True)
 
         class_distribution = {}
@@ -336,6 +441,7 @@ def analyze_splits(
         split_stats[split_name] = {
             "n_samples": len(indices),
             "n_valid_labels": len(labels),
+            "task_type": split_task_type,
             "class_distribution": class_distribution,
         }
 
@@ -385,7 +491,23 @@ def print_task_stats(stats: Dict[str, Any]) -> None:
     print(f"  Total stays:     {stats['total_stays']:,}")
     print(f"  Valid labels:    {stats['valid_labels']:,}")
     print(f"  Missing labels:  {stats['missing_labels']:,} ({stats['missing_percentage']:.1f}%)")
-    print(f"  Number of classes: {stats['n_classes']}")
+    print(f"  Task type:       {stats.get('task_type', 'unknown')}")
+    if stats.get("n_classes") is not None:
+        print(f"  Number of classes: {stats['n_classes']}")
+
+    if stats.get("quality_warnings"):
+        print("\n  Quality Warnings:")
+        for warning in stats["quality_warnings"]:
+            print(f"    - {warning}")
+
+    if stats.get("label_summary"):
+        summary = stats["label_summary"]
+        print("\n  Label Summary:")
+        print(f"    Mean:   {summary['mean']:.4f}")
+        print(f"    Std:    {summary['std']:.4f}")
+        print(f"    Median: {summary['median']:.4f}")
+        print(f"    IQR:    {summary['q25']:.4f} - {summary['q75']:.4f}")
+        print(f"    Range:  {summary['min']:.4f} - {summary['max']:.4f}")
 
     if stats["class_distribution"]:
         print("\n  Class Distribution:")
@@ -413,6 +535,28 @@ def print_split_stats(split_stats: Dict[str, Dict[str, Any]], task_name: str) ->
     """
     print(f"\n  Per-Split Statistics for '{task_name}':")
     print(f"  {'─' * 60}")
+
+    if any("label_summary" in split_stats.get(s, {}) for s in ["train", "val", "test"]):
+        print(f"  {'Split':<10} {'Samples':>10} {'Mean':>12} {'Median':>12} {'IQR':>21}")
+        print(f"  {'-' * 10} {'-' * 10} {'-' * 12} {'-' * 12} {'-' * 21}")
+
+        for split_name in ["train", "val", "test"]:
+            if split_name not in split_stats:
+                continue
+            stats = split_stats[split_name]
+            summary = stats.get("label_summary")
+            if not summary:
+                print(
+                    f"  {split_name:<10} {stats['n_samples']:>10,} "
+                    f"{'N/A':>12} {'N/A':>12} {'N/A':>21}"
+                )
+                continue
+            iqr = f"{summary['q25']:.2f}-{summary['q75']:.2f}"
+            print(
+                f"  {split_name:<10} {stats['n_samples']:>10,} "
+                f"{summary['mean']:>12.2f} {summary['median']:>12.2f} {iqr:>21}"
+            )
+        return
 
     # Basic counts header
     print(f"  {'Split':<10} {'Samples':>10} {'Positive':>12} {'Negative':>12} {'Pos Rate':>12}")
@@ -598,7 +742,13 @@ def main():
     print("=" * 60)
 
     for task_name in task_columns:
-        stats = analyze_task(labels_df, task_name)
+        task_config = load_task_config(task_name)
+        stats = analyze_task(
+            labels_df,
+            task_name,
+            task_type=task_config.get("task_type"),
+            quality_checks=task_config.get("quality_checks", {}) or {},
+        )
         all_stats[task_name] = stats
         print_task_stats(stats)
 
@@ -612,10 +762,12 @@ def main():
         test_ratio = val_ratio
 
         for task_name in task_columns:
+            task_config = load_task_config(task_name)
             try:
                 split_stats = analyze_splits(
                     args.processed_dir,
                     task_name,
+                    task_type=task_config.get("task_type"),
                     train_ratio=args.train_ratio,
                     val_ratio=val_ratio,
                     test_ratio=test_ratio,

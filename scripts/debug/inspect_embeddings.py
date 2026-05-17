@@ -7,7 +7,7 @@ Example usage:
     # Analyze embeddings from a checkpoint
     uv run python scripts/debug/inspect_embeddings.py \
         checkpoint=outputs/encoder.pt \
-        processed_dir=data/processed/mimic-iv-demo
+        processed_dir=data/processed/miiv
 
     # Load pre-computed embeddings
     uv run python scripts/debug/inspect_embeddings.py \
@@ -16,7 +16,7 @@ Example usage:
     # Generate visualizations
     uv run python scripts/debug/inspect_embeddings.py \
         checkpoint=outputs/encoder.pt \
-        processed_dir=data/processed/mimic-iv-demo \
+        processed_dir=data/processed/miiv \
         plots=true
 """
 
@@ -26,6 +26,7 @@ import hydra
 import numpy as np
 import polars as pl
 from omegaconf import DictConfig
+
 from slices.debug import (
     EmbeddingQualityReport,
     analyze_embeddings,
@@ -89,6 +90,7 @@ def extract_embeddings_from_checkpoint(
         Tuple of (embeddings, stay_ids, labels).
     """
     import torch
+
     from slices.data.datamodule import ICUDataModule
     from slices.models.encoders import build_encoder
 

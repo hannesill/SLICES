@@ -9,8 +9,12 @@ Tests cover:
 import pytest
 import yaml
 from pydantic import ValidationError
+
+from slices.constants import THESIS_TASKS
+from slices.data.config_schemas import DataConfig
 from slices.training.config_schemas import (
     OptimizerConfig,
+    PretrainTrainingConfig,
     SchedulerConfig,
     TaskConfig,
     TrainingConfig,
@@ -77,12 +81,77 @@ class TestTaskConfigValidation:
         """Missing optional fields should use defaults."""
         cfg = TaskConfig(task_name="mortality_24h")
         assert cfg.task_type == "binary"
+        assert cfg.prediction_window_hours is None
+        assert cfg.observation_window_hours is None
+        assert cfg.gap_hours == 0
+        assert cfg.label_sources == []
+        assert cfg.label_params == {}
         assert cfg.head_type == "mlp"
         assert cfg.hidden_dims == [64]
         assert cfg.dropout == 0.1
         assert cfg.activation == "relu"
         assert cfg.n_classes is None
         assert cfg.use_layer_norm is False
+
+    def test_label_definition_fields_are_accepted(self):
+        """Training task configs may include label semantics for freshness validation."""
+        cfg = TaskConfig(
+            task_name="mortality_24h",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+            label_params={},
+        )
+
+        assert cfg.prediction_window_hours == 24
+        assert cfg.observation_window_hours == 24
+        assert cfg.label_sources == ["stays", "mortality_info"]
+
+
+class TestDataConfigValidation:
+    """Tests for data loading config bounds."""
+
+    def test_default_tasks_are_thesis_tasks(self):
+        cfg = DataConfig(processed_dir="data/processed/miiv")
+
+        assert cfg.tasks == list(THESIS_TASKS)
+
+    def test_split_ratios_must_be_bounded(self):
+        with pytest.raises(ValidationError, match="train_ratio"):
+            DataConfig(
+                processed_dir="data/processed/miiv",
+                train_ratio=1.2,
+                val_ratio=-0.1,
+                test_ratio=-0.1,
+            )
+
+    def test_split_ratios_must_sum_to_one(self):
+        with pytest.raises(ValidationError, match="Split ratios must sum to 1.0"):
+            DataConfig(
+                processed_dir="data/processed/miiv",
+                train_ratio=0.5,
+                val_ratio=0.3,
+                test_ratio=0.3,
+            )
+
+    def test_known_hydra_data_fields_pass(self):
+        cfg = DataConfig(
+            processed_dir="data/processed/miiv",
+            ricu_output_dir="data/ricu_output/miiv",
+            enable_sliding_windows=True,
+            window_size=24,
+            window_stride=12,
+        )
+
+        assert cfg.ricu_output_dir == "data/ricu_output/miiv"
+        assert cfg.enable_sliding_windows is True
+        assert cfg.window_size == 24
+        assert cfg.window_stride == 12
+
+    def test_unknown_data_key_rejected(self):
+        with pytest.raises(ValidationError, match="procesed_dir"):
+            DataConfig(processed_dir="data/processed/miiv", procesed_dir="typo")
 
 
 class TestTrainingConfigValidation:
@@ -125,6 +194,25 @@ class TestTrainingConfigValidation:
         """use_missing_token should be a valid field with default True."""
         cfg = TrainingConfig(use_missing_token=False)
         assert cfg.use_missing_token is False
+
+    def test_allow_best_ckpt_fallback_field_exists(self):
+        """allow_best_ckpt_fallback should be accepted as a validated training flag."""
+        cfg = TrainingConfig(allow_best_ckpt_fallback=True)
+        assert cfg.allow_best_ckpt_fallback is True
+
+
+class TestPretrainTrainingConfigValidation:
+    """Tests that pretraining config typos are rejected."""
+
+    def test_valid_config_passes(self):
+        cfg = PretrainTrainingConfig(max_epochs=100, batch_size=256)
+
+        assert cfg.max_epochs == 100
+        assert cfg.batch_size == 256
+
+    def test_extra_key_rejected(self):
+        with pytest.raises(ValidationError, match="max_epoch"):
+            PretrainTrainingConfig(max_epoch=100)
 
 
 class TestOptimizerConfigValidation:
@@ -176,3 +264,54 @@ class TestUseMissingTokenYAML:
             "so users can discover and override it"
         )
         assert raw["training"]["use_missing_token"] is True
+
+
+class TestCheckpointFallbackYAML:
+    """Test that best-checkpoint fallback is discoverable in training configs."""
+
+    @pytest.mark.parametrize(
+        ("config_name", "expected"),
+        [
+            ("finetune.yaml", False),
+            ("supervised.yaml", False),
+        ],
+    )
+    def test_training_yaml_has_allow_best_ckpt_fallback(self, config_name, expected):
+        import pathlib
+
+        yaml_path = pathlib.Path(__file__).parent.parent / "configs" / config_name
+        with open(yaml_path) as f:
+            raw = yaml.safe_load(f)
+
+        assert "training" in raw
+        assert "allow_best_ckpt_fallback" in raw["training"]
+        assert raw["training"]["allow_best_ckpt_fallback"] is expected
+
+
+class TestExperimentClassMetadataYAML:
+    """Test final rerun metadata fields in launch configs."""
+
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "pretrain.yaml",
+            "finetune.yaml",
+            "supervised.yaml",
+            "gru_d.yaml",
+            "xgboost.yaml",
+        ],
+    )
+    def test_configs_use_experiment_class_metadata_not_sprint(self, config_name):
+        import pathlib
+
+        yaml_path = pathlib.Path(__file__).parent.parent / "configs" / config_name
+        with open(yaml_path) as f:
+            raw = yaml.safe_load(f)
+
+        assert "sprint" not in raw
+        assert raw["experiment_class"] is None
+        assert raw["experiment_subtype"] is None
+        assert raw["revision"] is None
+        assert raw["rerun_reason"] is None
+        assert "s${sprint}" not in raw["logging"]["run_name"]
+        assert "${experiment_class}" in raw["logging"]["run_name"]

@@ -5,6 +5,7 @@ returns (timeseries, mask, labels, static_features) tuples for training.
 """
 
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -26,6 +27,7 @@ from slices.data.tensor_preprocessing import (
     compute_normalization_stats,
     compute_single_sample_stages,
     convert_raw_to_tensors,
+    extract_tensors_from_dataframe,
 )
 
 # Module-level logger
@@ -96,7 +98,7 @@ class ICUDataset(Dataset):
             metadata.yaml       # Feature names, task names, etc.
 
     Example:
-        >>> dataset = ICUDataset("data/processed/mimic-iv-demo")
+        >>> dataset = ICUDataset("data/processed/miiv")
         >>> sample = dataset[0]
         >>> sample["timeseries"].shape  # (seq_length, n_features)
         torch.Size([48, 9])
@@ -111,6 +113,7 @@ class ICUDataset(Dataset):
         seq_length: Optional[int] = None,  # TODO: Add support for different sequence lengths
         normalize: bool = True,  # TODO: Add support for different normalization strategies
         train_indices: Optional[List[int]] = None,
+        normalization_train_indices: Optional[List[int]] = None,
         handle_missing_labels: str = "filter",
         _excluded_stay_ids: Optional[Set[int]] = None,
     ) -> None:
@@ -121,10 +124,17 @@ class ICUDataset(Dataset):
             task_name: Name of the task for label extraction (e.g., 'mortality_24h').
                       If None, no labels are returned.
             seq_length: Override sequence length (uses metadata default if None).
-            normalize: Whether to normalize features (z-score per feature).
+            normalize: Whether to z-score features before imputation. When False,
+                      data remains in original units and missing values are
+                      imputed from the available feature means.
             train_indices: Optional list of indices for training set. If provided,
-                          normalization statistics are computed only on these samples.
-                          This prevents data leakage from val/test sets.
+                          records the task-filtered training split associated with this
+                          dataset. When normalization_train_indices is not provided, these
+                          indices are also used for normalization for backwards compatibility.
+            normalization_train_indices: Optional list of full raw-cohort training indices
+                          used for normalization statistics. DataModule passes this
+                          separately for task-filtered downstream runs so AKI uses the same
+                          dataset/seed normalizer as SSL pretraining.
             handle_missing_labels: How to handle stays with missing labels when task_name
                                   is specified. Options:
                                   - 'filter': Remove samples with missing labels (default)
@@ -137,6 +147,11 @@ class ICUDataset(Dataset):
         self.task_name = task_name
         self.normalize = normalize
         self.train_indices = train_indices
+        self.normalization_train_indices = (
+            normalization_train_indices
+            if normalization_train_indices is not None
+            else train_indices
+        )
         self.handle_missing_labels = handle_missing_labels
         self._excluded_stay_ids = _excluded_stay_ids or set()
 
@@ -166,6 +181,9 @@ class ICUDataset(Dataset):
         self.n_features: int = len(self.feature_names)
         self.seq_length: int = seq_length or self.metadata["seq_length_hours"]
         self.task_names: List[str] = self.metadata.get("task_names", [])
+        self.task_types: Dict[str, str] = self._resolve_task_types()
+        self._timeseries_tensor: torch.Tensor
+        self._mask_tensor: torch.Tensor
 
         # Validate task_name if provided
         if task_name is not None and task_name not in self.task_names:
@@ -185,109 +203,166 @@ class ICUDataset(Dataset):
             self.data_dir, self.task_name, self.handle_missing_labels, self.removed_samples
         )
 
+    @staticmethod
+    def _task_config_dirs() -> List[Path]:
+        """Return candidate task-config directories for task-type resolution."""
+        repo_tasks = Path(__file__).resolve().parents[3] / "configs" / "tasks"
+        package_tasks = Path(__file__).resolve().parent / "tasks"
+        return [repo_tasks, package_tasks]
+
+    def _resolve_task_type_from_config(self, task_name: str) -> Optional[str]:
+        """Resolve task type from the checked-in task configuration."""
+        for task_dir in self._task_config_dirs():
+            config_path = task_dir / f"{task_name}.yaml"
+            if not config_path.exists():
+                continue
+
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+
+            task_type = config.get("task_type")
+            if isinstance(task_type, str):
+                return task_type
+
+        return None
+
+    def _resolve_task_types(self) -> Dict[str, str]:
+        """Resolve task types from metadata with a config-file fallback."""
+        label_manifest = self.metadata.get("label_manifest") or {}
+        task_types: Dict[str, str] = {}
+
+        for task_name in self.task_names:
+            task_type = None
+
+            manifest_entry = label_manifest.get(task_name)
+            if isinstance(manifest_entry, dict):
+                manifest_task_type = manifest_entry.get("task_type")
+                if isinstance(manifest_task_type, str):
+                    task_type = manifest_task_type
+
+            if task_type is None:
+                task_type = self._resolve_task_type_from_config(task_name)
+
+            if task_type is None:
+                logger.warning(
+                    "Could not resolve task_type for '%s'; defaulting statistics to binary.",
+                    task_name,
+                )
+                task_type = "binary"
+
+            task_types[task_name] = task_type
+
+        return task_types
+
     def _load_data(self) -> None:
-        """Load data from Parquet files into memory."""
+        """Load data from Parquet files into memory.
+
+        Uses a two-phase approach for efficiency:
+        1. Load raw tensors from cache (or extract from parquet on cache miss)
+        2. Normalize using full-cohort train indices, then filter excluded stays
+
+        The raw tensor cache is shared across all runs for the same dataset,
+        regardless of task, seed, or label_fraction. This reduces cache size
+        from ~140GB (one per run config) to ~0.8GB (one per dataset).
+        """
         logger.info("Loading data from Parquet files...")
 
-        # Load timeseries (dense format with nested lists)
         timeseries_path = self.data_dir / "timeseries.parquet"
-        logger.debug(f"Loading timeseries from {timeseries_path.name}")
-        self.timeseries_df = pl.read_parquet(timeseries_path)
 
-        # Warn for large datasets that may cause memory issues
-        n_stays = len(self.timeseries_df)
-        if n_stays > LARGE_DATASET_WARNING_THRESHOLD:
-            logger.warning(
-                f"Large dataset detected ({n_stays:,} stays). "
-                "Loading entire dataset into memory."
-            )
-
-        # Load static features
+        # Load static features and labels (always needed)
         static_path = self.data_dir / "static.parquet"
         logger.debug(f"Loading static features from {static_path.name}")
         self.static_df = pl.read_parquet(static_path)
 
-        # Load labels
         labels_path = self.data_dir / "labels.parquet"
         logger.debug(f"Loading labels from {labels_path.name}")
         self.labels_df = pl.read_parquet(labels_path)
 
-        # Pre-filter excluded stays if provided (from DataModule)
-        if self._excluded_stay_ids:
-            logger.debug(f"Pre-filtering {len(self._excluded_stay_ids):,} excluded stays")
-            self.timeseries_df = self.timeseries_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            self.static_df = self.static_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            self.labels_df = self.labels_df.filter(
-                ~pl.col("stay_id").is_in(list(self._excluded_stay_ids))
-            )
-            logger.debug(f"Filtered down to {len(self.timeseries_df):,} stays")
-
-        # Create stay_id -> index mapping
-        logger.debug("Building stay_id index mapping")
-        self.stay_ids = self.timeseries_df["stay_id"].to_list()
-        self.stay_id_to_idx = {sid: idx for idx, sid in enumerate(self.stay_ids)}
-        logger.info(f"Loaded {len(self.stay_ids):,} stays")
-
-        # Try to load cached preprocessed tensors first (big speedup on subsequent runs)
-        cached_tensors = load_cached_tensors(
-            self.data_dir,
-            self.normalize,
-            self.seq_length,
-            self.n_features,
-            self.train_indices,
-            self._excluded_stay_ids,
-        )
+        # Phase 1: Get raw tensors (from cache or parquet)
+        cached_tensors = load_cached_tensors(self.data_dir, self.seq_length, self.n_features)
         if cached_tensors is not None:
-            # Use cached tensors (stacked format)
-            self._timeseries_tensor = cached_tensors["timeseries_tensor"]
-            self._mask_tensor = cached_tensors["mask_tensor"]
-            self.feature_means = cached_tensors["feature_means"]
-            self.feature_stds = cached_tensors["feature_stds"]
-            logger.info("Using cached preprocessed tensors")
+            timeseries_tensor = cached_tensors["timeseries_tensor"]
+            masks_tensor = cached_tensors["mask_tensor"]
+            # Load stay_ids from parquet (lightweight, just one column)
+            all_stay_ids = pl.read_parquet(timeseries_path, columns=["stay_id"])[
+                "stay_id"
+            ].to_list()
+            logger.info("Using cached raw tensors")
         else:
-            # Pre-extract raw arrays
-            raw_timeseries = self.timeseries_df["timeseries"].to_list()
-            raw_masks = self.timeseries_df["mask"].to_list()
+            # Extract from parquet and save raw cache
+            logger.debug(f"Loading timeseries from {timeseries_path.name}")
+            timeseries_df = pl.read_parquet(timeseries_path)
 
-            # Try to load existing normalization stats (for reproducibility)
-            cached_stats = load_normalization_stats(
-                self.data_dir, self.train_indices, self.normalize
+            n_stays = len(timeseries_df)
+            if n_stays > LARGE_DATASET_WARNING_THRESHOLD:
+                logger.warning(
+                    f"Large dataset detected ({n_stays:,} stays). "
+                    "Loading entire dataset into memory."
+                )
+
+            all_stay_ids = timeseries_df["stay_id"].to_list()
+
+            timeseries_tensor, masks_tensor = extract_tensors_from_dataframe(
+                timeseries_df, self.seq_length, self.n_features
             )
+            del timeseries_df
 
-            # Pre-compute tensors for all samples (much faster __getitem__)
-            self._precompute_tensors(raw_timeseries, raw_masks, self.train_indices, cached_stats)
-
-            # Save preprocessed tensors to cache for next run
+            # Save raw tensors to cache (shared across all runs for this dataset)
             save_cached_tensors(
                 self.data_dir,
-                self._timeseries_tensor,
-                self._mask_tensor,
-                self.feature_means,
-                self.feature_stds,
-                self.normalize,
+                timeseries_tensor,
+                masks_tensor,
                 self.seq_length,
                 self.n_features,
-                self.train_indices,
-                self._excluded_stay_ids,
             )
 
-        # Free raw DataFrame — only _timeseries_tensor and _mask_tensor needed from here.
-        # get_preprocessing_stages() reloads from parquet on demand.
-        del self.timeseries_df
+        # Phase 2: Normalize before any task-label filtering. This keeps
+        # downstream AKI scaling aligned with SSL pretraining because both use
+        # the same full-cohort train indices for a dataset/seed.
+        cached_stats = load_normalization_stats(
+            self.data_dir,
+            self.normalization_train_indices,
+            self.normalize,
+        )
+        self._precompute_tensors(
+            precomputed_tensors=(timeseries_tensor, masks_tensor),
+            train_indices=self.normalization_train_indices,
+            cached_stats=cached_stats,
+        )
+
+        # Phase 3: Apply stay exclusion filtering (task-specific, e.g. missing labels)
+        self.stay_ids = all_stay_ids
+        if self._excluded_stay_ids:
+            logger.debug(f"Filtering {len(self._excluded_stay_ids):,} excluded stays")
+            keep_indices = [
+                i for i, sid in enumerate(all_stay_ids) if sid not in self._excluded_stay_ids
+            ]
+            idx_tensor = torch.tensor(keep_indices, dtype=torch.long)
+            self._timeseries_tensor = self._timeseries_tensor[idx_tensor]
+            self._mask_tensor = self._mask_tensor[idx_tensor]
+            self.stay_ids = [all_stay_ids[i] for i in keep_indices]
+
+            # Filter static and labels DataFrames to match
+            excluded_list = list(self._excluded_stay_ids)
+            self.static_df = self.static_df.filter(~pl.col("stay_id").is_in(excluded_list))
+            self.labels_df = self.labels_df.filter(~pl.col("stay_id").is_in(excluded_list))
+            logger.debug(f"Filtered down to {len(self.stay_ids):,} stays")
+
+        # Build stay_id -> index mapping
+        logger.debug("Building stay_id index mapping")
+        self.stay_id_to_idx = {sid: idx for idx, sid in enumerate(self.stay_ids)}
+        logger.info(f"Loaded {len(self.stay_ids):,} stays")
 
         # Pre-compute labels and static features
         self._precompute_labels_and_static()
 
     def _precompute_tensors(
         self,
-        raw_timeseries: List[List[List[float]]],
-        raw_masks: List[List[List[bool]]],
+        raw_timeseries: Optional[List[List[List[float]]]] = None,
+        raw_masks: Optional[List[List[List[bool]]]] = None,
         train_indices: Optional[List[int]] = None,
         cached_stats: Optional[Dict[str, Any]] = None,
+        precomputed_tensors: Optional[tuple] = None,
     ) -> None:
         """Pre-compute all tensors at initialization for fast __getitem__.
 
@@ -296,19 +371,26 @@ class ICUDataset(Dataset):
 
         Args:
             raw_timeseries: List of timeseries arrays (n_samples x seq_len x n_features).
+                Not needed if precomputed_tensors is provided.
             raw_masks: List of mask arrays (n_samples x seq_len x n_features).
+                Not needed if precomputed_tensors is provided.
             train_indices: Optional list of indices for training set.
             cached_stats: Optional cached normalization statistics.
+            precomputed_tensors: Optional tuple of (timeseries_tensor, masks_tensor)
+                already extracted. Skips the list-to-tensor conversion step.
         """
-        n_samples = len(raw_timeseries)
+        if precomputed_tensors is not None:
+            timeseries_tensor, masks_tensor = precomputed_tensors
+        else:
+            timeseries_tensor, masks_tensor = convert_raw_to_tensors(
+                raw_timeseries, raw_masks, self.seq_length, self.n_features
+            )
+            del raw_timeseries, raw_masks
+
+        n_samples = timeseries_tensor.shape[0]
         logger.info(f"Preprocessing {n_samples:,} samples...")
 
-        # Step 1: Convert nested lists to tensors
-        timeseries_tensor, masks_tensor = convert_raw_to_tensors(
-            raw_timeseries, raw_masks, self.seq_length, self.n_features
-        )
-
-        # Step 2: Compute normalization statistics
+        # Step 2: Compute preprocessing statistics used for normalization/imputation
         self.feature_means = torch.zeros(self.n_features)
         self.feature_stds = torch.ones(self.n_features)
 
@@ -334,6 +416,18 @@ class ICUDataset(Dataset):
             raise ValueError(
                 "train_indices must be provided when normalize=True to prevent data leakage. "
                 "Pass train_indices from your data splits, or set normalize=False."
+            )
+        else:
+            all_indices = list(range(n_samples))
+            self.feature_means, self.feature_stds = compute_normalization_stats(
+                timeseries_tensor,
+                masks_tensor,
+                all_indices,
+                self.n_features,
+                normalize=False,
+            )
+            logger.debug(
+                "Computed feature means on the loaded dataset for normalize=False imputation"
             )
 
         # Step 3: Normalize then impute missing values
@@ -458,8 +552,10 @@ class ICUDataset(Dataset):
             self._labels_tensor = None
             indices_to_keep = list(range(len(self.stay_ids)))
 
-        # Pre-compute static features using vectorized Polars operations
-        logger.debug("Extracting static features")
+        # Pre-compute safe static features for batch payloads. Future-derived
+        # fields such as los_days stay available on static_df for cohort/fairness
+        # analysis but are intentionally not exposed to model-facing batches.
+        logger.debug("Extracting safe static features")
         self._static_data = []
         for stay_id in self.stay_ids:
             static_row = static_by_stay.get(stay_id, {})
@@ -467,7 +563,6 @@ class ICUDataset(Dataset):
                 {
                     "age": static_row.get("age"),
                     "gender": static_row.get("gender"),
-                    "los_days": static_row.get("los_days"),
                 }
             )
         logger.info(f"Pre-computed {len(self._static_data):,} static feature records")
@@ -521,56 +616,117 @@ class ICUDataset(Dataset):
         """Return list of available task names."""
         return self.task_names
 
-    def get_label_statistics(self) -> Dict[str, Dict[str, Any]]:
-        """Compute label statistics for each task.
+    def get_label_statistics(
+        self, indices: Optional[List[int]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Compute label statistics for each task or subset.
 
-        For single-label tasks, returns {total, positive, negative, prevalence}.
-        For multi-label tasks (detected by prefixed columns like {task_name}_{subtask}),
-        returns per-subtask prevalence and an aggregate mean prevalence.
+        Returns task-type-aware statistics:
+        - binary: {total, positive, negative, prevalence}
+        - regression: {total, mean, std, min, max}
+        - multiclass: {total, n_classes, class_counts}
+        - multilabel: per-subtask prevalence plus aggregate mean prevalence
+
+        Args:
+            indices: Optional dataset indices to restrict the computation to.
+                When None, computes statistics over the full dataset.
 
         Returns:
-            Dict mapping task_name -> {count, positive, negative, prevalence, ...}
+            Dict mapping task_name -> task-specific summary statistics.
         """
+        labels_df = self.labels_df
+        if indices is not None:
+            subset_stay_ids = [self.stay_ids[i] for i in indices]
+            labels_df = labels_df.filter(pl.col("stay_id").is_in(subset_stay_ids))
+
         stats: Dict[str, Dict[str, Any]] = {}
         for task_name in self.task_names:
-            if task_name in self.labels_df.columns:
-                labels = self.labels_df[task_name].drop_nulls()
-                positive = (labels == 1).sum()
-                total = len(labels)
-                stats[task_name] = {
-                    "total": total,
-                    "positive": positive,
-                    "negative": total - positive,
-                    "prevalence": positive / total if total > 0 else 0.0,
-                }
-            else:
-                # Check for multi-label columns (e.g., {task_name}_{subtask}, ...)
-                multilabel_cols = [
-                    c for c in self.labels_df.columns if c.startswith(f"{task_name}_")
-                ]
-                if multilabel_cols:
-                    subtask_stats = {}
-                    prevalences = []
-                    for col in multilabel_cols:
-                        col_labels = self.labels_df[col].drop_nulls()
-                        pos = (col_labels == 1).sum()
-                        tot = len(col_labels)
-                        prev = pos / tot if tot > 0 else 0.0
-                        subtask_stats[col] = {
-                            "total": tot,
-                            "positive": pos,
-                            "negative": tot - pos,
-                            "prevalence": prev,
-                        }
-                        prevalences.append(prev)
-                    stats[task_name] = {
-                        "total": len(self.labels_df),
-                        "n_labels": len(multilabel_cols),
-                        "mean_prevalence": (
-                            sum(prevalences) / len(prevalences) if prevalences else 0.0
-                        ),
-                        "subtasks": subtask_stats,
+            task_type = self.task_types.get(task_name, "binary")
+            multilabel_cols = [c for c in labels_df.columns if c.startswith(f"{task_name}_")]
+
+            if task_type == "multilabel" and multilabel_cols:
+                subtask_stats = {}
+                prevalences = []
+                for col in multilabel_cols:
+                    col_labels = labels_df[col].drop_nulls()
+                    pos = (col_labels == 1).sum()
+                    tot = len(col_labels)
+                    prev = pos / tot if tot > 0 else 0.0
+                    subtask_stats[col] = {
+                        "task_type": "binary",
+                        "total": tot,
+                        "positive": pos,
+                        "negative": tot - pos,
+                        "prevalence": prev,
                     }
+                    prevalences.append(prev)
+                stats[task_name] = {
+                    "task_type": "multilabel",
+                    "total": len(labels_df),
+                    "n_labels": len(multilabel_cols),
+                    "mean_prevalence": (
+                        sum(prevalences) / len(prevalences) if prevalences else 0.0
+                    ),
+                    "subtasks": subtask_stats,
+                }
+            elif task_name in labels_df.columns:
+                labels = labels_df[task_name].drop_nulls()
+                total = len(labels)
+
+                if task_type == "regression":
+                    labels_float = labels.cast(pl.Float64)
+                    std = labels_float.std()
+                    stats[task_name] = {
+                        "task_type": "regression",
+                        "total": total,
+                        "mean": float(labels_float.mean()) if total > 0 else 0.0,
+                        "std": float(std) if std is not None else 0.0,
+                        "min": float(labels_float.min()) if total > 0 else 0.0,
+                        "max": float(labels_float.max()) if total > 0 else 0.0,
+                    }
+                elif task_type == "multiclass":
+                    class_counts = {
+                        str(label): count
+                        for label, count in sorted(Counter(labels.to_list()).items())
+                    }
+                    stats[task_name] = {
+                        "task_type": "multiclass",
+                        "total": total,
+                        "n_classes": len(class_counts),
+                        "class_counts": class_counts,
+                    }
+                else:
+                    positive = (labels == 1).sum()
+                    stats[task_name] = {
+                        "task_type": "binary",
+                        "total": total,
+                        "positive": positive,
+                        "negative": total - positive,
+                        "prevalence": positive / total if total > 0 else 0.0,
+                    }
+            elif multilabel_cols:
+                subtask_stats = {}
+                prevalences = []
+                for col in multilabel_cols:
+                    col_labels = labels_df[col].drop_nulls()
+                    pos = (col_labels == 1).sum()
+                    tot = len(col_labels)
+                    prev = pos / tot if tot > 0 else 0.0
+                    subtask_stats[col] = {
+                        "task_type": "binary",
+                        "total": tot,
+                        "positive": pos,
+                        "negative": tot - pos,
+                        "prevalence": prev,
+                    }
+                    prevalences.append(prev)
+                stats[task_name] = {
+                    "task_type": "multilabel",
+                    "total": len(labels_df),
+                    "n_labels": len(multilabel_cols),
+                    "mean_prevalence": sum(prevalences) / len(prevalences) if prevalences else 0.0,
+                    "subtasks": subtask_stats,
+                }
         return stats
 
     def get_preprocessing_stages(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:
@@ -592,7 +748,7 @@ class ICUDataset(Dataset):
                 - 'mask': The observation mask (same for all stages)
 
         Example:
-            >>> dataset = ICUDataset("data/processed/mimic-iv-demo")
+            >>> dataset = ICUDataset("data/processed/miiv")
             >>> stages = dataset.get_preprocessing_stages(0)
             >>> stages['grid']['timeseries'].shape
             torch.Size([48, 9])

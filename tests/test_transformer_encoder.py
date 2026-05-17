@@ -13,6 +13,7 @@ Tests cover:
 import pytest
 import torch
 import torch.nn as nn
+
 from slices.models.common import PositionalEncoding
 from slices.models.encoders import TransformerConfig, TransformerEncoder
 from slices.models.encoders.transformer import TransformerEncoderLayer
@@ -637,7 +638,7 @@ class TestTransformerIntegration:
 
     def test_encoder_with_realistic_icu_data_shape(self):
         """Test encoder with realistic ICU data dimensions."""
-        # Typical ICU dataset: 35 features, 48-hour window, batch of 32
+        # Benchmark-shaped ICU tensor: 35 features, 24-hour window, batch of 32
         config = TransformerConfig(
             d_input=35,
             d_model=128,
@@ -651,7 +652,7 @@ class TestTransformerIntegration:
         encoder = TransformerEncoder(config)
 
         batch_size = 32
-        seq_length = 48
+        seq_length = 24
         n_features = 35
 
         x = torch.randn(batch_size, seq_length, n_features)
@@ -661,7 +662,7 @@ class TestTransformerIntegration:
         # Some sequences have variable lengths
         for i in range(batch_size):
             if i % 4 == 0:  # 25% of sequences
-                length = torch.randint(24, seq_length, (1,)).item()
+                length = torch.randint(max(1, seq_length // 2), seq_length, (1,)).item()
                 padding_mask[i, length:] = False
 
         out = encoder(x, mask=obs_mask, padding_mask=padding_mask)
@@ -891,10 +892,11 @@ class TestTransformerEncoderObsAware:
 
         assert tokens.shape == (B, T, 32)
         assert padding_mask.shape == (B, T)
-        assert padding_mask.all()  # All True for fixed T
+        assert torch.equal(padding_mask, obs_mask.any(dim=-1))
         assert "timestep_idx" in token_info
         assert "values" in token_info
         assert "obs_mask" in token_info
+        assert "valid_timestep_mask" in token_info
         assert token_info["timestep_idx"].shape == (B, T)
 
     def test_encode_shapes(self, encoder):
@@ -929,6 +931,19 @@ class TestTransformerEncoderObsAware:
 
         # Different masks should produce different outputs (obs_proj sees mask)
         assert not torch.allclose(out_full, out_sparse, atol=1e-5)
+
+    def test_all_empty_obs_aware_row_is_finite(self, encoder):
+        """Fully unobserved rows should not create all-masked attention NaNs."""
+        B, T, D = 2, 8, 10
+        x = torch.zeros(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[1, 0, 0] = True
+        encoder.eval()
+
+        with torch.no_grad():
+            out = encoder(x, mask=obs_mask, padding_mask=obs_mask.any(dim=-1))
+
+        assert torch.isfinite(out).all()
 
     def test_backward_compatible(self, encoder):
         """Verify forward(x) without mask still uses input_proj."""

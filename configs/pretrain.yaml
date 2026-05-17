@@ -22,10 +22,9 @@ project_name: slices
 # Dataset identifier — drives data paths via ricu.yaml interpolation
 dataset: miiv  # miiv | eicu | combined
 
-# Experiment sprint (for W&B filtering, e.g. sprint=1)
-sprint: null
-
-# Revision tracking (for rerunning sprints with changed settings)
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
 revision: null
 rerun_reason: null
 
@@ -36,6 +35,9 @@ seed: 42
 output_dir: ${hydra:runtime.output_dir}
 checkpoint_dir: ${output_dir}/checkpoints
 
+# Resume from an interrupted trainer checkpoint.
+ckpt_path: null
+
 # Data configuration overrides
 # Base settings inherited from configs/data/ricu.yaml
 data:
@@ -45,15 +47,15 @@ data:
   # Sliding window configuration for longer sequences
   # Enable after re-extracting with longer seq_length_hours (e.g., 168h)
   enable_sliding_windows: false  # Set true after re-extraction
-  window_size: 48                # Window size in hours (48h = typical ICU prediction horizon)
-  window_stride: 24              # Stride for overlapping windows (50% overlap)
+  window_size: 24                # Match the benchmark observation window when enabled
+  window_stride: 12              # 50% overlap for 24h windows
 
 # Encoder overrides for SSL pretraining
 # Architecture (d_model, n_layers, etc.) inherited from configs/model/transformer.yaml
 encoder:
   pooling: none  # Required for SSL - need per-token outputs (vs 'mean' for tasks)
 
-# Training configuration (same budget across thesis paradigms for fair comparison)
+# Training configuration (same budget across paradigms for fair comparison)
 training:
   max_epochs: 100
   batch_size: 256
@@ -94,7 +96,7 @@ logging:
   use_wandb: true
   wandb_project: ${project_name}
   wandb_entity: null  # Set to your W&B username/team
-  run_name: s${sprint}_pretrain_${dataset}_${ssl.name}_seed${seed}
+  run_name: ${experiment_class}_pretrain_${dataset}_${ssl.name}_seed${seed}
   wandb_group: pretrain_${dataset}_${ssl.name}
   wandb_tags:
     - "phase:pretrain"

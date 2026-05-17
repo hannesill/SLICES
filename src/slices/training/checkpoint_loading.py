@@ -14,13 +14,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from slices.models.encoders import (
-    EncoderWithMissingToken,
-    ObservationTransformerEncoder,
-    SMARTEncoder,
-    TransformerEncoder,
-    build_encoder,
-)
+from slices.models.encoders.factory import build_encoder
+from slices.models.encoders.wrapper import EncoderWithMissingToken
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +32,10 @@ def infer_encoder_type(state_dict: Dict[str, Any]) -> Optional[str]:
         Inferred encoder name or None if unknown.
     """
     keys = set(state_dict.keys())
+
+    # GRU-D encoder has gru_cell and decay parameters
+    if any("gru_cell" in k for k in keys) and any("W_gamma_x" in k for k in keys):
+        return "gru_d"
 
     # SMART encoder has distinctive keys
     if any("embedder" in k or "blocks" in k or "seq_att" in k for k in keys):
@@ -72,19 +71,12 @@ def wrap_encoder_with_missing_token(
     Returns:
         The encoder, possibly wrapped with EncoderWithMissingToken.
     """
-    # Skip for encoders that handle missingness intrinsically
-    if isinstance(encoder, (ObservationTransformerEncoder, SMARTEncoder)):
+    handles_missingness = getattr(encoder, "handles_missingness_intrinsically", None)
+    if callable(handles_missingness) and handles_missingness():
         logger.info(
             "Skipping EncoderWithMissingToken wrapper for %s "
             "(handles missingness intrinsically)",
             type(encoder).__name__,
-        )
-        return encoder
-
-    if isinstance(encoder, TransformerEncoder) and getattr(encoder.config, "obs_aware", False):
-        logger.info(
-            "Skipping EncoderWithMissingToken wrapper for obs_aware "
-            "TransformerEncoder (forward() handles mask via obs_proj)"
         )
         return encoder
 
@@ -108,6 +100,34 @@ def wrap_encoder_with_missing_token(
         logger.info("Wrapped encoder with randomly initialized missing token")
 
     return encoder
+
+
+def _apply_finetune_pooling_override(
+    encoder_config: dict,
+    config: DictConfig,
+) -> dict:
+    """Return encoder config with a safe downstream pooling override applied."""
+    encoder_config = dict(encoder_config)
+    finetune_pooling = config.encoder.get("pooling", "mean")
+    ckpt_pooling = encoder_config.get("pooling", "none")
+    if ckpt_pooling == finetune_pooling:
+        return encoder_config
+
+    if "cls" in {ckpt_pooling, finetune_pooling}:
+        raise RuntimeError(
+            "Cannot override encoder pooling between checkpoint "
+            f"pooling='{ckpt_pooling}' and finetune pooling='{finetune_pooling}'. "
+            "CLS pooling adds learned parameters, so use a checkpoint trained with "
+            "pooling='cls' or choose a non-CLS downstream pooling mode."
+        )
+
+    encoder_config["pooling"] = finetune_pooling
+    logger.info(
+        "Overriding pooling: %s -> %s (finetuning requires aggregated output)",
+        ckpt_pooling,
+        finetune_pooling,
+    )
+    return encoder_config
 
 
 def load_encoder_weights(
@@ -151,19 +171,7 @@ def load_encoder_weights(
         if version >= 3 and "encoder_config" in checkpoint:
             encoder_config = dict(checkpoint["encoder_config"])
             encoder_name = encoder_config.pop("name")
-            # Override pooling with finetuning config's value.
-            # SSL pretraining uses pooling='none' but finetuning needs
-            # pooling='mean' or 'query' to get a single representation.
-            # Pooling doesn't affect learned weights, just output aggregation.
-            finetune_pooling = config.encoder.get("pooling", "mean")
-            ckpt_pooling = encoder_config.get("pooling", "none")
-            if ckpt_pooling != finetune_pooling:
-                encoder_config["pooling"] = finetune_pooling
-                logger.info(
-                    "Overriding pooling: %s -> %s (finetuning requires aggregated output)",
-                    ckpt_pooling,
-                    finetune_pooling,
-                )
+            encoder_config = _apply_finetune_pooling_override(encoder_config, config)
             encoder = build_encoder(encoder_name, encoder_config)
             logger.info(
                 "Rebuilt encoder from checkpoint config: %s (d_model=%s)",
@@ -276,18 +284,10 @@ def load_from_pretrain_checkpoint(
             # This handles both encoder name mismatches (e.g., transformer vs smart)
             # and parameter mismatches (e.g., d_model=64 vs d_model=32).
             encoder_config_dict = {k: v for k, v in ckpt_encoder_cfg.items() if k != "name"}
-            # Override pooling with finetuning config's value.
-            # SSL pretraining uses pooling='none' but finetuning needs
-            # pooling='mean' or 'query' to get a single representation.
-            finetune_pooling = config.encoder.get("pooling", "mean")
-            ckpt_pooling = encoder_config_dict.get("pooling", "none")
-            if ckpt_pooling != finetune_pooling:
-                encoder_config_dict["pooling"] = finetune_pooling
-                logger.info(
-                    "Overriding pooling: %s -> %s (finetuning requires aggregated output)",
-                    ckpt_pooling,
-                    finetune_pooling,
-                )
+            encoder_config_dict = _apply_finetune_pooling_override(
+                encoder_config_dict,
+                config,
+            )
             encoder = build_encoder(ckpt_encoder_name, encoder_config_dict)
             logger.info(
                 "Rebuilt encoder from checkpoint config: %s (d_model=%s)",

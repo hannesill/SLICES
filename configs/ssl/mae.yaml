@@ -1,10 +1,10 @@
 # @package ssl
 # MAE (Masked Autoencoder) SSL Configuration
 #
-# Observation-level tokenization: each token = one observed (timestep, feature, value).
-# Encoder processes only visible tokens (25%). Decoder reconstructs masked tokens.
-# No MISSING_TOKEN needed -- missingness is handled intrinsically by only
-# tokenizing observed values.
+# Timestep-level tokenization: each token = one hourly timestep containing all
+# features plus the observation mask via the encoder's obs-aware projection.
+# The encoder processes only visible timesteps; the decoder reconstructs masked
+# timestep features from the remaining context.
 
 name: mae
 

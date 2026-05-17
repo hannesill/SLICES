@@ -7,6 +7,7 @@ import numpy as np
 import polars as pl
 import pytest
 import yaml
+
 from slices.data.extractors.base import ExtractorConfig
 from slices.data.extractors.ricu import RicuExtractor
 
@@ -27,6 +28,7 @@ def ricu_output_dir(tmp_path: Path) -> Path:
         "feature_names": ["hr", "sbp", "crea"],
         "n_features": 3,
         "seq_length_hours": 6,
+        "raw_export_horizon_hours": 6,
         "n_stays": 3,
         "ricu_version": "0.7.0",
     }
@@ -110,6 +112,88 @@ def ricu_output_dir(tmp_path: Path) -> Path:
     return ricu_dir
 
 
+def _create_aki_benchmark_ricu_output(tmp_path: Path) -> Path:
+    """Create mock RICU output for the 24h-input / 48h-raw AKI benchmark."""
+    ricu_dir = tmp_path / "ricu_output_aki"
+    ricu_dir.mkdir()
+
+    metadata = {
+        "dataset": "miiv",
+        "feature_names": ["crea"],
+        "n_features": 1,
+        "seq_length_hours": 48,
+        "raw_export_horizon_hours": 48,
+        "n_stays": 3,
+        "ricu_version": "0.7.0",
+    }
+    with open(ricu_dir / "ricu_metadata.yaml", "w") as f:
+        yaml.dump(metadata, f)
+
+    stays = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "patient_id": [10, 20, 30],
+            "hadm_id": [1000, 2000, 3000],
+            "intime": [
+                datetime(2020, 1, 1, 8, 0),
+                datetime(2020, 1, 2, 8, 0),
+                datetime(2020, 1, 3, 8, 0),
+            ],
+            "outtime": [
+                datetime(2020, 1, 4, 12, 0),
+                datetime(2020, 1, 5, 12, 0),
+                datetime(2020, 1, 6, 12, 0),
+            ],
+            "los_days": [3.2, 3.2, 3.2],
+            "age": [65.0, 70.0, 58.0],
+            "gender": ["M", "F", "M"],
+            "race": ["WHITE", "BLACK", "ASIAN"],
+            "admission_type": ["EMERGENCY", "EMERGENCY", "EMERGENCY"],
+            "insurance": ["Medicare", "Private", "Medicaid"],
+            "first_careunit": ["MICU", "MICU", "MICU"],
+            "height": [175.0, 165.0, 180.0],
+            "weight": [80.0, 68.0, 92.0],
+        }
+    )
+    stays.write_parquet(ricu_dir / "ricu_stays.parquet")
+
+    timeseries = pl.DataFrame(
+        {
+            "stay_id": [100, 100, 100, 100, 200, 200, 200, 200, 300, 300, 300],
+            "hour": [0, 12, 23, 30, 0, 12, 23, 30, 0, 12, 23],
+            "crea": [1.0, 0.9, 1.0, 1.6, 1.0, 1.1, 1.0, 1.1, 0.8, 0.9, 0.85],
+            "crea_mask": [True] * 11,
+        }
+    )
+    timeseries.write_parquet(ricu_dir / "ricu_timeseries.parquet")
+
+    mortality = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "date_of_death": [None, None, None],
+            "hospital_expire_flag": [0, 0, 0],
+            "dischtime": [
+                datetime(2020, 1, 7, 8, 0),
+                datetime(2020, 1, 8, 8, 0),
+                datetime(2020, 1, 9, 8, 0),
+            ],
+            "discharge_location": ["HOME", "HOME", "HOME"],
+        }
+    )
+    mortality.write_parquet(ricu_dir / "ricu_mortality.parquet")
+
+    diagnoses = pl.DataFrame(
+        {
+            "stay_id": [100, 200, 300],
+            "icd_code": ["N179", "I10", "E119"],
+            "icd_version": [10, 10, 10],
+        }
+    )
+    diagnoses.write_parquet(ricu_dir / "ricu_diagnoses.parquet")
+
+    return ricu_dir
+
+
 @pytest.fixture
 def ricu_extractor(ricu_output_dir: Path, tmp_path: Path) -> RicuExtractor:
     """Create a RicuExtractor instance with mock data."""
@@ -135,6 +219,8 @@ class TestRicuExtractorInit:
         config = ExtractorConfig(
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            tasks=[],
         )
         extractor = RicuExtractor(config)
 
@@ -163,6 +249,147 @@ class TestRicuExtractorInit:
     def test_no_duckdb_connection(self, ricu_extractor: RicuExtractor) -> None:
         """Verify that RicuExtractor does not have a DuckDB connection."""
         assert not hasattr(ricu_extractor, "conn")
+
+    def test_init_raises_when_python_horizon_exceeds_ricu_export(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=8,
+        )
+
+        with pytest.raises(ValueError, match="upstream RICU export only contains 6 hours"):
+            RicuExtractor(config)
+
+    def test_init_raises_when_task_requires_longer_raw_export_horizon(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 4,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {"creatinine_col": "crea"},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Active task labels require a longer upstream raw timeseries horizon",
+        ):
+            RicuExtractor(config)
+
+    def test_init_accepts_explicit_raw_export_horizon_longer_than_input_window(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        with open(ricu_output_dir / "ricu_metadata.yaml") as f:
+            metadata = yaml.safe_load(f)
+        metadata["raw_export_horizon_hours"] = 10
+        with open(ricu_output_dir / "ricu_metadata.yaml", "w") as f:
+            yaml.dump(metadata, f)
+
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 4,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {"creatinine_col": "crea"},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        extractor = RicuExtractor(config)
+        assert extractor._get_raw_export_horizon_hours() == 10
+
+    def test_existing_extraction_is_invalidated_when_upstream_inputs_change(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        RicuExtractor(config).run()
+
+        resumed = RicuExtractor(config)
+        assert resumed._check_existing_extraction() is not None
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path)
+        updated = pl.concat(
+            [
+                timeseries,
+                pl.DataFrame(
+                    {
+                        "stay_id": [999],
+                        "hour": [0],
+                        "hr": [88.0],
+                        "sbp": [120.0],
+                        "crea": [1.2],
+                        "hr_mask": [True],
+                        "sbp_mask": [True],
+                        "crea_mask": [True],
+                    }
+                ),
+            ],
+            how="vertical_relaxed",
+        )
+        updated.write_parquet(timeseries_path)
+
+        after_change = RicuExtractor(config)
+        assert after_change._check_existing_extraction() is None
+
+    def test_upstream_signature_includes_feature_blocklist(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(tmp_path / "processed"),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        signature = RicuExtractor(config)._get_upstream_source_signature()
+
+        assert "feature_blocklist" in signature
+        assert "norepi_dur" in signature["feature_blocklist"]
+        assert "qsofa" in signature["feature_blocklist"]
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +471,8 @@ class TestExtractTimeseries:
         config = ExtractorConfig(
             parquet_root=str(ricu_output_dir),
             output_dir=str(tmp_path / "processed_partitioned"),
+            seq_length_hours=6,
+            tasks=[],
         )
         extractor = RicuExtractor(config)
         ts = extractor.extract_timeseries([100, 200, 300])
@@ -288,6 +517,16 @@ class TestExtractDataSource:
         mort = ricu_extractor.extract_data_source("mortality_info", [200])
         assert len(mort) == 1
         assert mort["stay_id"][0] == 200
+
+    def test_legacy_mortality_datetime_is_migrated_conservatively(
+        self, ricu_extractor: RicuExtractor
+    ) -> None:
+        mort = ricu_extractor.extract_data_source("mortality_info", [300])
+        row = mort.filter(pl.col("stay_id") == 300)
+
+        assert row["death_time_precision"][0] == "date"
+        assert row["death_time"][0] is None
+        assert row["death_date"][0].isoformat() == "2020-01-08"
 
 
 class TestExtractRawEvents:
@@ -420,9 +659,72 @@ class TestRicuExtractorRun:
         assert meta["dataset"] == "miiv"
         assert meta["n_features"] == 3
         assert meta["seq_length_hours"] == 6
+        assert meta["input_seq_length_hours"] == 6
+        assert meta["raw_export_horizon_hours"] == 6
+        assert meta["required_raw_export_horizon_hours"] == 6
         assert meta["n_stays"] == 3
         assert meta["feature_names"] == ["hr", "sbp", "crea"]
+        assert meta["label_quality_stats"] == {}
         assert "ricu_metadata" in meta
+        assert "upstream_source_signature" in meta
+        assert len(meta["upstream_source_signature"]["files"]) >= 4
+
+    def test_run_excludes_derived_blocklisted_features(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Derived RICU concepts should not enter processed model inputs."""
+        metadata_path = ricu_output_dir / "ricu_metadata.yaml"
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+        metadata["feature_names"] = [
+            "hr",
+            "norepi_dur",
+            "norepi60",
+            "sofa",
+            "pafi",
+            "qsofa",
+            "sbp",
+            "crea",
+        ]
+        metadata["n_features"] = len(metadata["feature_names"])
+        with open(metadata_path, "w") as f:
+            yaml.safe_dump(metadata, f)
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path).with_columns(
+            pl.lit(30.0).alias("norepi_dur"),
+            pl.lit(0.2).alias("norepi60"),
+            pl.lit(4.0).alias("sofa"),
+            pl.lit(250.0).alias("pafi"),
+            pl.lit(2.0).alias("qsofa"),
+            pl.lit(True).alias("norepi_dur_mask"),
+            pl.lit(True).alias("norepi60_mask"),
+            pl.lit(True).alias("sofa_mask"),
+            pl.lit(True).alias("pafi_mask"),
+            pl.lit(True).alias("qsofa_mask"),
+        )
+        timeseries.write_parquet(timeseries_path)
+
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+        RicuExtractor(config).run()
+
+        with open(output_dir / "metadata.yaml") as f:
+            meta = yaml.safe_load(f)
+        assert meta["feature_names"] == ["hr", "sbp", "crea"]
+        assert meta["n_features"] == 3
+
+        ts = pl.read_parquet(output_dir / "timeseries.parquet")
+        first_ts = ts["timeseries"].to_list()[0]
+        first_mask = ts["mask"].to_list()[0]
+        assert len(first_ts[0]) == 3
+        assert len(first_mask[0]) == 3
 
     def test_run_filters_short_stays(self, ricu_output_dir: Path, tmp_path: Path) -> None:
         output_dir = tmp_path / "processed"
@@ -501,6 +803,70 @@ class TestRicuExtractorRun:
         assert "mortality_hospital" in labels.columns
         assert len(labels) == 3
 
+    def test_run_aki_24h_input_with_48h_raw_export(self, tmp_path: Path) -> None:
+        """AKI extraction should use 48h raw creatinine while saving 24h model inputs."""
+        ricu_output_dir = _create_aki_benchmark_ricu_output(tmp_path)
+        output_dir = tmp_path / "processed_aki"
+        tasks_dir = tmp_path / "tasks_aki"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "aki_kdigo",
+            "task_type": "binary",
+            "observation_window_hours": 24,
+            "prediction_window_hours": 24,
+            "gap_hours": 0,
+            "label_sources": ["stays", "timeseries"],
+            "label_params": {
+                "creatinine_col": "crea",
+                "baseline_window_hours": 24,
+                "absolute_rise_threshold": 0.3,
+                "relative_rise_threshold": 1.5,
+                "relative_window_hours": 168,
+            },
+            "quality_checks": {"max_missing_percentage": 28.0},
+            "primary_metric": "auprc",
+        }
+        with open(tasks_dir / "aki_kdigo.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=24,
+            min_stay_hours=24,
+            tasks=["aki_kdigo"],
+            tasks_dir=str(tasks_dir),
+        )
+        RicuExtractor(config).run()
+
+        labels = pl.read_parquet(output_dir / "labels.parquet")
+        labels_dict = dict(zip(labels["stay_id"], labels["aki_kdigo"]))
+        assert labels_dict[100] == 1
+        assert labels_dict[200] == 0
+        assert labels_dict[300] is None
+
+        dense_timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
+        stay100_ts = dense_timeseries.filter(pl.col("stay_id") == 100)["timeseries"].to_list()[0]
+        assert len(stay100_ts) == 24  # model input remains 24h
+
+        with open(output_dir / "metadata.yaml") as f:
+            meta = yaml.safe_load(f)
+
+        assert meta["input_seq_length_hours"] == 24
+        assert meta["raw_export_horizon_hours"] == 48
+        assert meta["required_raw_export_horizon_hours"] == 48
+
+        quality_stats = meta["label_quality_stats"]["aki_kdigo"]
+        assert quality_stats["total_stays"] == 3
+        assert quality_stats["positive_labels"] == 1
+        assert quality_stats["negative_labels"] == 1
+        assert quality_stats["null_labels"] == 1
+        assert quality_stats["null_reason_counts"] == {
+            "no_creatinine_or_baseline": 0,
+            "no_post_obs_creatinine": 1,
+        }
+
     def test_run_resume_skips_existing(self, ricu_output_dir: Path, tmp_path: Path) -> None:
         """Test that a second run() resumes without duplicating stays."""
         output_dir = tmp_path / "processed"
@@ -523,3 +889,220 @@ class TestRicuExtractorRun:
 
         # Should have same number of stays (no duplicates)
         assert len(static_second) == n_first
+
+    def test_run_rebuilds_when_task_config_changes(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Task-config drift should invalidate resume instead of silently skipping work."""
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_24h",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": 24,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        task_path = tasks_dir / "mortality_24h.yaml"
+        with open(task_path, "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_24h"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            initial_metadata = yaml.safe_load(f)
+
+        task_config["gap_hours"] = 6
+        with open(task_path, "w") as f:
+            yaml.dump(task_config, f)
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        assert (
+            updated_metadata["label_manifest"]["mortality_24h"]["config_hash"]
+            != initial_metadata["label_manifest"]["mortality_24h"]["config_hash"]
+        )
+
+    def test_run_rebuilds_when_builder_version_changes(
+        self, ricu_output_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Builder-version drift should invalidate resume instead of merging stale labels."""
+        from slices.data.labels.mortality import MortalityLabelBuilder
+
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_hospital",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": None,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_hospital"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            initial_metadata = yaml.safe_load(f)
+
+        initial_version = MortalityLabelBuilder.SEMANTIC_VERSION
+        monkeypatch.setattr(MortalityLabelBuilder, "SEMANTIC_VERSION", "9.9.9")
+
+        RicuExtractor(config).run()
+        with open(output_dir / "metadata.yaml") as f:
+            updated_metadata = yaml.safe_load(f)
+
+        assert (
+            initial_metadata["label_manifest"]["mortality_hospital"]["builder_version"]
+            == initial_version
+        )
+        assert (
+            updated_metadata["label_manifest"]["mortality_hospital"]["builder_version"] == "9.9.9"
+        )
+
+    def test_run_excludes_invalid_los_before_validation(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Exclude invalid LOS rows before validating the benchmark cohort."""
+        output_dir = tmp_path / "processed"
+
+        stays_path = ricu_output_dir / "ricu_stays.parquet"
+        stays = pl.read_parquet(stays_path).with_columns(
+            pl.when(pl.col("stay_id") == 200)
+            .then(None)
+            .otherwise(pl.col("los_days"))
+            .alias("los_days")
+        )
+        stays.write_parquet(stays_path)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        RicuExtractor(config).run()
+
+        static = pl.read_parquet(output_dir / "static.parquet")
+        assert static["stay_id"].to_list() == [100, 300]
+
+    def test_run_fails_closed_on_missing_timeseries_coverage(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Missing timeseries rows for an extracted stay should abort the run."""
+        output_dir = tmp_path / "processed"
+
+        timeseries_path = ricu_output_dir / "ricu_timeseries.parquet"
+        timeseries = pl.read_parquet(timeseries_path).filter(pl.col("stay_id") != 300)
+        timeseries.write_parquet(timeseries_path)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        with pytest.raises(ValueError, match="no timeseries data"):
+            RicuExtractor(config).run()
+
+    def test_run_fails_closed_on_missing_labels(
+        self, ricu_output_dir: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Missing label rows should abort extraction instead of producing a degraded dataset."""
+        output_dir = tmp_path / "processed"
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        task_config = {
+            "task_name": "mortality_hospital",
+            "task_type": "binary",
+            "observation_window_hours": 6,
+            "prediction_window_hours": None,
+            "gap_hours": 0,
+            "label_sources": ["stays", "mortality_info"],
+            "label_params": {},
+        }
+        with open(tasks_dir / "mortality_hospital.yaml", "w") as f:
+            yaml.dump(task_config, f)
+
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=["mortality_hospital"],
+            tasks_dir=str(tasks_dir),
+        )
+
+        extractor = RicuExtractor(config)
+        original_extract_labels = extractor.extract_labels
+
+        def drop_one_label(stay_ids, task_configs):
+            labels = original_extract_labels(stay_ids, task_configs)
+            return labels.filter(pl.col("stay_id") != 300)
+
+        monkeypatch.setattr(extractor, "extract_labels", drop_one_label)
+
+        with pytest.raises(ValueError, match="no labels"):
+            extractor.run()
+
+    def test_run_rebuilds_when_upstream_timeseries_changes(
+        self, ricu_output_dir: Path, tmp_path: Path
+    ) -> None:
+        """Changing upstream parquet inputs should invalidate resume and rebuild outputs."""
+        output_dir = tmp_path / "processed"
+        config = ExtractorConfig(
+            parquet_root=str(ricu_output_dir),
+            output_dir=str(output_dir),
+            seq_length_hours=6,
+            min_stay_hours=0,
+            tasks=[],
+        )
+
+        RicuExtractor(config).run()
+
+        ts_path = ricu_output_dir / "ricu_timeseries.parquet"
+        updated = pl.read_parquet(ts_path).with_columns(
+            pl.when((pl.col("stay_id") == 100) & (pl.col("hour") == 0))
+            .then(pl.lit(999.0))
+            .otherwise(pl.col("hr"))
+            .alias("hr")
+        )
+        updated.write_parquet(ts_path)
+
+        RicuExtractor(config).run()
+
+        timeseries = pl.read_parquet(output_dir / "timeseries.parquet")
+        stay100 = timeseries.filter(pl.col("stay_id") == 100)
+        assert stay100["timeseries"].to_list()[0][0][0] == 999.0

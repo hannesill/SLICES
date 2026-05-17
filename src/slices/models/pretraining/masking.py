@@ -86,6 +86,7 @@ def create_timestep_mask(
     n_timesteps: int,
     mask_ratio: float,
     device: torch.device,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Create random mask at timestep level.
 
@@ -94,22 +95,113 @@ def create_timestep_mask(
         n_timesteps: Number of timesteps T.
         mask_ratio: Fraction of timesteps to mask.
         device: Device.
+        valid_timestep_mask: Optional (B, T) bool mask marking timesteps with
+            at least one observed variable. When provided, fully unobserved
+            timesteps are always treated as visible/excluded from SSL masking.
 
     Returns:
         ssl_mask: (B, T) bool mask, True = visible, False = masked.
     """
-    rand_vals = torch.rand(batch_size, n_timesteps, device=device)
-    ssl_mask = rand_vals >= mask_ratio  # True = visible
+    if valid_timestep_mask is None:
+        valid_timestep_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    else:
+        valid_timestep_mask = valid_timestep_mask.to(device=device, dtype=torch.bool)
 
-    # Ensure at least 1 visible timestep per sample
-    n_visible = ssl_mask.sum(dim=1)  # (B,)
-    needs_fix = n_visible == 0
-    if needs_fix.any():
-        for b in range(batch_size):
-            if needs_fix[b]:
-                ssl_mask[b, 0] = True
+    ssl_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    for b in range(batch_size):
+        valid_idx = valid_timestep_mask[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+        n_masked = _masked_timestep_budget(n_valid, mask_ratio)
+        if n_masked == 0:
+            continue
+
+        masked_ordinals = torch.randperm(n_valid, device=device)[:n_masked]
+        ssl_mask[b, valid_idx[masked_ordinals]] = False
 
     return ssl_mask
+
+
+def create_complementary_timestep_masks(
+    primary_mask: torch.Tensor,
+    valid_timestep_mask: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create paired timestep masks without allowing an empty eligible view.
+
+    The secondary mask is complementary over eligible timesteps whenever
+    possible. Sparse samples need a fallback:
+
+    - 0 eligible timesteps: both masks remain effectively empty
+    - 1 eligible timestep: expose it in both views
+    - >=2 eligible timesteps: keep views complementary, but if the primary view
+      happened to keep every eligible timestep visible, move one timestep into
+      the secondary view so both remain encodable
+    """
+    primary = primary_mask.to(dtype=torch.bool).clone()
+    valid = valid_timestep_mask.to(device=primary.device, dtype=torch.bool)
+    secondary = (~primary) | (~valid)
+
+    batch_size = primary.shape[0]
+    for b in range(batch_size):
+        valid_idx = valid[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+
+        if n_valid == 0:
+            secondary[b] = True
+            continue
+
+        if n_valid == 1:
+            idx = valid_idx[0]
+            primary[b, idx] = True
+            secondary[b, idx] = True
+            continue
+
+        secondary_visible = (secondary[b] & valid[b]).nonzero(as_tuple=True)[0]
+        if secondary_visible.numel() == 0:
+            primary_visible = (primary[b] & valid[b]).nonzero(as_tuple=True)[0]
+            idx = primary_visible[0]
+            primary[b, idx] = False
+            secondary[b, idx] = True
+
+    return primary, secondary
+
+
+def _masked_timestep_budget(n_valid: int, mask_ratio: float) -> int:
+    """Return the integer masked-token budget while keeping one valid token visible."""
+    if n_valid <= 1 or mask_ratio <= 0:
+        return 0
+
+    requested = int(n_valid * mask_ratio + 0.5)
+    return min(max(requested, 1), n_valid - 1)
+
+
+def _random_positive_composition(total: int, parts: int) -> torch.Tensor:
+    """Split ``total`` into ``parts`` positive integer pieces."""
+    if parts <= 1:
+        return torch.tensor([total], dtype=torch.long)
+    if total == parts:
+        return torch.ones(parts, dtype=torch.long)
+
+    cuts = torch.randperm(total - 1)[: parts - 1] + 1
+    cuts = cuts.sort().values
+    boundaries = torch.cat(
+        [
+            torch.zeros(1, dtype=torch.long),
+            cuts.to(dtype=torch.long),
+            torch.tensor([total], dtype=torch.long),
+        ]
+    )
+    return boundaries[1:] - boundaries[:-1]
+
+
+def _random_nonnegative_composition(total: int, parts: int) -> torch.Tensor:
+    """Split ``total`` into ``parts`` non-negative integer pieces."""
+    if parts <= 0:
+        return torch.empty(0, dtype=torch.long)
+    if total <= 0:
+        return torch.zeros(parts, dtype=torch.long)
+
+    assignments = torch.randint(parts, (total,))
+    return torch.bincount(assignments, minlength=parts).to(dtype=torch.long)
 
 
 def create_block_timestep_mask(
@@ -118,17 +210,14 @@ def create_block_timestep_mask(
     mask_ratio: float,
     device: torch.device,
     n_blocks: int = 3,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Create contiguous block mask at timestep level.
 
-    Masks n_blocks contiguous segments that together cover approximately
-    mask_ratio of the sequence. Forces the model to predict from distant
-    context rather than interpolate from adjacent visible timesteps.
-
-    Strategy: divides the sequence into n_blocks equal zones, then places one
-    randomly-sized masked block within each zone. Block sizes are drawn from a
-    Dirichlet-like split of the total masked budget. Fully vectorized — no
-    Python loops over batch elements.
+    Masks up to ``n_blocks`` non-overlapping contiguous spans that hit the
+    requested masked-token budget after taking the union over valid timesteps.
+    Fully unobserved timesteps are never counted in the SSL budget and are
+    marked visible so losses ignore them.
 
     Args:
         batch_size: Batch size B.
@@ -136,57 +225,49 @@ def create_block_timestep_mask(
         mask_ratio: Fraction of timesteps to mask.
         device: Device.
         n_blocks: Number of contiguous blocks to mask (default 3).
+        valid_timestep_mask: Optional (B, T) bool mask marking timesteps with
+            at least one observed variable.
 
     Returns:
         ssl_mask: (B, T) bool mask, True = visible, False = masked.
     """
-    n_masked_total = max(int(n_timesteps * mask_ratio), 1)
-    n_masked_total = min(n_masked_total, n_timesteps - 1)
-
-    # Split total masked budget into n_blocks random lengths per sample.
-    # Use Dirichlet-like splitting: draw n_blocks uniform values, normalize,
-    # then scale to sum to n_masked_total. Add 1 to each to ensure min length 1.
-    raw = torch.rand(batch_size, n_blocks)  # CPU for speed
-    raw = raw / raw.sum(dim=1, keepdim=True)  # normalize to sum=1
-    # Reserve 1 per block, distribute the rest proportionally
-    extra = n_masked_total - n_blocks
-    if extra > 0:
-        block_lengths = 1 + (raw * extra).int()
-        # Fix rounding: adjust last block to hit exact total
-        block_lengths[:, -1] = n_masked_total - block_lengths[:, :-1].sum(dim=1)
+    if valid_timestep_mask is None:
+        valid_timestep_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
     else:
-        # Edge case: fewer masked timesteps than blocks — give 1 to first blocks
-        block_lengths = torch.zeros(batch_size, n_blocks, dtype=torch.int)
-        block_lengths[:, :n_masked_total] = 1
+        valid_timestep_mask = valid_timestep_mask.to(device=device, dtype=torch.bool)
 
-    # Clamp to valid range
-    block_lengths = block_lengths.clamp(min=0, max=n_timesteps)
+    ssl_mask = torch.ones(batch_size, n_timesteps, dtype=torch.bool, device=device)
+    requested_blocks = max(int(n_blocks), 1)
 
-    # Divide sequence into n_blocks equal zones. Each block is placed randomly
-    # within its zone, avoiding cross-zone overlap by construction.
-    zone_size = n_timesteps // n_blocks
-    zone_starts = torch.arange(n_blocks) * zone_size  # (n_blocks,)
+    for b in range(batch_size):
+        valid_idx = valid_timestep_mask[b].nonzero(as_tuple=True)[0]
+        n_valid = int(valid_idx.numel())
+        n_masked = _masked_timestep_budget(n_valid, mask_ratio)
+        if n_masked == 0:
+            continue
 
-    # Random offset within each zone (vectorized over batch)
-    # Max offset = zone_size - block_length (so block fits within zone)
-    max_offsets = zone_size - block_lengths  # (B, n_blocks)
-    max_offsets = max_offsets.clamp(min=0)
-    offsets = (torch.rand(batch_size, n_blocks) * (max_offsets.float() + 1)).int()
-    offsets = offsets.clamp(max=max_offsets)
+        # Distinct blocks need at least one visible eligible timestep between
+        # them. Reduce the block count when the requested budget leaves too few
+        # visible timesteps to separate every block.
+        max_separated_blocks = n_valid - n_masked + 1
+        block_count = min(requested_blocks, n_masked, max_separated_blocks)
 
-    # Compute absolute start positions: zone_start + offset
-    starts = zone_starts.unsqueeze(0) + offsets  # (B, n_blocks)
+        lengths = _random_positive_composition(n_masked, block_count)
+        total_gap = n_valid - n_masked
+        extra_gap = total_gap - (block_count - 1)
+        gap_extras = _random_nonnegative_composition(extra_gap, block_count + 1)
+        gaps = gap_extras.clone()
+        if block_count > 1:
+            gaps[1:block_count] += 1
 
-    # Build mask: create time indices and compare with block ranges
-    # (B, n_blocks, T) — True where timestep t falls in block k
-    t = torch.arange(n_timesteps).unsqueeze(0).unsqueeze(0)  # (1, 1, T)
-    starts_3d = starts.unsqueeze(2)  # (B, n_blocks, 1)
-    ends_3d = (starts + block_lengths).unsqueeze(2)  # (B, n_blocks, 1)
-    in_block = (t >= starts_3d) & (t < ends_3d)  # (B, n_blocks, T)
+        ordinal_mask = torch.zeros(n_valid, dtype=torch.bool, device=device)
+        cursor = int(gaps[0].item())
+        for block_idx in range(block_count):
+            length = int(lengths[block_idx].item())
+            ordinal_mask[cursor : cursor + length] = True
+            cursor += length + int(gaps[block_idx + 1].item())
 
-    # Union across blocks -> masked positions
-    masked = in_block.any(dim=1)  # (B, T)
-    ssl_mask = (~masked).to(device=device)
+        ssl_mask[b, valid_idx[ordinal_mask]] = False
 
     return ssl_mask
 
@@ -194,12 +275,15 @@ def create_block_timestep_mask(
 def extract_visible_timesteps(
     tokens: torch.Tensor,
     ssl_mask: torch.Tensor,
+    valid_timestep_mask: torch.Tensor | None = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Extract visible timestep tokens from full sequence.
 
     Args:
         tokens: (B, T, d_model)
         ssl_mask: (B, T) True = visible, False = masked.
+        valid_timestep_mask: Optional (B, T) bool mask for timesteps that
+            should participate in SSL tokenization.
 
     Returns:
         visible_tokens: (B, max_vis, d_model)
@@ -207,11 +291,16 @@ def extract_visible_timesteps(
     """
     B, T, d_model = tokens.shape
 
-    n_visible = ssl_mask.sum(dim=1)  # (B,)
+    if valid_timestep_mask is None:
+        visible_mask = ssl_mask
+    else:
+        visible_mask = ssl_mask & valid_timestep_mask.to(device=tokens.device, dtype=torch.bool)
+
+    n_visible = visible_mask.sum(dim=1)  # (B,)
     max_vis = max(int(n_visible.max().item()), 1)
 
     # Argsort: visible (True=1) first
-    sort_idx = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
+    sort_idx = visible_mask.float().argsort(dim=1, descending=True, stable=True)
     sort_idx_expanded = sort_idx.unsqueeze(-1).expand(-1, -1, d_model)
 
     sorted_tokens = tokens.gather(1, sort_idx_expanded)
@@ -221,3 +310,54 @@ def extract_visible_timesteps(
     vis_padding = vis_positions < n_visible.unsqueeze(1)  # (B, max_vis)
 
     return visible_tokens, vis_padding
+
+
+def scatter_visible_timesteps(
+    visible_tokens: torch.Tensor,
+    visible_mask: torch.Tensor,
+    n_timesteps: int,
+    fill_value: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Place variable-count visible tokens back on a full timestep grid.
+
+    `extract_visible_timesteps` pads each batch row to the maximum visible-token
+    count. This helper scatters only the real visible tokens for each sample, so
+    padded tokens cannot overwrite masked timestep positions.
+
+    Args:
+        visible_tokens: (B, max_vis, d_model) tokens returned by an encoder.
+        visible_mask: (B, T) True at the original visible timestep positions.
+        n_timesteps: Total number of timesteps T.
+        fill_value: Optional (1, 1, d_model) or broadcastable fill tensor. When
+            omitted, masked positions are filled with zeros.
+
+    Returns:
+        (B, T, d_model) tensor with visible tokens restored to their original
+        timestep positions.
+    """
+    B, max_vis, d_model = visible_tokens.shape
+    device = visible_tokens.device
+    visible_mask = visible_mask.to(device=device, dtype=torch.bool)
+
+    if visible_mask.shape != (B, n_timesteps):
+        raise ValueError(
+            f"visible_mask must have shape ({B}, {n_timesteps}), "
+            f"got {tuple(visible_mask.shape)}"
+        )
+
+    if fill_value is None:
+        full = visible_tokens.new_zeros((B, n_timesteps, d_model))
+    else:
+        fill = fill_value.to(device=device, dtype=visible_tokens.dtype)
+        full = fill.expand(B, n_timesteps, d_model).clone()
+
+    visible_indices = visible_mask.float().argsort(dim=1, descending=True, stable=True)
+    visible_counts = visible_mask.sum(dim=1).clamp(max=max_vis)
+
+    for b in range(B):
+        n_visible = int(visible_counts[b].item())
+        if n_visible == 0:
+            continue
+        full[b, visible_indices[b, :n_visible]] = visible_tokens[b, :n_visible].to(full.dtype)
+
+    return full

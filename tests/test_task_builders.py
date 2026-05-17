@@ -3,12 +3,35 @@
 Comprehensive tests for mortality tasks and task builder infrastructure.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 import polars as pl
 import pytest
+
 from slices.data.labels import LabelBuilderFactory, LabelConfig
 from slices.data.labels.mortality import MortalityLabelBuilder
+
+
+def _as_timestamp_precision_mortality(df: pl.DataFrame) -> pl.DataFrame:
+    """Convert legacy-style test fixtures to the precision-aware mortality schema."""
+    if "death_time_precision" in df.columns or "date_of_death" not in df.columns:
+        return df
+
+    return df.with_columns(
+        pl.col("date_of_death").cast(pl.Datetime("us")).alias("death_time"),
+        pl.when(pl.col("date_of_death").is_not_null())
+        .then(pl.col("date_of_death").cast(pl.Date))
+        .otherwise(pl.lit(None).cast(pl.Date))
+        .alias("death_date"),
+        pl.when(pl.col("date_of_death").is_not_null())
+        .then(pl.lit("timestamp"))
+        .otherwise(pl.lit(None))
+        .alias("death_time_precision"),
+        pl.when(pl.col("date_of_death").is_not_null())
+        .then(pl.lit("test_fixture"))
+        .otherwise(pl.lit(None))
+        .alias("death_source"),
+    )
 
 
 class TestLabelConfig:
@@ -92,24 +115,26 @@ class TestMortalityLabelBuilder:
     @pytest.fixture
     def sample_mortality_info(self):
         """Sample mortality data."""
-        return pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4],
-                "date_of_death": [
-                    datetime(2020, 1, 1, 20, 0),  # Died 10h after admission
-                    None,  # Survived
-                    datetime(2020, 1, 5, 10, 0),  # Died 50h after admission
-                    datetime(2020, 1, 6, 14, 0),  # Died 48h after admission
-                ],
-                "hospital_expire_flag": [1, 0, 1, 1],
-                "dischtime": [
-                    datetime(2020, 1, 3, 10, 0),
-                    datetime(2020, 1, 5, 12, 0),
-                    datetime(2020, 1, 6, 8, 0),
-                    datetime(2020, 1, 10, 14, 0),
-                ],
-                "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
-            }
+        return _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4],
+                    "date_of_death": [
+                        datetime(2020, 1, 1, 20, 0),  # Died 10h after admission
+                        None,  # Survived
+                        datetime(2020, 1, 5, 10, 0),  # Died 50h after admission
+                        datetime(2020, 1, 6, 14, 0),  # Died 48h after admission
+                    ],
+                    "hospital_expire_flag": [1, 0, 1, 1],
+                    "dischtime": [
+                        datetime(2020, 1, 3, 10, 0),
+                        datetime(2020, 1, 5, 12, 0),
+                        datetime(2020, 1, 6, 8, 0),
+                        datetime(2020, 1, 10, 14, 0),
+                    ],
+                    "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
+                }
+            )
         )
 
     def test_hospital_mortality(self, sample_stays, sample_mortality_info):
@@ -183,9 +208,8 @@ class TestMortalityLabelBuilder:
         labels = builder.build_labels(raw_data)
 
         labels_dict = dict(zip(labels["stay_id"], labels["label"]))
-        # Stay 1: died at 10h (during 48h obs window), outtime=48h (still in ICU at obs end)
-        # outtime (Jan 3 10:00) >= obs_end (Jan 3 10:00), so NOT left_icu_during_obs -> label=1
-        assert labels_dict[1] == 1  # hospital_expire_flag=1
+        # Stay 1: died at 10h, during the observation window, so excluded.
+        assert labels_dict[1] is None
         assert labels_dict[2] == 0  # Survived
         assert labels_dict[3] == 1  # Died in hospital (hospital_expire_flag=1)
         assert labels_dict[4] == 1  # Died in hospital (hospital_expire_flag=1)
@@ -193,24 +217,26 @@ class TestMortalityLabelBuilder:
     def test_icu_mortality(self, sample_stays):
         """Test ICU mortality prediction (death during ICU stay, window_hours=-1)."""
         # Create mortality info where some patients died during ICU, some after
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4],
-                "date_of_death": [
-                    datetime(2020, 1, 2, 10, 0),  # Died during ICU stay
-                    None,  # Survived
-                    datetime(2020, 1, 10, 10, 0),  # Died after ICU discharge
-                    datetime(2020, 1, 6, 8, 0),  # Died at exact ICU discharge time
-                ],
-                "hospital_expire_flag": [1, 0, 1, 1],
-                "dischtime": [
-                    datetime(2020, 1, 3, 10, 0),
-                    datetime(2020, 1, 5, 12, 0),
-                    datetime(2020, 1, 10, 10, 0),
-                    datetime(2020, 1, 10, 14, 0),
-                ],
-                "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4],
+                    "date_of_death": [
+                        datetime(2020, 1, 2, 10, 0),  # Died during ICU stay
+                        None,  # Survived
+                        datetime(2020, 1, 10, 10, 0),  # Died after ICU discharge
+                        datetime(2020, 1, 6, 8, 0),  # Died at exact ICU discharge time
+                    ],
+                    "hospital_expire_flag": [1, 0, 1, 1],
+                    "dischtime": [
+                        datetime(2020, 1, 3, 10, 0),
+                        datetime(2020, 1, 5, 12, 0),
+                        datetime(2020, 1, 10, 10, 0),
+                        datetime(2020, 1, 10, 14, 0),
+                    ],
+                    "discharge_location": ["DIED", "HOME", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -293,20 +319,22 @@ class TestMortalityBoundaryConditions:
 
     def test_death_exactly_at_24h_boundary(self, boundary_stays):
         """Test death exactly at 24-hour boundary (should be included)."""
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5],
-                "date_of_death": [
-                    datetime(2020, 1, 2, 0, 0),  # Exactly 24h (should be included)
-                    datetime(2020, 1, 1, 23, 59, 59),  # Just before 24h (included)
-                    datetime(2020, 1, 2, 0, 0, 1),  # Just after 24h (excluded)
-                    None,  # Survived
-                    datetime(2020, 1, 1, 12, 0),  # 12h (included)
-                ],
-                "hospital_expire_flag": [1, 1, 1, 0, 1],
-                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
-                "discharge_location": ["DIED", "DIED", "DIED", "HOME", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5],
+                    "date_of_death": [
+                        datetime(2020, 1, 2, 0, 0),  # Exactly 24h (should be included)
+                        datetime(2020, 1, 1, 23, 59, 59),  # Just before 24h (included)
+                        datetime(2020, 1, 2, 0, 0, 1),  # Just after 24h (excluded)
+                        None,  # Survived
+                        datetime(2020, 1, 1, 12, 0),  # 12h (included)
+                    ],
+                    "hospital_expire_flag": [1, 1, 1, 0, 1],
+                    "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
+                    "discharge_location": ["DIED", "DIED", "DIED", "HOME", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -333,18 +361,20 @@ class TestMortalityBoundaryConditions:
 
     def test_legacy_time_bounded_boundary(self, boundary_stays):
         """Test death exactly at time boundary for legacy time-bounded mortality."""
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3],
-                "date_of_death": [
-                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h
-                    datetime(2020, 1, 3, 0, 0, 1),  # Just after 48h
-                    datetime(2020, 1, 2, 23, 59, 59),  # Just before 48h
-                ],
-                "hospital_expire_flag": [1, 1, 1],
-                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
-                "discharge_location": ["DIED", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3],
+                    "date_of_death": [
+                        datetime(2020, 1, 3, 0, 0),  # Exactly 48h
+                        datetime(2020, 1, 3, 0, 0, 1),  # Just after 48h
+                        datetime(2020, 1, 2, 23, 59, 59),  # Just before 48h
+                    ],
+                    "hospital_expire_flag": [1, 1, 1],
+                    "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
+                    "discharge_location": ["DIED", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -369,14 +399,16 @@ class TestMortalityBoundaryConditions:
 
     def test_all_survivors(self, boundary_stays):
         """Test dataset where all patients survive."""
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5],
-                "date_of_death": [None] * 5,
-                "hospital_expire_flag": [0] * 5,
-                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
-                "discharge_location": ["HOME"] * 5,
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5],
+                    "date_of_death": [None] * 5,
+                    "hospital_expire_flag": [0] * 5,
+                    "dischtime": [datetime(2020, 1, 3, 0, 0)] * 5,
+                    "discharge_location": ["HOME"] * 5,
+                }
+            )
         )
 
         config = LabelConfig(
@@ -400,14 +432,16 @@ class TestMortalityBoundaryConditions:
 
     def test_all_deaths(self, boundary_stays):
         """Test dataset where all patients die."""
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5],
-                "date_of_death": [datetime(2020, 1, 1, 12, 0)] * 5,
-                "hospital_expire_flag": [1] * 5,
-                "dischtime": [datetime(2020, 1, 1, 12, 0)] * 5,
-                "discharge_location": ["DIED"] * 5,
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5],
+                    "date_of_death": [datetime(2020, 1, 1, 12, 0)] * 5,
+                    "hospital_expire_flag": [1] * 5,
+                    "dischtime": [datetime(2020, 1, 1, 12, 0)] * 5,
+                    "discharge_location": ["DIED"] * 5,
+                }
+            )
         )
 
         config = LabelConfig(
@@ -439,14 +473,16 @@ class TestMortalityBoundaryConditions:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1],
-                "date_of_death": [datetime(2020, 1, 1, 12, 0)],
-                "hospital_expire_flag": [1],
-                "dischtime": [datetime(2020, 1, 1, 12, 0)],
-                "discharge_location": ["DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1],
+                    "date_of_death": [datetime(2020, 1, 1, 12, 0)],
+                    "hospital_expire_flag": [1],
+                    "dischtime": [datetime(2020, 1, 1, 12, 0)],
+                    "discharge_location": ["DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -478,14 +514,16 @@ class TestMortalityBoundaryConditions:
         )
 
         # Only mortality info for stay 1
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1],
-                "date_of_death": [datetime(2020, 1, 1, 12, 0)],
-                "hospital_expire_flag": [1],
-                "dischtime": [datetime(2020, 1, 1, 12, 0)],
-                "discharge_location": ["DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1],
+                    "date_of_death": [datetime(2020, 1, 1, 12, 0)],
+                    "hospital_expire_flag": [1],
+                    "dischtime": [datetime(2020, 1, 1, 12, 0)],
+                    "discharge_location": ["DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -507,6 +545,174 @@ class TestMortalityBoundaryConditions:
         assert labels_dict[1] == 1  # Has mortality info
         assert labels_dict[2] is None  # Missing info -> null (unknown outcome)
         assert labels_dict[3] is None  # Missing info -> null (unknown outcome)
+
+
+class TestMortalityUnknownOutcomeRegressions:
+    """Regressions for nullable eICU hospital mortality evidence."""
+
+    @staticmethod
+    def _single_stay() -> pl.DataFrame:
+        base = datetime(2020, 1, 1, 0, 0)
+        return pl.DataFrame(
+            {
+                "stay_id": [1],
+                "intime": [base],
+                "outtime": [base.replace(day=5)],
+            }
+        )
+
+    @staticmethod
+    def _mortality_info(
+        *,
+        hospital_expire_flag: int | None,
+        discharge_location: str | None,
+        dischtime: datetime | None = None,
+        death_date: date | None = None,
+        death_source: str | None = None,
+    ) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "stay_id": [1],
+                "death_time": [None],
+                "death_date": [death_date],
+                "death_time_precision": ["date" if death_date is not None else None],
+                "death_source": [death_source],
+                "hospital_expire_flag": [hospital_expire_flag],
+                "dischtime": [dischtime],
+                "discharge_location": [discharge_location],
+                "date_of_death": [None],
+            },
+            schema={
+                "stay_id": pl.Int64,
+                "death_time": pl.Datetime("us"),
+                "death_date": pl.Date,
+                "death_time_precision": pl.Utf8,
+                "death_source": pl.Utf8,
+                "hospital_expire_flag": pl.Int32,
+                "dischtime": pl.Datetime("us"),
+                "discharge_location": pl.Utf8,
+                "date_of_death": pl.Datetime("us"),
+            },
+        )
+
+    def test_null_hospital_flag_without_death_evidence_is_null_for_windowed_mortality(self):
+        """Unknown windowed mortality outcome must not become a negative label."""
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location=None,
+                ),
+            }
+        )
+
+        assert labels["label"][0] is None
+
+    def test_mimic_post_discharge_dod_is_not_hospital_mortality(self):
+        """MIMIC patients.dod after discharge should not count as hospital death."""
+        base = datetime(2020, 1, 1, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=0,
+                    discharge_location="HOME",
+                    dischtime=base.replace(day=3),
+                    death_date=date(2020, 2, 1),
+                    death_source="patients.dod",
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 0
+
+    def test_eicu_death_discharge_location_is_death_evidence(self):
+        """eICU discharge_location == Death should override a missing death flag."""
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location="Death",
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 1
+
+    def test_windowed_mortality_uses_death_discharge_time_inside_prediction_window(self):
+        """Death-coded discharge time inside the target window should be positive."""
+        base = datetime(2020, 1, 1, 0, 0)
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            prediction_window_hours=24,
+            observation_window_hours=24,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location="Death",
+                    dischtime=base.replace(day=2, hour=6),
+                ),
+            }
+        )
+
+        assert labels["label"][0] == 1
+
+    def test_hospital_mortality_unknown_outcome_is_null(self):
+        """Unknown hospital mortality outcome should not silently become 0."""
+        config = LabelConfig(
+            task_name="mortality_hospital",
+            task_type="binary_classification",
+            prediction_window_hours=None,
+            label_sources=["stays", "mortality_info"],
+        )
+        builder = MortalityLabelBuilder(config)
+
+        labels = builder.build_labels(
+            {
+                "stays": self._single_stay(),
+                "mortality_info": self._mortality_info(
+                    hospital_expire_flag=None,
+                    discharge_location=None,
+                ),
+            }
+        )
+
+        assert labels["label"][0] is None
 
 
 class TestWindowedMortalityLabels:
@@ -554,22 +760,32 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5, 6, 7],
-                "date_of_death": [
-                    datetime(2020, 1, 2, 0, 0),  # 24h - during obs
-                    datetime(2020, 1, 3, 2, 0),  # 50h - during pred
-                    datetime(2020, 1, 4, 0, 0),  # 72h - at pred boundary
-                    datetime(2020, 1, 4, 8, 0),  # 80h - after pred
-                    None,  # Survived
-                    datetime(2020, 1, 2, 23, 0),  # 47h - during obs
-                    datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs
-                ],
-                "hospital_expire_flag": [1, 1, 1, 1, 0, 1, 1],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 7,
-                "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5, 6, 7],
+                    "date_of_death": [
+                        datetime(2020, 1, 2, 0, 0),  # 24h - during obs
+                        datetime(2020, 1, 3, 2, 0),  # 50h - during pred
+                        datetime(2020, 1, 4, 0, 0),  # 72h - at pred boundary
+                        datetime(2020, 1, 4, 8, 0),  # 80h - after pred
+                        None,  # Survived
+                        datetime(2020, 1, 2, 23, 0),  # 47h - during obs
+                        datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs
+                    ],
+                    "hospital_expire_flag": [1, 1, 1, 1, 0, 1, 1],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 7,
+                    "discharge_location": [
+                        "DIED",
+                        "DIED",
+                        "DIED",
+                        "DIED",
+                        "HOME",
+                        "DIED",
+                        "DIED",
+                    ],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -623,20 +839,22 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5],
-                "date_of_death": [
-                    datetime(2020, 1, 1, 20, 0),  # 20h - during obs
-                    datetime(2020, 1, 2, 3, 0),  # 27h - during gap
-                    datetime(2020, 1, 2, 8, 0),  # 32h - during pred
-                    datetime(2020, 1, 3, 10, 0),  # 58h - after pred
-                    None,  # Survived
-                ],
-                "hospital_expire_flag": [1, 1, 1, 1, 0],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 5,
-                "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5],
+                    "date_of_death": [
+                        datetime(2020, 1, 1, 20, 0),  # 20h - during obs
+                        datetime(2020, 1, 2, 3, 0),  # 27h - during gap
+                        datetime(2020, 1, 2, 8, 0),  # 32h - during pred
+                        datetime(2020, 1, 3, 10, 0),  # 58h - after pred
+                        None,  # Survived
+                    ],
+                    "hospital_expire_flag": [1, 1, 1, 1, 0],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 5,
+                    "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -683,18 +901,20 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3],
-                "date_of_death": [
-                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h
-                    datetime(2020, 1, 2, 23, 59, 59),  # 1 second before 48h
-                    datetime(2020, 1, 3, 0, 0, 1),  # 1 second after 48h
-                ],
-                "hospital_expire_flag": [1, 1, 1],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 3,
-                "discharge_location": ["DIED", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3],
+                    "date_of_death": [
+                        datetime(2020, 1, 3, 0, 0),  # Exactly 48h
+                        datetime(2020, 1, 2, 23, 59, 59),  # 1 second before 48h
+                        datetime(2020, 1, 3, 0, 0, 1),  # 1 second after 48h
+                    ],
+                    "hospital_expire_flag": [1, 1, 1],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 3,
+                    "discharge_location": ["DIED", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -734,18 +954,20 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3],
-                "date_of_death": [
-                    datetime(2020, 1, 4, 0, 0),  # Exactly 72h (48+24)
-                    datetime(2020, 1, 3, 23, 59, 59),  # 1 second before 72h
-                    datetime(2020, 1, 4, 0, 0, 1),  # 1 second after 72h
-                ],
-                "hospital_expire_flag": [1, 1, 1],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 3,
-                "discharge_location": ["DIED", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3],
+                    "date_of_death": [
+                        datetime(2020, 1, 4, 0, 0),  # Exactly 72h (48+24)
+                        datetime(2020, 1, 3, 23, 59, 59),  # 1 second before 72h
+                        datetime(2020, 1, 4, 0, 0, 1),  # 1 second after 72h
+                    ],
+                    "hospital_expire_flag": [1, 1, 1],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 3,
+                    "discharge_location": ["DIED", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -795,19 +1017,21 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4],
-                "date_of_death": [
-                    datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs ends
-                    datetime(2020, 1, 3, 0, 0),  # Exactly 48h - at prediction start
-                    datetime(2020, 1, 3, 12, 0),  # 60h - middle of pred window
-                    datetime(2020, 1, 4, 0, 0),  # 72h - at pred end
-                ],
-                "hospital_expire_flag": [1, 1, 1, 1],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 4,
-                "discharge_location": ["DIED", "DIED", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4],
+                    "date_of_death": [
+                        datetime(2020, 1, 3, 0, 0, 1),  # 48h + 1s - just after obs ends
+                        datetime(2020, 1, 3, 0, 0),  # Exactly 48h - at prediction start
+                        datetime(2020, 1, 3, 12, 0),  # 60h - middle of pred window
+                        datetime(2020, 1, 4, 0, 0),  # 72h - at pred end
+                    ],
+                    "hospital_expire_flag": [1, 1, 1, 1],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 4,
+                    "discharge_location": ["DIED", "DIED", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -853,18 +1077,20 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3],
-                "date_of_death": [
-                    datetime(2020, 1, 1, 12, 0),  # 12h
-                    datetime(2020, 1, 2, 0, 0),  # 24h
-                    datetime(2020, 1, 2, 23, 59, 59),  # 47h 59m 59s
-                ],
-                "hospital_expire_flag": [1, 1, 1],
-                "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
-                "discharge_location": ["DIED", "DIED", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3],
+                    "date_of_death": [
+                        datetime(2020, 1, 1, 12, 0),  # 12h
+                        datetime(2020, 1, 2, 0, 0),  # 24h
+                        datetime(2020, 1, 2, 23, 59, 59),  # 47h 59m 59s
+                    ],
+                    "hospital_expire_flag": [1, 1, 1],
+                    "dischtime": [datetime(2020, 1, 3, 0, 0)] * 3,
+                    "discharge_location": ["DIED", "DIED", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -910,21 +1136,23 @@ class TestWindowedMortalityLabels:
             }
         )
 
-        mortality_info = pl.DataFrame(
-            {
-                "stay_id": [1, 2, 3, 4, 5, 6],
-                "date_of_death": [
-                    datetime(2020, 1, 2, 0, 0),  # 24h - during obs
-                    datetime(2020, 1, 4, 0, 0),  # 72h - during pred, at outtime
-                    datetime(2020, 1, 5, 0, 0),  # 96h - at outtime
-                    datetime(2020, 1, 4, 0, 0),  # 72h - at outtime (short stay)
-                    None,  # Survived (long stay)
-                    datetime(2020, 1, 6, 0, 0),  # 120h - after outtime (died post-discharge)
-                ],
-                "hospital_expire_flag": [1, 1, 1, 1, 0, 1],
-                "dischtime": [datetime(2020, 1, 10, 0, 0)] * 6,
-                "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME", "DIED"],
-            }
+        mortality_info = _as_timestamp_precision_mortality(
+            pl.DataFrame(
+                {
+                    "stay_id": [1, 2, 3, 4, 5, 6],
+                    "date_of_death": [
+                        datetime(2020, 1, 2, 0, 0),  # 24h - during obs
+                        datetime(2020, 1, 4, 0, 0),  # 72h - during pred, at outtime
+                        datetime(2020, 1, 5, 0, 0),  # 96h - at outtime
+                        datetime(2020, 1, 4, 0, 0),  # 72h - at outtime (short stay)
+                        None,  # Survived (long stay)
+                        datetime(2020, 1, 6, 0, 0),  # 120h - after outtime (died post-discharge)
+                    ],
+                    "hospital_expire_flag": [1, 1, 1, 1, 0, 1],
+                    "dischtime": [datetime(2020, 1, 10, 0, 0)] * 6,
+                    "discharge_location": ["DIED", "DIED", "DIED", "DIED", "HOME", "DIED"],
+                }
+            )
         )
 
         config = LabelConfig(
@@ -997,3 +1225,33 @@ class TestLabelBuilderFactory:
 
         assert "mortality" in available
         assert isinstance(available["mortality"], type)
+
+
+class TestRequiredRawTimeseriesHorizon:
+    """Tests for task-specific raw timeseries horizon requirements."""
+
+    def test_aki_requires_post_observation_raw_horizon(self):
+        config = LabelConfig(
+            task_name="aki_kdigo",
+            task_type="binary_classification",
+            observation_window_hours=24,
+            prediction_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "timeseries"],
+        )
+
+        builder = LabelBuilderFactory.create(config)
+        assert builder.required_raw_timeseries_horizon_hours() == 48
+
+    def test_mortality_does_not_request_raw_timeseries_horizon(self):
+        config = LabelConfig(
+            task_name="mortality_24h",
+            task_type="binary_classification",
+            observation_window_hours=24,
+            prediction_window_hours=24,
+            gap_hours=0,
+            label_sources=["stays", "mortality_info"],
+        )
+
+        builder = LabelBuilderFactory.create(config)
+        assert builder.required_raw_timeseries_horizon_hours() == 0

@@ -4,11 +4,21 @@ Tests cover:
 - bootstrap_ci: deterministic metric yields zero-width CI, known value coverage
 - paired_bootstrap_test: identical models produce p ~0.5, better model produces p ~0.0,
   edge cases (single sample, all-same predictions, NaN handling)
+- paired_wilcoxon_signed_rank / Bonferroni / Cohen's d helpers
 """
 
+import pandas as pd
 import pytest
 import torch
-from slices.eval.statistical import bootstrap_ci, paired_bootstrap_test
+from torchmetrics import AUROC
+
+from slices.eval.statistical import (
+    bonferroni_correction,
+    bootstrap_ci,
+    cohens_d,
+    paired_bootstrap_test,
+    paired_wilcoxon_signed_rank,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +96,18 @@ class TestBootstrapCI:
         r1 = bootstrap_ci(accuracy_metric, preds, targets, seed=123)
         r2 = bootstrap_ci(accuracy_metric, preds, targets, seed=123)
         assert r1 == r2
+
+    def test_auroc_ci_skips_single_class_resamples(self):
+        """Single-class AUROC bootstrap samples should not become artificial zeros."""
+        preds = torch.tensor([0.9] + [0.1] * 9)
+        targets = torch.tensor([1] + [0] * 9)
+
+        result = bootstrap_ci(AUROC(task="binary"), preds, targets, n_bootstraps=200, seed=0)
+
+        assert result["point"] == pytest.approx(1.0)
+        assert result["ci_lower"] == pytest.approx(1.0)
+        assert result["ci_upper"] == pytest.approx(1.0)
+        assert result["std"] == pytest.approx(0.0)
 
 
 # ── paired_bootstrap_test ────────────────────────────────────────────────────
@@ -206,3 +228,56 @@ class TestPairedBootstrapTest:
         r1 = paired_bootstrap_test(accuracy_metric, preds_a, preds_b, targets, seed=99)
         r2 = paired_bootstrap_test(accuracy_metric, preds_a, preds_b, targets, seed=99)
         assert r1 == r2
+
+    def test_auroc_paired_bootstrap_skips_single_class_resamples(self):
+        preds = torch.tensor([0.9] + [0.1] * 9)
+        targets = torch.tensor([1] + [0] * 9)
+
+        result = paired_bootstrap_test(
+            AUROC(task="binary"),
+            preds,
+            preds,
+            targets,
+            n_bootstraps=200,
+            seed=0,
+        )
+
+        assert result["score_a"] == pytest.approx(1.0)
+        assert result["score_b"] == pytest.approx(1.0)
+        assert result["delta"] == pytest.approx(0.0)
+        assert result["p_value"] == pytest.approx(1.0)
+
+
+class TestWilcoxonHelpers:
+    def test_paired_wilcoxon_detects_consistent_improvement(self):
+        """Consistent paired gains should yield a small two-sided p-value."""
+        values_a = [0.70, 0.72, 0.68, 0.75, 0.73, 0.71]
+        values_b = [0.60, 0.62, 0.58, 0.65, 0.63, 0.61]
+
+        result = paired_wilcoxon_signed_rank(values_a, values_b)
+
+        assert result["n_pairs"] == pytest.approx(6.0)
+        assert result["n_nonzero_pairs"] == pytest.approx(6.0)
+        assert result["p_value"] < 0.05
+
+    def test_paired_wilcoxon_uses_exact_small_sample_with_tied_differences(self):
+        result = paired_wilcoxon_signed_rank([1, 1, 1, 1, 1], [0, 0, 0, 0, 0])
+
+        assert result["n_pairs"] == pytest.approx(5.0)
+        assert result["n_nonzero_pairs"] == pytest.approx(5.0)
+        assert result["p_value"] == pytest.approx(0.0625)
+
+    def test_paired_wilcoxon_handles_all_zero_differences(self):
+        result = paired_wilcoxon_signed_rank([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+        assert result["p_value"] == pytest.approx(1.0)
+        assert result["n_nonzero_pairs"] == pytest.approx(0.0)
+
+    def test_bonferroni_preserves_nans(self):
+        corrected = bonferroni_correction([0.01, 0.02, float("nan")])
+        assert corrected[0] == pytest.approx(0.02)
+        assert corrected[1] == pytest.approx(0.04)
+        assert pd.isna(corrected[2])
+
+    def test_cohens_d_paired_uses_difference_scale(self):
+        effect = cohens_d([0.8, 0.9, 1.0, 1.1], [0.6, 0.7, 0.8, 0.9], paired=True)
+        assert effect > 0

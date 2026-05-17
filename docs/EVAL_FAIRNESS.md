@@ -1,0 +1,219 @@
+# Fairness Evaluation
+
+This document describes the current fairness pipeline in SLICES.
+
+It focuses on implementation status and data semantics rather than freezing a
+specific numeric table. The canonical outputs are the `fairness/*` keys written
+to W&B summaries and the parquet exports produced by `scripts/export_results.py`.
+
+## Current Scope
+
+- Standalone fairness evaluation runs via `scripts/eval/evaluate_fairness.py`.
+- The standalone script is revision-scoped. Pass `--revision <name>` so reruns
+  do not get mixed together.
+- Default benchmark fairness corpus:
+  - Experiment classes `core_ssl_benchmark`, `label_efficiency`,
+    `cross_dataset_transfer`, `hp_robustness`, `capacity_study`,
+    `classical_baselines`, `ts2vec_extension`, and
+    `smart_external_reference`
+  - Phases `finetune`, `supervised`, and `baseline`
+- The script re-runs inference from the checkpoint provenance recorded by the
+  original training run, then writes fairness metrics back to that same W&B run.
+- Existing fairness summaries are skipped only when they contain current
+  metadata for the evaluated artifact path/source, checkpoint provenance,
+  script version, protected attributes, and minimum subgroup size. Otherwise
+  they are recomputed.
+
+## Protected Attributes
+
+| Attribute | Availability | Current behavior |
+|---|---|---|
+| `gender` | All datasets | Encoded from the static table; unknown values are excluded |
+| `age_group` | All datasets | Age is binned into `18-44`, `45-64`, `65-79`, `80+` |
+| `race` | MIMIC rows only | Raw race strings are canonicalized into `White`, `Black`, `Hispanic`, `Asian`, `Other` |
+
+Important details:
+
+- eICU race is excluded from the fairness sweep.
+- For the combined dataset, race fairness is computed only on rows whose
+  `source_dataset` indicates MIMIC/MIIV provenance.
+- Missing demographic values are mapped to `unknown` and excluded from the
+  fairness computations.
+- Minimum subgroup size is enforced on unique patients, not stays.
+
+## Pipeline
+
+### 1. Metric primitives
+
+`src/slices/eval/fairness.py` provides the pure numerical metrics:
+
+- `demographic_parity_difference`
+- `equalized_odds_difference`
+- `disparate_impact_ratio`
+
+These functions operate only on predictions, labels, and group IDs.
+
+### 2. Clinical-aware evaluator
+
+`src/slices/eval/fairness_evaluator.py` joins predictions with demographics from
+`static.parquet`, canonicalizes groups, filters undersized subgroups, and
+computes per-attribute reports.
+
+For binary tasks it logs:
+
+- `per_group_auroc`
+- `per_group_auprc`
+- `worst_group_auroc`
+- `worst_group_auprc`
+- `auroc_gap`
+- `auprc_gap`
+- `demographic_parity_diff`
+- `equalized_odds_diff`
+- `disparate_impact_ratio`
+- `n_valid_groups`
+- `n_metric_valid_groups`
+- `group_sizes`
+- `group_sample_sizes`
+
+`n_valid_groups` counts size-valid subgroups. `n_metric_valid_groups` counts
+the subset with both outcome classes, which is required for comparable
+AUROC/AUPRC. Worst-group AUROC/AUPRC and their gaps are written as `NaN` unless
+at least two size-valid groups have both classes.
+
+For regression tasks it logs:
+
+- `per_group_mse`
+- `per_group_mae`
+- `per_group_r2`
+- `worst_group_mse`
+- `worst_group_mae`
+- `mse_gap`
+- `mae_gap`
+- `group_sizes`
+- `group_sample_sizes`
+
+### 3. Post-run batch evaluation
+
+`scripts/eval/evaluate_fairness.py`:
+
+1. Fetches finished W&B runs matching the requested class/paradigm/dataset,
+   phase, and revision filters.
+2. Requires a `revision` tag so different reruns are not mixed.
+3. Resolves checkpoint provenance from the run summary instead of heuristically
+   guessing from disk.
+4. Re-runs test inference.
+5. Flattens the nested report into W&B-safe `fairness/*` keys.
+6. Writes `_fairness_*` metadata that identifies the artifact and evaluation
+   settings used to produce the summary.
+
+### 4. Canonical result export
+
+`scripts/export_results.py` is the canonical reporting path. It exports:
+
+- `results/per_seed_results.parquet`
+- `results/aggregated_results.parquet`
+- `results/statistical_tests.parquet`
+
+Those exports include fairness columns when the runs already have `fairness/*`
+summary metrics. Publication validation requires dataset/task-appropriate
+fairness summaries for downstream rows: gender and age for all datasets, and
+race for MIMIC/combined rows. eICU race is not required.
+
+Publication validation also requires fresh `_fairness_*` metadata. Missing
+metadata, old script/schema versions, changed protected attributes, changed
+minimum subgroup size, artifact-source mismatches, and artifact-path mismatches
+are treated as validation failures unless `--allow-incomplete` is passed for an
+exploratory export.
+
+## Design Decisions
+
+1. Threshold-dependent classification fairness metrics use a fixed threshold of
+   `0.5`.
+2. Race fairness follows the benchmark's canonical five-bin schema rather than
+   raw source strings.
+3. Subgroup inclusion is patient-based, with the default threshold set to `50`
+   patients.
+4. The standalone default targets the full downstream benchmark corpus,
+   including the canonical classical baselines.
+
+## How To Refresh Fairness Results
+
+1. Run the fairness sweep for a specific revision. For final publication, force
+   recomputation so stale summaries are replaced even if old `fairness/*` keys
+   exist:
+
+```bash
+uv run python scripts/eval/evaluate_fairness.py \
+  --project slices-thesis \
+  --revision thesis-v1 \
+  --entity <entity> \
+  --force
+```
+
+2. Re-export the result tables:
+
+```bash
+uv run python scripts/export_results.py \
+  --project slices-thesis \
+  --revision thesis-v1 \
+  --entity <entity>
+```
+
+Do not pass `--allow-incomplete`, `--allow-extraction-failures`,
+`--allow-duplicate-fingerprints`, or `--allow-multiple-revisions` for final
+publication exports. Those flags are for exploratory cleanup only.
+
+## Final Publication Sequence
+
+After Bucket 1 and Bucket 2 are merged into the branch used for final reruns:
+
+1. Set the final revision name used by the launcher and export commands:
+
+```bash
+export REVISION=thesis-v1
+```
+
+2. Run or resume the final training corpus with the project launcher for that
+   revision. Confirm W&B contains the expected finished runs for the class-based
+   corpus.
+
+3. Recompute fairness summaries with metadata:
+
+```bash
+uv run python scripts/eval/evaluate_fairness.py \
+  --project slices-thesis \
+  --revision "$REVISION" \
+  --entity <entity> \
+  --force
+```
+
+4. Export publication tables:
+
+```bash
+uv run python scripts/export_results.py \
+  --project slices-thesis \
+  --revision "$REVISION" \
+  --entity <entity> \
+  --output-dir results
+```
+
+5. Run the publication reporting checks:
+
+```bash
+uv run pytest \
+  tests/test_metrics.py \
+  tests/test_export_results.py \
+  tests/test_fairness_evaluator.py \
+  tests/test_evaluate_fairness.py
+```
+
+## Source Of Truth
+
+Use these in order:
+
+1. W&B run summaries with `fairness/*`
+2. `results/*.parquet` generated by `scripts/export_results.py`
+3. This document for implementation semantics only
+
+This file documents implementation semantics; use exported result tables for
+numeric reporting.

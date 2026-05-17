@@ -1,9 +1,11 @@
 """AKI (Acute Kidney Injury) label builder using KDIGO criteria."""
 
 import logging
-from typing import Dict
+from typing import Any, Dict
 
 import polars as pl
+
+from slices.constants import SEQ_LENGTH_HOURS
 
 from .base import LabelBuilder
 
@@ -17,11 +19,41 @@ class AKILabelBuilder(LabelBuilder):
     - Creatinine rise >= 0.3 mg/dL within any 48h window
     - Creatinine >= 1.5x baseline within 7 days of baseline measurement
 
-    Baseline: minimum creatinine in first baseline_window_hours (default 48h).
+    Baseline: minimum creatinine in first baseline_window_hours
+    (default benchmark observation window, 24h).
     Detection window: hours [observation_window_hours, observation_window_hours +
     prediction_window_hours) — forward-looking to avoid data leakage.
     Label = null if no creatinine in the prediction window.
     """
+
+    SEMANTIC_VERSION = "1.1.0"
+
+    def required_raw_timeseries_horizon_hours(self) -> int:
+        """AKI needs baseline data plus post-observation creatinine measurements."""
+        prediction_hours = self.config.prediction_window_hours
+        if prediction_hours is None:
+            raise ValueError(
+                "AKI task requires prediction_window_hours to define the forward-looking "
+                "detection window."
+            )
+
+        obs_hours = self.config.observation_window_hours or SEQ_LENGTH_HOURS
+        return int(obs_hours + prediction_hours)
+
+    def build_quality_stats(self, labels: pl.DataFrame) -> Dict[str, Any]:
+        """Add AKI-specific null-reason counts to the default quality stats."""
+        null_reason_counts = {
+            "no_creatinine_or_baseline": int(
+                self._last_quality_stats.get("no_creatinine_or_baseline", 0)
+            ),
+            "no_post_obs_creatinine": int(
+                self._last_quality_stats.get("no_post_obs_creatinine", 0)
+            ),
+        }
+        stats = super().build_quality_stats(labels)
+        stats["null_reason_counts"] = null_reason_counts
+        self._last_quality_stats = stats
+        return stats
 
     def build_labels(self, raw_data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
         """Build AKI labels from stays and timeseries data.
@@ -37,6 +69,10 @@ class AKILabelBuilder(LabelBuilder):
         timeseries = raw_data["timeseries"]
 
         if len(stays) == 0:
+            self._last_quality_stats = {
+                "no_creatinine_or_baseline": 0,
+                "no_post_obs_creatinine": 0,
+            }
             return pl.DataFrame(
                 {
                     "stay_id": pl.Series([], dtype=pl.Int64),
@@ -45,7 +81,7 @@ class AKILabelBuilder(LabelBuilder):
             )
 
         crea_col = self.config.label_params.get("creatinine_col", "crea")
-        baseline_hours = self.config.label_params.get("baseline_window_hours", 48)
+        baseline_hours = self.config.label_params.get("baseline_window_hours", SEQ_LENGTH_HOURS)
         abs_threshold = self.config.label_params.get("absolute_rise_threshold", 0.3)
         rel_threshold = self.config.label_params.get("relative_rise_threshold", 1.5)
         rel_window_hours = self.config.label_params.get("relative_window_hours", 168)
@@ -66,6 +102,10 @@ class AKILabelBuilder(LabelBuilder):
         # Validate creatinine column exists
         if crea_col not in timeseries.columns:
             logger.warning(f"Creatinine column '{crea_col}' not in timeseries; all labels null")
+            self._last_quality_stats = {
+                "no_creatinine_or_baseline": len(stay_ids),
+                "no_post_obs_creatinine": 0,
+            }
             return pl.DataFrame(
                 {
                     "stay_id": pl.Series(stay_ids, dtype=pl.Int64),
@@ -144,6 +184,19 @@ class AKILabelBuilder(LabelBuilder):
             .join(abs_aki, on="stay_id", how="left")
         )
 
+        missing_crea_or_baseline = result.filter(
+            pl.col("has_crea").is_null() | pl.col("has_baseline").is_null()
+        ).height
+        missing_post_obs = result.filter(
+            pl.col("has_crea").is_not_null()
+            & pl.col("has_baseline").is_not_null()
+            & pl.col("has_post_obs").is_null()
+        ).height
+        self._last_quality_stats = {
+            "no_creatinine_or_baseline": int(missing_crea_or_baseline),
+            "no_post_obs_creatinine": int(missing_post_obs),
+        }
+
         # Build label:
         # - null if no creatinine data, no baseline, or no data in prediction window
         # - 1 if either AKI criterion met
@@ -170,7 +223,8 @@ class AKILabelBuilder(LabelBuilder):
         n_null = result_df["label"].null_count()
         logger.info(
             f"AKI labels: {n_aki} AKI, {n_no_aki} no AKI, "
-            f"{n_null} excluded (no creatinine/baseline or no data in prediction window)"
+            f"{n_null} excluded ({missing_crea_or_baseline} no creatinine/baseline, "
+            f"{missing_post_obs} no creatinine in prediction window)"
         )
 
         return result_df

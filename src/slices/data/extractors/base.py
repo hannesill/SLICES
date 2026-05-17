@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 import polars as pl
 import portalocker
@@ -19,7 +19,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
 
-from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS
+from slices.constants import EXTRACTION_BATCH_SIZE, MIN_STAY_HOURS, SEQ_LENGTH_HOURS, THESIS_TASKS
 from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
 from slices.data.utils import get_package_data_dir
 
@@ -47,7 +47,7 @@ class ExtractorConfig(BaseModel):
     seq_length_hours: int = Field(default=SEQ_LENGTH_HOURS, gt=0)
     feature_set: str = "core"  # core | extended
     tasks_dir: Optional[str] = None
-    tasks: List[str] = Field(default_factory=lambda: ["mortality_24h", "mortality_hospital"])
+    tasks: List[str] = Field(default_factory=lambda: list(THESIS_TASKS))
     min_stay_hours: int = Field(default=MIN_STAY_HOURS, ge=0)
     batch_size: int = Field(default=EXTRACTION_BATCH_SIZE, gt=0)
     categories: Optional[List[str]] = None  # e.g., ["vitals_dense"] for subset extraction
@@ -92,6 +92,7 @@ class BaseExtractor(ABC):
         self.config = config
         self.parquet_root = Path(config.parquet_root)
         self.output_dir = Path(config.output_dir)
+        self._label_quality_stats: Dict[str, Dict[str, Any]] = {}
 
         # Validate parquet directory exists
         if not self.parquet_root.exists():
@@ -132,8 +133,7 @@ class BaseExtractor(ABC):
         for task_name in task_names:
             config_file = tasks_path / f"{task_name}.yaml"
             if not config_file.exists():
-                console.print(f"[yellow]Warning: Task config not found: {config_file}[/yellow]")
-                continue
+                raise FileNotFoundError(f"Task config not found: {config_file}")
 
             with open(config_file) as f:
                 config_dict = yaml.safe_load(f)
@@ -146,6 +146,25 @@ class BaseExtractor(ABC):
             task_configs.append(task_config)
 
         return task_configs
+
+    def _build_label_manifest(
+        self, task_configs: Optional[List[LabelConfig]] = None
+    ) -> Dict[str, Dict]:
+        """Build the semantic label manifest for the current extraction config."""
+        manifest: Dict[str, Dict] = {}
+        for task_config in task_configs or self._load_task_configs(self.config.tasks or []):
+            builder = LabelBuilderFactory.create(task_config)
+            manifest[task_config.task_name] = {
+                "builder_version": builder.SEMANTIC_VERSION,
+                "config_hash": LabelBuilder.config_hash(task_config),
+                "label_sources": sorted(task_config.label_sources),
+                "supported_datasets": (
+                    sorted(task_config.supported_datasets)
+                    if task_config.supported_datasets is not None
+                    else None
+                ),
+            }
+        return manifest
 
     def _validate_observation_window(self, task_config: LabelConfig) -> None:
         """Validate that task's observation_window_hours matches extraction seq_length_hours.
@@ -185,6 +204,14 @@ class BaseExtractor(ABC):
             Dataset name (e.g., 'mimic_iv', 'eicu', 'hirid').
         """
         pass
+
+    def _get_upstream_source_signature(self) -> Optional[dict]:
+        """Return a fingerprint of upstream inputs used for extraction.
+
+        Subclasses can override this to make resume safety depend on upstream
+        source identity as well as Python-side extraction config.
+        """
+        return None
 
     @abstractmethod
     def extract_stays(self) -> pl.DataFrame:
@@ -259,8 +286,9 @@ class BaseExtractor(ABC):
         # Check for negative or invalid LOS
         invalid_los = stays.filter((pl.col("los_days").is_null()) | (pl.col("los_days") < 0))
         if len(invalid_los) > 0:
-            console.print(
-                f"[yellow]Warning: Found {len(invalid_los)} stays with invalid LOS[/yellow]"
+            raise ValueError(
+                f"Found {len(invalid_los)} stays with invalid LOS. "
+                "Extraction must fail closed until the upstream stay metadata is fixed."
             )
 
     def _validate_timeseries(
@@ -282,7 +310,10 @@ class BaseExtractor(ABC):
 
         missing = expected_stay_ids - timeseries_stay_ids
         if missing:
-            console.print(f"[yellow]Warning: {len(missing)} stays have no timeseries data[/yellow]")
+            raise ValueError(
+                f"Found {len(missing)} stays with no timeseries data. "
+                "Extraction must fail closed until upstream timeseries coverage is complete."
+            )
 
         # Check that expected features are present
         timeseries_features = {
@@ -292,8 +323,10 @@ class BaseExtractor(ABC):
         }
         missing_features = set(feature_names) - timeseries_features
         if missing_features:
-            console.print(
-                f"[yellow]Warning: Missing features in timeseries: {missing_features}[/yellow]"
+            raise ValueError(
+                "Missing expected timeseries features: "
+                f"{sorted(missing_features)}. "
+                "Extraction must fail closed until the upstream export is complete."
             )
 
     def _validate_labels(self, labels: pl.DataFrame, stay_ids: List[int]) -> None:
@@ -315,12 +348,44 @@ class BaseExtractor(ABC):
         # Check for missing labels
         missing = expected_stay_ids - label_stay_ids
         if missing:
-            console.print(f"[yellow]Warning: {len(missing)} stays have no labels[/yellow]")
+            raise ValueError(
+                f"Found {len(missing)} stays with no labels. "
+                "Extraction must fail closed until label coverage is complete."
+            )
 
         # Check for extra labels (shouldn't happen, but worth checking)
         extra = label_stay_ids - expected_stay_ids
         if extra:
             console.print(f"[yellow]Warning: {len(extra)} labels for stays not in dataset[/yellow]")
+
+    def _emit_label_quality_warnings(
+        self, task_config: LabelConfig, task_labels: pl.DataFrame
+    ) -> None:
+        """Emit non-fatal quality warnings for extracted labels."""
+        if not task_config.quality_checks or "label" not in task_labels.columns:
+            return
+
+        total = len(task_labels)
+        if total == 0:
+            return
+
+        max_missing_percentage = task_config.quality_checks.get("max_missing_percentage")
+        if max_missing_percentage is None:
+            return
+
+        missing = task_labels["label"].null_count()
+        missing_percentage = (missing / total) * 100.0
+
+        if missing_percentage > float(max_missing_percentage):
+            console.print(
+                "[yellow]Warning: "
+                f"Task '{task_config.task_name}' has {missing_percentage:.1f}% missing labels "
+                f"({missing}/{total}), exceeding the configured maximum of "
+                f"{float(max_missing_percentage):.1f}%. "
+                "This usually means the upstream label-source coverage is insufficient "
+                "(for example, AKI without enough post-observation creatinine data)."
+                "[/yellow]"
+            )
 
     def extract_labels(self, stay_ids: List[int], task_configs: List[LabelConfig]) -> pl.DataFrame:
         """Extract labels for multiple downstream tasks.
@@ -341,6 +406,7 @@ class BaseExtractor(ABC):
             DataFrame with stay_id and one column per task (named by task_name).
         """
         # Step 1: Identify all required data sources
+        self._label_quality_stats = {}
         required_sources = set()
         for task_config in task_configs:
             required_sources.update(task_config.label_sources)
@@ -381,6 +447,11 @@ class BaseExtractor(ABC):
 
             # Compute labels
             task_labels = builder.build_labels(raw_data)
+            self._emit_label_quality_warnings(task_config, task_labels)
+            if "label" in task_labels.columns:
+                self._label_quality_stats[task_config.task_name] = builder.build_quality_stats(
+                    task_labels
+                )
 
             # For single-label tasks, the builder returns a 'label' column
             # that we rename to the task name.
@@ -570,6 +641,24 @@ class BaseExtractor(ABC):
                 console.print(
                     "[yellow]Warning: Existing extraction has different config. "
                     "Will overwrite.[/yellow]"
+                )
+                return None
+
+            current_signature = self._get_upstream_source_signature()
+            existing_signature = existing_metadata.get("upstream_source_signature")
+            if current_signature != existing_signature:
+                console.print(
+                    "[yellow]Warning: Existing extraction was built from different "
+                    "upstream inputs. Will overwrite.[/yellow]"
+                )
+                return None
+
+            current_label_manifest = self._build_label_manifest()
+            existing_label_manifest = existing_metadata.get("label_manifest")
+            if existing_label_manifest != current_label_manifest:
+                console.print(
+                    "[yellow]Warning: Existing extraction was built from a different "
+                    "task config or label builder version. Will overwrite.[/yellow]"
                 )
                 return None
         except Exception:

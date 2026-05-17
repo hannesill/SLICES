@@ -6,6 +6,7 @@ learning on ICU time-series data.
 
 import pytest
 import torch
+
 from slices.data.transforms import (
     apply_gaussian_noise,
     apply_mask,

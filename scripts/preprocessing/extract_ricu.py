@@ -2,7 +2,8 @@
 
 Two-step pipeline:
     # Step 1: R extraction (once per dataset)
-    Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
+    Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv \
+        --raw_export_horizon_hours 48
 
     # Step 2: Python processing -> produces final SLICES format
     uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
+
 from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS
 from slices.data.extractors.base import ExtractorConfig
 from slices.data.extractors.ricu import RicuExtractor
@@ -45,12 +47,12 @@ def main(cfg: DictConfig) -> None:
         print("\nRun the R extraction first:")
         print(
             "  Rscript scripts/preprocessing/extract_with_ricu.R "
-            f"--dataset miiv --output_dir {ricu_dir}"
+            f"--dataset miiv --output_dir {ricu_dir} --raw_export_horizon_hours 48"
         )
         sys.exit(1)
 
     # Build config kwargs, only overriding tasks if explicitly specified
-    # so that ExtractorConfig defaults (mortality_24h, mortality_hospital) are used
+    # so that ExtractorConfig defaults cover the fixed thesis task surface.
     config_kwargs: dict = {
         "parquet_root": str(cfg.data.ricu_output_dir),
         "output_dir": str(cfg.data.processed_dir),
