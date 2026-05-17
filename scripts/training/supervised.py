@@ -30,60 +30,110 @@ import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
+
 from slices.data.datamodule import ICUDataModule
+from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_PATH_KEY,
+    EVAL_ARTIFACT_SHA256_KEY,
+    file_sha256,
+)
 from slices.models.encoders import EncoderWithMissingToken
 from slices.training import FineTuneModule
 from slices.training.utils import (
+    WandbEntityNotFoundError,
+    report_and_validate_train_label_support,
+    resolve_balanced_class_weights,
     run_fairness_evaluation,
     save_encoder_checkpoint,
     setup_finetune_callbacks,
     setup_wandb_logger,
+    train_label_support_summary,
     validate_data_prerequisites,
 )
+
+
+def _evaluated_artifact_metadata(
+    cfg: DictConfig,
+    eval_checkpoint_source: str,
+    best_ckpt: str | None,
+) -> dict[str, str]:
+    """Return path and digest for the artifact used to produce test metrics."""
+    if eval_checkpoint_source == "best" and best_ckpt:
+        artifact_path = Path(best_ckpt)
+    elif eval_checkpoint_source == "final":
+        artifact_path = Path(cfg.get("checkpoint_dir", "checkpoints")) / "last.ckpt"
+    else:
+        return {EVAL_ARTIFACT_PATH_KEY: "", EVAL_ARTIFACT_SHA256_KEY: ""}
+
+    artifact_sha256 = file_sha256(artifact_path) if artifact_path.exists() else ""
+    return {
+        EVAL_ARTIFACT_PATH_KEY: str(artifact_path),
+        EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
+    }
+
+
+def _collect_dataset_labels(dataset) -> torch.Tensor:
+    """Collect labels from a dataset into a flat tensor."""
+    labels = []
+    for i in range(len(dataset)):
+        sample = dataset[i]
+        if "label" not in sample:
+            continue
+        labels.append(torch.as_tensor(sample["label"], dtype=torch.float32).reshape(-1))
+
+    if not labels:
+        return torch.empty(0, dtype=torch.float32)
+
+    return torch.cat(labels, dim=0)
 
 
 def compute_baseline_metrics(datamodule, task_name: str, task_type: str = "binary") -> dict:
     """Compute baseline metrics for comparison.
 
+    Baselines are fit on the train split and evaluated on the test split.
+
     For classification tasks, computes AUROC for random predictions and
-    majority-class predictions. For regression tasks, computes mean/median
-    predictor baselines.
+    majority-class predictions. For regression tasks, computes train-fit
+    mean/median predictor baselines on the test labels.
     """
+    del task_name
     baselines = {}
 
+    train_dataset = datamodule.train_dataloader().dataset
     test_dataset = datamodule.test_dataloader().dataset
-    labels = []
-    for i in range(len(test_dataset)):
-        sample = test_dataset[i]
-        if "label" in sample:
-            labels.append(sample["label"])
 
-    if not labels:
+    train_labels = _collect_dataset_labels(train_dataset)
+    test_labels = _collect_dataset_labels(test_dataset)
+
+    if len(train_labels) == 0 or len(test_labels) == 0:
         return baselines
 
-    labels_tensor = torch.tensor(labels)
-    n_samples = len(labels_tensor)
+    n_samples = len(test_labels)
     baselines["test/n_samples"] = n_samples
 
     if task_type == "regression":
-        mean_label = labels_tensor.mean().item()
-        median_label = labels_tensor.median().item()
-        baselines["test/label_mean"] = mean_label
-        baselines["test/label_std"] = labels_tensor.std().item()
-        baselines["baseline/mean_predictor_mse"] = (labels_tensor - mean_label).pow(2).mean().item()
+        mean_label = train_labels.mean().item()
+        median_label = train_labels.median().item()
+        baselines["baseline/train_label_mean"] = mean_label
+        baselines["baseline/train_label_std"] = train_labels.std(unbiased=False).item()
+        baselines["baseline/train_label_median"] = median_label
+        baselines["baseline/mean_predictor_mse"] = (test_labels - mean_label).pow(2).mean().item()
         baselines["baseline/median_predictor_mae"] = (
-            (labels_tensor - median_label).abs().mean().item()
+            (test_labels - median_label).abs().mean().item()
         )
     else:
-        n_positive = labels_tensor.sum().item()
+        n_positive = test_labels.sum().item()
         n_negative = n_samples - n_positive
         positive_ratio = n_positive / n_samples
+        train_positive_ratio = train_labels.mean().item()
+        majority_class = 1.0 if train_positive_ratio >= 0.5 else 0.0
 
         baselines["test/n_positive"] = n_positive
         baselines["test/n_negative"] = n_negative
         baselines["test/positive_ratio"] = positive_ratio
+        baselines["baseline/train_positive_ratio"] = train_positive_ratio
         baselines["baseline/random_auroc"] = 0.5
-        majority_class_accuracy = max(positive_ratio, 1 - positive_ratio)
+        majority_class_accuracy = (test_labels == majority_class).float().mean().item()
         baselines["baseline/majority_accuracy"] = majority_class_accuracy
         baselines["baseline/trivial_auroc"] = 0.5
 
@@ -138,7 +188,13 @@ def main(cfg: DictConfig) -> None:
         OmegaConf.set_struct(cfg, True)
 
     # Validate data prerequisites
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
+    task_name_for_validation = cfg.task.get("task_name", "mortality_24h")
+    validate_data_prerequisites(
+        cfg.data.processed_dir,
+        cfg.dataset,
+        task_names=[task_name_for_validation],
+        task_configs=[cfg.task],
+    )
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
@@ -180,18 +236,36 @@ def main(cfg: DictConfig) -> None:
     )
 
     label_stats = datamodule.get_label_statistics()
+    train_label_stats = datamodule.get_train_label_statistics()
+    task_type = cfg.task.get("task_type", "binary")
     if task_name in label_stats:
         stats = label_stats[task_name]
         print(f"\n Label distribution for '{task_name}':")
         print(f"  - Total samples: {stats['total']}")
-        print(
-            f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('prevalence', 0)*100:.1f}%)"
-        )
-        print(
-            f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
-        )
+        if stats.get("task_type") == "regression":
+            print(f"  - Mean: {stats.get('mean', 0.0):.4f}")
+            print(f"  - Std:  {stats.get('std', 0.0):.4f}")
+            print(f"  - Min:  {stats.get('min', 0.0):.4f}")
+            print(f"  - Max:  {stats.get('max', 0.0):.4f}")
+        else:
+            print(
+                f"  - Positive: {stats.get('positive', 'N/A')} "
+                f"({stats.get('prevalence', 0)*100:.1f}%)"
+            )
+            print(
+                f"  - Negative: {stats.get('negative', 'N/A')} "
+                f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
+            )
+
+    train_support_stats = report_and_validate_train_label_support(
+        datamodule=datamodule,
+        task_name=task_name,
+        task_type=task_type,
+        dataset=cfg.dataset,
+        seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
+        min_train_positives=cfg.get("min_train_positives", 3),
+    )
 
     # =========================================================================
     # 2. Create Model (Training from Scratch)
@@ -206,21 +280,24 @@ def main(cfg: DictConfig) -> None:
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
-        if task_name in label_stats:
-            stats = label_stats[task_name]
-            n_pos = stats.get("positive", 0)
-            n_neg = stats.get("negative", 0)
-            n_total = n_pos + n_neg
-            if n_pos == 0 or n_neg == 0:
-                raise ValueError(
-                    f"Cannot compute balanced class weights for '{task_name}': "
-                    f"{n_pos} positive, {n_neg} negative. Check label extraction."
-                )
-            raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
-            cfg.training.class_weight = [w**0.5 for w in raw]
+        resolved_class_weight = resolve_balanced_class_weights(
+            task_name=task_name,
+            task_type=task_type,
+            train_label_stats=train_label_stats,
+        )
+        if resolved_class_weight is not None:
+            cfg.training.class_weight = resolved_class_weight
+            n_total = int(train_label_stats[task_name]["total"])
+            print(f"\n Training-split labels used for class weighting: {n_total}")
             print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
-            print(f"\n  Warning: No label stats for '{task_name}', skipping class weighting")
+            if task_type == "regression":
+                print(f"\n  class_weight='balanced' ignored for regression task '{task_name}'")
+            else:
+                print(
+                    f"\n  Warning: No train-split label stats for '{task_name}', "
+                    "skipping class weighting"
+                )
             cfg.training.class_weight = None
 
     OmegaConf.set_struct(cfg, True)
@@ -250,7 +327,13 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     callbacks = setup_finetune_callbacks(cfg, checkpoint_prefix="supervised")
-    logger = setup_wandb_logger(cfg)
+    try:
+        logger = setup_wandb_logger(cfg)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        raise SystemExit(1) from exc
+    if logger:
+        logger.experiment.summary.update(train_label_support_summary(train_support_stats))
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
@@ -299,6 +382,9 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
+    eval_checkpoint_source = "none"
+    best_ckpt_load_ok = False
+    best_ckpt_error = None
 
     if best_ckpt:
         print(f"\n Loading best checkpoint: {best_ckpt}")
@@ -306,8 +392,34 @@ def main(cfg: DictConfig) -> None:
             checkpoint = torch.load(best_ckpt, map_location="cpu", weights_only=False)
             model.load_state_dict(checkpoint["state_dict"])
             print("  - Loaded best checkpoint weights")
+            eval_checkpoint_source = "best"
+            best_ckpt_load_ok = True
         except Exception as e:
-            print(f"  - Warning: Could not load checkpoint ({e}), using final model")
+            best_ckpt_error = str(e)
+            allow_fallback = cfg.training.get("allow_best_ckpt_fallback", False)
+            if allow_fallback:
+                print(
+                    f"  - WARNING: Could not load best checkpoint ({e}),"
+                    " falling back to final model"
+                )
+                eval_checkpoint_source = "final"
+            else:
+                if logger:
+                    logger.experiment.summary.update(
+                        {
+                            "_eval_checkpoint_source": "failed",
+                            "_best_ckpt_path": best_ckpt,
+                            "_best_ckpt_load_ok": False,
+                            "_best_ckpt_error": best_ckpt_error,
+                        }
+                    )
+                    logger.experiment.finish()
+                raise RuntimeError(
+                    f"Best checkpoint load failed: {e}. "
+                    f"Set training.allow_best_ckpt_fallback=true to use final model instead."
+                ) from e
+    else:
+        eval_checkpoint_source = "final"
 
     encoder_path = save_encoder_weights(model, cfg, cfg.output_dir)
     print(f"\n Encoder saved to: {encoder_path}")
@@ -392,10 +504,19 @@ def main(cfg: DictConfig) -> None:
                 else:
                     print("  -> WARNING: Model performs at or below random baseline!")
 
-    # Log test results and baseline metrics to W&B summary
+    # Log test results, baseline metrics, and checkpoint provenance to W&B summary
     if logger:
         if test_results:
             logger.experiment.summary.update(test_results[0])
+            logger.experiment.summary.update(
+                {
+                    "_eval_checkpoint_source": eval_checkpoint_source,
+                    **_evaluated_artifact_metadata(cfg, eval_checkpoint_source, best_ckpt),
+                    "_best_ckpt_path": best_ckpt or "",
+                    "_best_ckpt_load_ok": best_ckpt_load_ok,
+                    "_best_ckpt_error": best_ckpt_error or "",
+                }
+            )
         if baseline_metrics:
             logger.experiment.summary.update(baseline_metrics)
 

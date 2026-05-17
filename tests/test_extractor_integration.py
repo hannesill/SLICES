@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import polars as pl
 import pytest
+
 from slices.data.extractors.base import BaseExtractor, ExtractorConfig
 from slices.data.labels import LabelConfig
 

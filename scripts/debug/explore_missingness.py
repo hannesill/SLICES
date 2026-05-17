@@ -10,7 +10,7 @@ This script analyzes:
 
 Example usage:
     uv run python scripts/debug/explore_missingness.py \\
-        --processed-dir data/processed/mimic-iv-demo \\
+        --processed-dir data/processed/miiv \\
         --top-n 10
 """
 
@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import yaml
+
+from slices.constants import SEQ_LENGTH_HOURS
 
 
 def load_data(data_dir: Path) -> tuple[pl.DataFrame, pl.DataFrame, dict]:
@@ -333,7 +335,7 @@ def main():
     parser.add_argument(
         "--processed-dir",
         type=Path,
-        default=Path("data/processed/mimic-iv-demo"),
+        default=Path("data/processed/miiv"),
         help="Path to processed data directory (with static.parquet, "
         "timeseries.parquet, metadata.yaml)",
     )
@@ -349,7 +351,7 @@ def main():
     timeseries_df, static_df, metadata = load_data(args.processed_dir)
 
     feature_names = metadata["feature_names"]
-    seq_length = metadata.get("seq_length_hours", 48)
+    seq_length = metadata.get("seq_length_hours", SEQ_LENGTH_HOURS)
     n_stays = len(timeseries_df)
     n_features = len(feature_names)
 

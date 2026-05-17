@@ -25,8 +25,13 @@ import torch.nn.functional as F
 
 from slices.models.common import build_sinusoidal_pe
 
-from .base import BaseSSLObjective, SSLConfig
-from .masking import create_block_timestep_mask, create_timestep_mask, extract_visible_timesteps
+from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
+from .masking import (
+    create_block_timestep_mask,
+    create_timestep_mask,
+    extract_visible_timesteps,
+    scatter_visible_timesteps,
+)
 
 
 @dataclass
@@ -110,33 +115,50 @@ class JEPAPredictor(nn.Module):
         Args:
             encoded_visible: (B, n_vis, d_encoder) encoded visible tokens.
             ssl_mask: (B, T) bool, True = visible, False = masked.
-            token_info: dict with timestep_idx (B, T).
+            token_info: dict with timestep_idx (B, T) and optional
+                valid_timestep_mask (B, T) marking timesteps that had at
+                least one observed variable.
             n_timesteps: total number of timesteps T.
 
         Returns:
             (B, T, d_encoder) predicted representations per timestep.
         """
-        B = encoded_visible.shape[0]
-        d_pred = self.config.predictor_d_model
-
         vis_proj = self.encoder_proj(encoded_visible)  # (B, n_vis, d_pred)
 
-        full_tokens = self.mask_token.expand(B, n_timesteps, d_pred).clone()
+        valid_timestep_mask = token_info.get("valid_timestep_mask")
+        if valid_timestep_mask is None:
+            visible_mask = ssl_mask
+        else:
+            visible_mask = ssl_mask & valid_timestep_mask.to(
+                device=ssl_mask.device,
+                dtype=torch.bool,
+            )
 
-        # Scatter visible tokens to original positions
-        vis_indices = ssl_mask.float().argsort(dim=1, descending=True, stable=True)
-        n_vis = vis_proj.shape[1]
-        scatter_idx = vis_indices[:, :n_vis]
-        scatter_idx_expanded = scatter_idx.unsqueeze(-1).expand(-1, -1, d_pred)
-        full_tokens.scatter_(1, scatter_idx_expanded, vis_proj.to(full_tokens.dtype))
+        full_tokens = scatter_visible_timesteps(
+            vis_proj,
+            visible_mask,
+            n_timesteps,
+            fill_value=self.mask_token,
+        )
 
         # Add time PE
         timestep_idx = token_info["timestep_idx"]
         full_tokens = full_tokens + self.time_pe[timestep_idx]
         full_tokens = self.embed_dropout(full_tokens)
 
-        # Run predictor transformer (no padding mask, all T valid)
-        decoded = self.predictor(full_tokens)
+        predictor_padding_mask = None
+        if valid_timestep_mask is not None:
+            predictor_padding_mask = ~valid_timestep_mask.to(
+                device=full_tokens.device,
+                dtype=torch.bool,
+            )
+            all_masked = predictor_padding_mask.all(dim=1)
+            if all_masked.any():
+                predictor_padding_mask = predictor_padding_mask.clone()
+                predictor_padding_mask[all_masked, 0] = False
+
+        # Fully unobserved hours should not be available as predictor context.
+        decoded = self.predictor(full_tokens, src_key_padding_mask=predictor_padding_mask)
 
         # Project to encoder representation space
         predictions = self.output_proj(decoded)  # (B, T, d_encoder)
@@ -162,21 +184,7 @@ class JEPAObjective(BaseSSLObjective):
         super().__init__(encoder, config)
         self.config: JEPAConfig = config
 
-        # Validate encoder has obs-aware tokenization
-        if not getattr(getattr(encoder, "config", None), "obs_aware", False):
-            raise ValueError(
-                "JEPA requires an encoder with obs_aware=True "
-                "(e.g., TransformerEncoder with obs_aware=True). Got: "
-                f"{type(encoder).__name__}"
-            )
-
-        # Validate pooling
-        encoder_pooling = getattr(encoder.config, "pooling", "none")
-        if encoder_pooling != "none":
-            raise ValueError(
-                "JEPA requires encoder with pooling='none' to get per-token "
-                f"representations, but got pooling='{encoder_pooling}'"
-            )
+        require_ssl_tokenizing_encoder(encoder, "JEPA")
 
         d_encoder = encoder.get_output_dim()
         self.d_encoder = d_encoder
@@ -218,17 +226,34 @@ class JEPAObjective(BaseSSLObjective):
 
         # 1. Tokenize timesteps (online encoder)
         tokens, padding_mask, token_info = self.encoder.tokenize(x, obs_mask)
+        valid_timestep_mask = token_info["valid_timestep_mask"]
 
         # 2. Create SSL mask on timesteps
         if self.config.mask_strategy == "block":
             ssl_mask = create_block_timestep_mask(
-                B, T, self.config.mask_ratio, device, n_blocks=self.config.mask_n_blocks
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                n_blocks=self.config.mask_n_blocks,
+                valid_timestep_mask=valid_timestep_mask,
             )
         else:
-            ssl_mask = create_timestep_mask(B, T, self.config.mask_ratio, device)
+            ssl_mask = create_timestep_mask(
+                B,
+                T,
+                self.config.mask_ratio,
+                device,
+                valid_timestep_mask=valid_timestep_mask,
+            )
+        effective_visible_mask = ssl_mask & valid_timestep_mask
 
         # 3. Extract visible tokens
-        visible_tokens, vis_padding = extract_visible_timesteps(tokens, ssl_mask)
+        visible_tokens, vis_padding = extract_visible_timesteps(
+            tokens,
+            ssl_mask,
+            valid_timestep_mask=valid_timestep_mask,
+        )
 
         # 4. Encode visible tokens only (online encoder)
         encoded_visible = self.encoder.encode(visible_tokens, vis_padding)
@@ -244,13 +269,18 @@ class JEPAObjective(BaseSSLObjective):
         # 6. Predictor predicts target representations
         predicted_repr = self.predictor(
             encoded_visible=encoded_visible,
-            ssl_mask=ssl_mask,
+            ssl_mask=effective_visible_mask,
             token_info=token_info,
             n_timesteps=T,
         )  # (B, T, d_encoder)
 
         # 7. Compute loss on masked positions
-        loss, metrics = self._compute_loss(predicted_repr, target_repr, ssl_mask)
+        loss, metrics = self._compute_loss(
+            predicted_repr,
+            target_repr,
+            ssl_mask,
+            valid_timestep_mask,
+        )
 
         return loss, metrics
 
@@ -259,6 +289,7 @@ class JEPAObjective(BaseSSLObjective):
         predicted: torch.Tensor,
         target: torch.Tensor,
         ssl_mask: torch.Tensor,
+        valid_timestep_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute loss on masked timestep representations.
 
@@ -270,14 +301,14 @@ class JEPAObjective(BaseSSLObjective):
         Returns:
             (loss, metrics_dict)
         """
-        # Loss only on masked timesteps
-        loss_mask = ~ssl_mask  # (B, T)
+        # Loss only on masked timesteps that had at least one observation.
+        loss_mask = (~ssl_mask) & valid_timestep_mask  # (B, T)
 
         # Collapse monitoring metrics (computed on raw target before normalization)
         with torch.no_grad():
             B, T = ssl_mask.shape
             n_masked = loss_mask.sum().item()
-            n_visible = ssl_mask.sum().item()
+            n_visible = (ssl_mask & valid_timestep_mask).sum().item()
 
             # Flatten to (B*T, d_encoder) for batch-level statistics
             target_flat = target.reshape(-1, self.d_encoder)
@@ -318,7 +349,7 @@ class JEPAObjective(BaseSSLObjective):
             metrics = {
                 "jepa_loss": loss.detach(),
                 "ssl_loss": loss.detach(),
-                "jepa_mask_ratio_actual": n_masked / max(B * T, 1),
+                "jepa_mask_ratio_actual": n_masked / max(valid_timestep_mask.sum().item(), 1),
                 "jepa_n_timesteps": T,
                 "jepa_n_visible_per_sample": n_visible / B,
                 "jepa_n_masked_per_sample": n_masked / B,

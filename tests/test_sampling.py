@@ -6,6 +6,7 @@ Tests sentinel patient selection and stratification for debugging.
 import numpy as np
 import polars as pl
 import pytest
+
 from slices.debug.sampling import (
     SelectionStrategy,
     SentinelConfig,

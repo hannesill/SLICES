@@ -1,9 +1,9 @@
 # @package ssl
 # Contrastive (SimCLR-style) SSL Configuration
 #
-# Observation-level tokenization: two different random masks create two "views"
-# of the same sample. NT-Xent loss pulls views of the same sample together
-# and pushes different samples apart in a learned projection space.
+# Timestep-level tokenization: two timestep masks create two "views" of the
+# same sample. In the default instance mode, NT-Xent pulls mean-pooled sequence
+# embeddings together and pushes different samples apart in projection space.
 #
 # Key difference from MAE: discriminative (not reconstructive)
 # Key difference from JEPA: global invariance (not local positional prediction)
@@ -13,7 +13,8 @@ name: contrastive
 # Mode: "temporal" (per-timestep overlap pairs) or "instance" (mean-pool, SimCLR-style)
 mode: instance
 
-# Masking parameters (same as MAE/JEPA for fair comparison)
+# Masking budget matches the core MAE/JEPA default; the two-view strategy is
+# objective-specific.
 mask_ratio: 0.5  # Experiment plan default (ablate over 0.3/0.5/0.75)
 
 # Projection head parameters

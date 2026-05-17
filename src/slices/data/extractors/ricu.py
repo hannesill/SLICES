@@ -6,7 +6,8 @@ across multiple ICU datasets (MIMIC-III/IV, eICU, HiRID, AUMCdb, SICdb).
 Usage:
     # Step 1: Run R extraction
     Rscript scripts/preprocessing/extract_with_ricu.R \
-        --dataset miiv --output_dir data/ricu_output/miiv
+        --dataset miiv --output_dir data/ricu_output/miiv \
+        --raw_export_horizon_hours 48
 
     # Step 2: Run Python processing
     uv run python scripts/preprocessing/extract_ricu.py \
@@ -28,6 +29,7 @@ from rich.progress import (
 
 from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
+from slices.data.labels import LabelBuilderFactory, LabelConfig
 
 from .base import BaseExtractor, ExtractorConfig
 
@@ -73,6 +75,7 @@ class RicuExtractor(BaseExtractor):
 
         self._stays_cache: Optional[pl.DataFrame] = None
         self._metadata: Optional[dict] = None
+        self._task_configs_cache: Optional[List[LabelConfig]] = None
 
         if not self.parquet_root.exists():
             raise ValueError(f"RICU output directory not found: {self.parquet_root}")
@@ -83,6 +86,112 @@ class RicuExtractor(BaseExtractor):
             raise ValueError(f"ricu_metadata.yaml not found in {self.parquet_root}")
         with open(metadata_path) as f:
             self._metadata = yaml.safe_load(f)
+        self._validate_ricu_horizon()
+
+    def _get_raw_export_horizon_hours(self) -> int:
+        """Return the upstream RICU export horizon in hours.
+
+        New exports should store ``raw_export_horizon_hours`` explicitly. Older
+        exports only have ``seq_length_hours``; keep supporting that field for
+        backward compatibility.
+        """
+        raw_horizon = self._metadata.get("raw_export_horizon_hours")
+        if raw_horizon is None:
+            raw_horizon = self._metadata.get("seq_length_hours")
+
+        if raw_horizon is None:
+            raise ValueError(
+                "ricu_metadata.yaml is missing both raw_export_horizon_hours and "
+                "seq_length_hours; cannot validate the export horizon safely."
+            )
+
+        return int(raw_horizon)
+
+    def _get_task_configs_cached(self) -> List[LabelConfig]:
+        """Load and cache task configs for horizon validation and metadata."""
+        if self._task_configs_cache is None:
+            self._task_configs_cache = self._load_task_configs(self.config.tasks)
+        return self._task_configs_cache
+
+    def _get_required_raw_export_horizon_hours(
+        self, task_configs: Optional[List[LabelConfig]] = None
+    ) -> int:
+        """Return the minimum upstream raw export horizon required by this extraction."""
+        required_horizon = int(self.config.seq_length_hours)
+        for task_config in task_configs or self._get_task_configs_cached():
+            builder = LabelBuilderFactory.create(task_config)
+            required_horizon = max(
+                required_horizon,
+                int(builder.required_raw_timeseries_horizon_hours()),
+            )
+
+        return required_horizon
+
+    def _validate_ricu_horizon(self) -> None:
+        """Validate that the Python extraction horizon does not exceed the R export."""
+        raw_export_horizon = self._get_raw_export_horizon_hours()
+        if self.config.seq_length_hours > raw_export_horizon:
+            raise ValueError(
+                "Python extraction requests seq_length_hours="
+                f"{self.config.seq_length_hours}, but the upstream RICU export only "
+                f"contains {raw_export_horizon} hours. Re-run the R export with a longer "
+                "horizon or lower the Python extraction seq_length_hours."
+            )
+
+        task_requirements = []
+        for task_config in self._get_task_configs_cached():
+            builder = LabelBuilderFactory.create(task_config)
+            required_horizon = int(builder.required_raw_timeseries_horizon_hours())
+            if required_horizon > self.config.seq_length_hours:
+                task_requirements.append((task_config.task_name, required_horizon))
+
+        required_raw_export_horizon = self._get_required_raw_export_horizon_hours(
+            self._get_task_configs_cached()
+        )
+        if raw_export_horizon < required_raw_export_horizon:
+            requirement_str = ", ".join(
+                f"{task_name}={required_horizon}h"
+                for task_name, required_horizon in task_requirements
+            )
+            raise ValueError(
+                "Active task labels require a longer upstream raw timeseries horizon than "
+                f"the current RICU export provides. Upstream export: {raw_export_horizon}h; "
+                f"required: {required_raw_export_horizon}h. "
+                f"Task-specific requirements: {requirement_str}. "
+                "Keep the model input at 24h if desired, but re-run the R export with a "
+                "longer raw horizon so forward-looking labels can be built safely."
+            )
+
+    def _iter_upstream_files(self) -> List[Path]:
+        """Return the upstream files that define the extraction contents."""
+        files: List[Path] = []
+        for path in sorted(self.parquet_root.glob("ricu_*")):
+            if path.is_file():
+                files.append(path)
+            elif path.is_dir():
+                files.extend(sorted(p for p in path.rglob("*") if p.is_file()))
+        return files
+
+    def _get_upstream_source_signature(self) -> dict:
+        """Fingerprint upstream RICU inputs for safe resume behavior."""
+        files = []
+        for path in self._iter_upstream_files():
+            stat = path.stat()
+            files.append(
+                {
+                    "path": str(path.relative_to(self.parquet_root)),
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+            )
+
+        return {
+            "dataset": self._metadata.get("dataset"),
+            "ricu_seq_length_hours": int(self._metadata["seq_length_hours"]),
+            "ricu_raw_export_horizon_hours": self._get_raw_export_horizon_hours(),
+            "feature_blocklist": sorted(FEATURE_BLOCKLIST),
+            "files": files,
+        }
 
     def _get_dataset_name(self) -> str:
         return self._metadata["dataset"]
@@ -161,6 +270,54 @@ class RicuExtractor(BaseExtractor):
         df = pl.scan_parquet(path).filter(pl.col("stay_id").is_in(stay_ids)).collect()
         if source_name == "timeseries":
             df = self._encode_categorical_columns(df)
+        elif source_name == "mortality_info":
+            df = self._migrate_mortality_schema(df)
+        return df
+
+    @staticmethod
+    def _migrate_mortality_schema(df: pl.DataFrame) -> pl.DataFrame:
+        """Migrate legacy mortality parquet (date_of_death only) to new schema.
+
+        If the parquet has the old single-column format, infer precision from
+        the Polars dtype so the label builder can use precision-aware logic.
+        """
+        if "death_time_precision" in df.columns:
+            return df  # already new schema
+
+        if "date_of_death" not in df.columns:
+            return df
+
+        dod_dtype = df["date_of_death"].dtype
+        if dod_dtype == pl.Date:
+            # Date-only column — treat as date precision
+            df = df.with_columns(
+                pl.lit(None).cast(pl.Datetime("us", "UTC")).alias("death_time"),
+                pl.col("date_of_death").cast(pl.Date).alias("death_date"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("date"))
+                .otherwise(pl.lit(None))
+                .alias("death_time_precision"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("legacy"))
+                .otherwise(pl.lit(None))
+                .alias("death_source"),
+            )
+        else:
+            # Legacy datetimes are ambiguous: older exports may have stored
+            # date-only values as midnight-cast timestamps. Treat them as date
+            # precision unless explicit precision metadata is present.
+            df = df.with_columns(
+                pl.lit(None).cast(pl.Datetime("us", "UTC")).alias("death_time"),
+                pl.col("date_of_death").cast(pl.Date).alias("death_date"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("date"))
+                .otherwise(pl.lit(None))
+                .alias("death_time_precision"),
+                pl.when(pl.col("date_of_death").is_not_null())
+                .then(pl.lit("legacy"))
+                .otherwise(pl.lit(None))
+                .alias("death_source"),
+            )
         return df
 
     def run(self) -> None:
@@ -199,9 +356,23 @@ class RicuExtractor(BaseExtractor):
             stays = self.extract_stays()
             progress.update(task, completed=True)
 
+        # Filter by valid/minimum stay length. RICU exports can include source
+        # records with missing or negative discharge-derived LOS; those rows
+        # cannot enter the benchmark cohort, so exclude them before validating
+        # the extracted stay universe.
+        invalid_los = stays.filter((pl.col("los_days").is_null()) | (pl.col("los_days") < 0))
+        if len(invalid_los) > 0:
+            console.print(
+                f"[yellow]Warning: Excluding {len(invalid_los)} stays with invalid LOS "
+                "before benchmark cohort filtering.[/yellow]"
+            )
+        stays_with_valid_los = stays.filter(
+            pl.col("los_days").is_not_null() & (pl.col("los_days") >= 0)
+        )
+
         # Filter by minimum stay length
         min_los_days = self.config.min_stay_hours / 24.0
-        stays_filtered = stays.filter(pl.col("los_days") >= min_los_days)
+        stays_filtered = stays_with_valid_los.filter(pl.col("los_days") >= min_los_days)
 
         console.print(f"Found {len(stays)} ICU stays")
         console.print(
@@ -259,10 +430,31 @@ class RicuExtractor(BaseExtractor):
             )
             progress.update(task, completed=True)
 
+        obs_counts = dense_timeseries.select(
+            "stay_id",
+            pl.col("mask").list.eval(pl.element().list.sum()).list.sum().alias("_n_observed"),
+        )
+        empty_stay_ids = obs_counts.filter(pl.col("_n_observed") == 0)["stay_id"].to_list()
+        if empty_stay_ids:
+            console.print(
+                f"[yellow]Excluding {len(empty_stay_ids)} stays with zero observations "
+                "in the model input window.[/yellow]"
+            )
+            dense_timeseries = dense_timeseries.filter(~pl.col("stay_id").is_in(empty_stay_ids))
+            stays_filtered = stays_filtered.filter(~pl.col("stay_id").is_in(empty_stay_ids))
+            self._stays_cache = stays_filtered
+            stay_ids = stays_filtered["stay_id"].to_list()
+
+            if not stay_ids:
+                console.print(
+                    "[red]Error: No stays remaining after zero-observation filtering![/red]"
+                )
+                return
+
         # -----------------------------------------------------------------
         # Step 3: Extract labels
         # -----------------------------------------------------------------
-        task_configs = self._load_task_configs(self.config.tasks)
+        task_configs = self._get_task_configs_cached()
         task_names = [tc.task_name for tc in task_configs]
 
         if task_configs:
@@ -317,6 +509,8 @@ class RicuExtractor(BaseExtractor):
 
             self._validate_labels(labels, stay_ids)
 
+            label_manifest = self._build_label_manifest(task_configs)
+
             metadata = {
                 "dataset": self._get_dataset_name(),
                 "feature_set": self.config.feature_set,
@@ -324,10 +518,20 @@ class RicuExtractor(BaseExtractor):
                 "feature_names": feature_names,
                 "n_features": len(feature_names),
                 "seq_length_hours": self.config.seq_length_hours,
+                "input_seq_length_hours": self.config.seq_length_hours,
                 "label_horizon_hours": LABEL_HORIZON_HOURS,
+                "raw_export_horizon_hours": self._get_raw_export_horizon_hours(),
+                "required_raw_export_horizon_hours": self._get_required_raw_export_horizon_hours(
+                    task_configs
+                ),
                 "min_stay_hours": self.config.min_stay_hours,
                 "task_names": task_names,
                 "n_stays": len(stays_filtered),
+                "zero_observation_stays_excluded": True,
+                "n_zero_observation_stays_excluded": len(empty_stay_ids),
+                "label_manifest": label_manifest,
+                "label_quality_stats": self._label_quality_stats,
+                "upstream_source_signature": self._get_upstream_source_signature(),
                 "extraction_config": {
                     "parquet_root": str(self.parquet_root),
                     "output_dir": str(self.output_dir),

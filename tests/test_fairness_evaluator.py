@@ -13,7 +13,8 @@ Tests cover:
 import polars as pl
 import pytest
 import torch
-from slices.eval.fairness_evaluator import FairnessEvaluator
+
+from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
 
 
 def make_static_df(
@@ -122,6 +123,68 @@ class TestWorstGroupAUROC:
         valid_aurocs = [v for v in per_group.values() if v == v]  # Filter NaN
         assert worst == pytest.approx(min(valid_aurocs))
 
+    def test_one_class_group_makes_worst_group_discrimination_non_comparable(self):
+        """A size-valid one-class group should not be omitted from worst-group accounting."""
+        static_df = make_static_df(
+            n=6,
+            genders=["M", "M", "M", "F", "F", "F"],
+            ages=[50.0] * 6,
+        )
+        stay_ids = list(range(6))
+        labels = torch.tensor([1.0, 1.0, 1.0, 0.0, 1.0, 0.0])
+        predictions = torch.tensor([0.9, 0.8, 0.7, 0.2, 0.8, 0.3])
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=1,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+        gender_report = report["gender"]
+
+        assert gender_report["n_valid_groups"] == 2
+        assert gender_report["n_metric_valid_groups"] == 1
+        assert gender_report["n_single_class_groups"] == 1
+        assert gender_report["per_group_auroc"]["M"] != gender_report["per_group_auroc"]["M"]
+        assert gender_report["worst_group_auroc"] != gender_report["worst_group_auroc"]
+        assert gender_report["worst_group_auprc"] != gender_report["worst_group_auprc"]
+        assert gender_report["auroc_gap"] != gender_report["auroc_gap"]
+        assert gender_report["auprc_gap"] != gender_report["auprc_gap"]
+
+
+class TestRegressionFairness:
+    """Tests for regression-task fairness metrics."""
+
+    def test_singleton_prediction_dimension_is_squeezed(self):
+        """Regression fairness should treat (N, 1) predictions as samplewise outputs."""
+        static_df = make_static_df(
+            n=4,
+            genders=["M", "M", "F", "F"],
+            ages=[50.0, 50.0, 50.0, 50.0],
+        )
+        stay_ids = [0, 1, 2, 3]
+        labels = torch.tensor([0.0, 1.0, 0.0, 1.0])
+        predictions = torch.tensor([[0.0], [1.5], [0.0], [0.5]])
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=1,
+            task_type="regression",
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        per_group_mse = report["gender"]["per_group_mse"]
+        per_group_mae = report["gender"]["per_group_mae"]
+        assert per_group_mse["M"] == pytest.approx(0.125)
+        assert per_group_mse["F"] == pytest.approx(0.125)
+        assert per_group_mae["M"] == pytest.approx(0.25)
+        assert per_group_mae["F"] == pytest.approx(0.25)
+        assert report["gender"]["worst_group_mse"] == pytest.approx(0.125)
+        assert report["gender"]["worst_group_mae"] == pytest.approx(0.25)
+        assert report["gender"]["mse_gap"] == pytest.approx(0.0)
+        assert report["gender"]["mae_gap"] == pytest.approx(0.0)
+
 
 class TestAgeBinning:
     """Tests for age binning."""
@@ -155,6 +218,24 @@ class TestAgeBinning:
         assert groups[5].item() == 2  # 79 -> 65-79
         assert groups[6].item() == 3  # 80 -> 80+
 
+    def test_null_and_nan_ages_are_unknown(self):
+        """Null and numeric NaN ages should not fall into the youngest bin."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "patient_id": [1, 2, 3],
+                "gender": ["M", "F", "M"],
+                "age": [None, float("nan"), 30.0],
+                "los_days": [5.0, 5.0, 5.0],
+            }
+        )
+        evaluator = FairnessEvaluator(static_df, protected_attributes=["age_group"])
+
+        group_ids, group_names, _ = evaluator._encode_attribute([1, 2, 3], "age_group")
+
+        assert group_ids.tolist() == [-1, -1, 0]
+        assert group_names[-1] == "unknown"
+
 
 class TestAttributeAutoDetection:
     """Tests for attribute auto-detection."""
@@ -186,6 +267,26 @@ class TestAttributeAutoDetection:
         )
         evaluator = FairnessEvaluator(static_df, protected_attributes=["gender", "race"])
         assert evaluator._available_attributes == []
+
+    def test_unknown_gender_values_are_excluded(self):
+        """String unknown gender labels should not form a fairness subgroup."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "patient_id": [1, 2, 3, 4],
+                "gender": ["M", "Unknown", "F", "not specified"],
+                "age": [50.0, 50.0, 50.0, 50.0],
+                "los_days": [5.0, 5.0, 5.0, 5.0],
+            }
+        )
+        evaluator = FairnessEvaluator(
+            static_df, protected_attributes=["gender"], min_subgroup_size=1
+        )
+
+        group_ids, group_names, _ = evaluator._encode_attribute([1, 2, 3, 4], "gender")
+
+        assert group_ids.tolist().count(-1) == 2
+        assert set(group_names.values()) == {"M", "F", "unknown"}
 
 
 class TestMinSubgroupSize:
@@ -232,6 +333,49 @@ class TestMinSubgroupSize:
         assert "gender" in report
         assert len(report["gender"]["per_group_auroc"]) == 2
 
+    def test_threshold_counts_unique_patients_not_stays(self):
+        """Min subgroup size should be enforced on patients, not repeated stays."""
+        rows = []
+        stay_id = 0
+        for patient_id in range(40):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"m-{patient_id}",
+                        "gender": "M",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+        for patient_id in range(55):
+            rows.append(
+                {
+                    "stay_id": stay_id,
+                    "patient_id": f"f-{patient_id}",
+                    "gender": "F",
+                    "age": 50.0,
+                    "los_days": 5.0,
+                }
+            )
+            stay_id += 1
+
+        static_df = pl.DataFrame(rows)
+        predictions = torch.tensor([0.8 if i % 2 == 0 else 0.2 for i in range(len(rows))])
+        labels = torch.tensor([1.0 if i % 2 == 0 else 0.0 for i in range(len(rows))])
+        stay_ids = static_df["stay_id"].to_list()
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=50,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        # Male has 80 stays but only 40 patients, so the attribute should be skipped.
+        assert "gender" not in report
+
 
 class TestEvaluateStructure:
     """Tests for evaluate() return structure."""
@@ -260,6 +404,7 @@ class TestEvaluateStructure:
         assert "equalized_odds_diff" in gender_report
         assert "disparate_impact_ratio" in gender_report
         assert "n_valid_groups" in gender_report
+        assert "n_metric_valid_groups" in gender_report
         assert "group_sizes" in gender_report
 
     def test_multiple_attributes(self):
@@ -293,6 +438,83 @@ class TestEvaluateStructure:
         assert "gender" in report
         assert "age_group" in report
 
+    def test_group_sizes_report_patients_and_samples_separately(self):
+        """The report should expose patient counts separately from stay counts."""
+        rows = []
+        stay_id = 0
+        for patient_id in range(55):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"m-{patient_id}",
+                        "gender": "M",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+        for patient_id in range(55):
+            for _ in range(2):
+                rows.append(
+                    {
+                        "stay_id": stay_id,
+                        "patient_id": f"f-{patient_id}",
+                        "gender": "F",
+                        "age": 50.0,
+                        "los_days": 5.0,
+                    }
+                )
+                stay_id += 1
+
+        static_df = pl.DataFrame(rows)
+        predictions = torch.tensor([0.8 if i % 2 == 0 else 0.2 for i in range(len(rows))])
+        labels = torch.tensor([1.0 if i % 2 == 0 else 0.0 for i in range(len(rows))])
+        stay_ids = static_df["stay_id"].to_list()
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["gender"],
+            min_subgroup_size=50,
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        assert report["gender"]["group_sizes"]["M"] == 55
+        assert report["gender"]["group_sample_sizes"]["M"] == 110
+
+    def test_race_uses_canonical_miiv_only_schema_for_combined(self):
+        """Combined race fairness should only include canonical MIMIC race bins."""
+        static_df = pl.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "patient_id": ["a", "b", "c", "d"],
+                "gender": ["M", "F", "M", "F"],
+                "age": [50.0, 60.0, 55.0, 65.0],
+                "race": [
+                    "WHITE",
+                    "BLACK/AFRICAN AMERICAN",
+                    "HISPANIC/LATINO",
+                    "ASIAN",
+                ],
+                "source_dataset": ["miiv", "miiv", "eicu", "eicu"],
+                "los_days": [5.0, 5.0, 5.0, 5.0],
+            }
+        )
+        predictions = torch.tensor([0.9, 0.1, 0.8, 0.2])
+        labels = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        stay_ids = [1, 2, 3, 4]
+
+        evaluator = FairnessEvaluator(
+            static_df,
+            protected_attributes=["race"],
+            min_subgroup_size=1,
+            dataset_name="combined",
+        )
+        report = evaluator.evaluate(predictions, labels, stay_ids)
+
+        assert "race" in report
+        assert set(report["race"]["per_group_auroc"]) == {"White", "Black"}
+
 
 class TestPrintReport:
     """Tests for print_report()."""
@@ -315,3 +537,24 @@ class TestPrintReport:
         captured = capsys.readouterr()
         assert "Fairness Evaluation Report" in captured.out
         assert "gender" in captured.out
+
+
+class TestFlattenFairnessReport:
+    """Tests for fairness report flattening."""
+
+    def test_flattens_nested_metrics_for_logging(self):
+        report = {
+            "gender": {
+                "worst_group_auroc": 0.71,
+                "per_group_auroc": {"M": 0.83, "F": 0.71},
+                "group_sizes": {"M": 55, "F": 60},
+            }
+        }
+
+        flat = flatten_fairness_report(report)
+
+        assert flat["fairness/gender/worst_group_auroc"] == pytest.approx(0.71)
+        assert flat["fairness/gender/per_group_auroc/M"] == pytest.approx(0.83)
+        assert flat["fairness/gender/per_group_auroc/F"] == pytest.approx(0.71)
+        assert flat["fairness/gender/group_sizes/M"] == 55
+        assert flat["fairness/gender/group_sizes/F"] == 60

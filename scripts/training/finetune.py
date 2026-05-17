@@ -28,18 +28,86 @@ Example usage:
         training.unfreeze_epoch=5
 """
 
+from pathlib import Path
+
 import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
+
 from slices.data.datamodule import ICUDataModule
+from slices.eval.fairness_metadata import (
+    EVAL_ARTIFACT_PATH_KEY,
+    EVAL_ARTIFACT_SHA256_KEY,
+    file_sha256,
+)
 from slices.training import FineTuneModule
 from slices.training.utils import (
+    WandbEntityNotFoundError,
+    report_and_validate_train_label_support,
+    resolve_balanced_class_weights,
     run_fairness_evaluation,
     setup_finetune_callbacks,
     setup_wandb_logger,
+    train_label_support_summary,
     validate_data_prerequisites,
 )
+
+
+def _evaluated_artifact_metadata(
+    cfg: DictConfig,
+    eval_checkpoint_source: str,
+    best_ckpt: str | None,
+) -> dict[str, str]:
+    """Return path and digest for the artifact used to produce test metrics."""
+    if eval_checkpoint_source == "best" and best_ckpt:
+        artifact_path = Path(best_ckpt)
+    elif eval_checkpoint_source == "final":
+        artifact_path = Path(cfg.get("checkpoint_dir", "checkpoints")) / "last.ckpt"
+    else:
+        return {EVAL_ARTIFACT_PATH_KEY: "", EVAL_ARTIFACT_SHA256_KEY: ""}
+
+    artifact_sha256 = file_sha256(artifact_path) if artifact_path.exists() else ""
+    return {
+        EVAL_ARTIFACT_PATH_KEY: str(artifact_path),
+        EVAL_ARTIFACT_SHA256_KEY: artifact_sha256,
+    }
+
+
+def _detect_paradigm_from_checkpoint(path: str, *, full_checkpoint: bool) -> str | None:
+    """Infer the SSL paradigm recorded in an encoder or Lightning checkpoint."""
+    checkpoint = torch.load(
+        path,
+        map_location="cpu",
+        weights_only=not full_checkpoint,
+    )
+
+    if not isinstance(checkpoint, dict):
+        return None
+
+    if "ssl_name" in checkpoint:
+        return checkpoint["ssl_name"]
+
+    if not full_checkpoint:
+        return None
+
+    hyper_parameters = checkpoint.get("hyper_parameters") or {}
+    config = hyper_parameters.get("config") or {}
+    if isinstance(config, DictConfig):
+        config = OmegaConf.to_container(config, resolve=True)
+
+    if not isinstance(config, dict):
+        return None
+
+    ssl_config = config.get("ssl") or {}
+    if isinstance(ssl_config, DictConfig):
+        ssl_config = OmegaConf.to_container(ssl_config, resolve=True)
+
+    if isinstance(ssl_config, dict) and ssl_config.get("name") is not None:
+        return str(ssl_config["name"])
+
+    paradigm = config.get("paradigm")
+    return str(paradigm) if paradigm is not None else None
 
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="finetune")
@@ -52,27 +120,45 @@ def main(cfg: DictConfig) -> None:
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
 
-    # Validate checkpoint
+    # Validate checkpoint source.
+    if cfg.checkpoint is not None and cfg.pretrain_checkpoint is not None:
+        raise ValueError(
+            "Provide exactly one checkpoint source: use 'checkpoint' for encoder.pt "
+            "or 'pretrain_checkpoint' for a full Lightning pretrain .ckpt, not both."
+        )
     if cfg.checkpoint is None and cfg.pretrain_checkpoint is None:
         raise ValueError(
             "Must provide either 'checkpoint' (encoder.pt) or "
             "'pretrain_checkpoint' (full .ckpt file)"
         )
 
-    # Auto-detect paradigm from encoder checkpoint metadata
+    # Auto-detect paradigm from checkpoint metadata
+    detected_paradigm = None
     if cfg.checkpoint is not None:
-        ckpt = torch.load(cfg.checkpoint, map_location="cpu", weights_only=True)
-        if isinstance(ckpt, dict) and "ssl_name" in ckpt:
-            detected = ckpt["ssl_name"]
-            if cfg.paradigm != detected:
-                print(f"\n  Auto-detected paradigm from checkpoint: {detected}")
-                OmegaConf.set_struct(cfg, False)
-                cfg.paradigm = detected
-                OmegaConf.set_struct(cfg, True)
-        del ckpt
+        detected_paradigm = _detect_paradigm_from_checkpoint(
+            cfg.checkpoint,
+            full_checkpoint=False,
+        )
+    elif cfg.pretrain_checkpoint is not None:
+        detected_paradigm = _detect_paradigm_from_checkpoint(
+            cfg.pretrain_checkpoint,
+            full_checkpoint=True,
+        )
+
+    if detected_paradigm and cfg.paradigm != detected_paradigm:
+        print(f"\n  Auto-detected paradigm from checkpoint: {detected_paradigm}")
+        OmegaConf.set_struct(cfg, False)
+        cfg.paradigm = detected_paradigm
+        OmegaConf.set_struct(cfg, True)
 
     # Validate data prerequisites
-    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
+    task_name = cfg.task.get("task_name", "mortality_24h")
+    validate_data_prerequisites(
+        cfg.data.processed_dir,
+        cfg.dataset,
+        task_names=[task_name],
+        task_configs=[cfg.task],
+    )
 
     # Set random seed for reproducibility
     pl.seed_everything(cfg.seed, workers=True)
@@ -83,8 +169,6 @@ def main(cfg: DictConfig) -> None:
     print("\n" + "=" * 80)
     print("1. Setting up DataModule")
     print("=" * 80)
-
-    task_name = cfg.task.get("task_name", "mortality_24h")
 
     datamodule = ICUDataModule(
         processed_dir=cfg.data.processed_dir,
@@ -114,18 +198,36 @@ def main(cfg: DictConfig) -> None:
     )
 
     label_stats = datamodule.get_label_statistics()
+    train_label_stats = datamodule.get_train_label_statistics()
+    task_type = cfg.task.get("task_type", "binary")
     if task_name in label_stats:
         stats = label_stats[task_name]
         print(f"\n Label distribution for '{task_name}':")
         print(f"  - Total samples: {stats['total']}")
-        print(
-            f"  - Positive: {stats.get('positive', 'N/A')} "
-            f"({stats.get('prevalence', 0)*100:.1f}%)"
-        )
-        print(
-            f"  - Negative: {stats.get('negative', 'N/A')} "
-            f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
-        )
+        if stats.get("task_type") == "regression":
+            print(f"  - Mean: {stats.get('mean', 0.0):.4f}")
+            print(f"  - Std:  {stats.get('std', 0.0):.4f}")
+            print(f"  - Min:  {stats.get('min', 0.0):.4f}")
+            print(f"  - Max:  {stats.get('max', 0.0):.4f}")
+        else:
+            print(
+                f"  - Positive: {stats.get('positive', 'N/A')} "
+                f"({stats.get('prevalence', 0)*100:.1f}%)"
+            )
+            print(
+                f"  - Negative: {stats.get('negative', 'N/A')} "
+                f"({(1 - stats.get('prevalence', 0))*100:.1f}%)"
+            )
+
+    train_support_stats = report_and_validate_train_label_support(
+        datamodule=datamodule,
+        task_name=task_name,
+        task_type=task_type,
+        dataset=cfg.dataset,
+        seed=cfg.seed,
+        label_fraction=cfg.get("label_fraction", 1.0),
+        min_train_positives=cfg.get("min_train_positives", 3),
+    )
 
     # =========================================================================
     # 2. Create Finetune Module
@@ -140,21 +242,24 @@ def main(cfg: DictConfig) -> None:
 
     # Resolve "balanced" class weights from label distribution
     if cfg.training.get("class_weight") == "balanced":
-        if task_name in label_stats:
-            stats = label_stats[task_name]
-            n_pos = stats.get("positive", 0)
-            n_neg = stats.get("negative", 0)
-            n_total = n_pos + n_neg
-            if n_pos == 0 or n_neg == 0:
-                raise ValueError(
-                    f"Cannot compute balanced class weights for '{task_name}': "
-                    f"{n_pos} positive, {n_neg} negative. Check label extraction."
-                )
-            raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
-            cfg.training.class_weight = [w**0.5 for w in raw]
+        resolved_class_weight = resolve_balanced_class_weights(
+            task_name=task_name,
+            task_type=task_type,
+            train_label_stats=train_label_stats,
+        )
+        if resolved_class_weight is not None:
+            cfg.training.class_weight = resolved_class_weight
+            n_total = int(train_label_stats[task_name]["total"])
+            print(f"\n Training-split labels used for class weighting: {n_total}")
             print(f"\n  sqrt(balanced) class weights: {cfg.training.class_weight}")
         else:
-            print(f"\n  Warning: No label stats for '{task_name}', skipping class weighting")
+            if task_type == "regression":
+                print(f"\n  class_weight='balanced' ignored for regression task '{task_name}'")
+            else:
+                print(
+                    f"\n  Warning: No train-split label stats for '{task_name}', "
+                    "skipping class weighting"
+                )
             cfg.training.class_weight = None
 
     OmegaConf.set_struct(cfg, True)
@@ -186,7 +291,13 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     callbacks = setup_finetune_callbacks(cfg, checkpoint_prefix="finetune")
-    logger = setup_wandb_logger(cfg)
+    try:
+        logger = setup_wandb_logger(cfg)
+    except WandbEntityNotFoundError as exc:
+        print(f"\nError: {exc}")
+        raise SystemExit(1) from exc
+    if logger:
+        logger.experiment.summary.update(train_label_support_summary(train_support_stats))
 
     trainer = pl.Trainer(
         max_epochs=cfg.training.max_epochs,
@@ -220,7 +331,10 @@ def main(cfg: DictConfig) -> None:
     print("4. Starting Training")
     print("=" * 80)
 
-    trainer.fit(model, datamodule=datamodule)
+    ckpt_path = cfg.get("ckpt_path", None)
+    if ckpt_path:
+        print(f"  Resuming trainer state from: {ckpt_path}")
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # =========================================================================
     # 5. Test
@@ -230,6 +344,9 @@ def main(cfg: DictConfig) -> None:
     print("=" * 80)
 
     best_ckpt = callbacks[0].best_model_path if hasattr(callbacks[0], "best_model_path") else None
+    eval_checkpoint_source = "none"
+    best_ckpt_load_ok = False
+    best_ckpt_error = None
 
     if best_ckpt:
         print(f"\n Best checkpoint: {best_ckpt}")
@@ -237,11 +354,37 @@ def main(cfg: DictConfig) -> None:
             checkpoint = torch.load(best_ckpt, map_location="cpu", weights_only=False)
             model.load_state_dict(checkpoint["state_dict"])
             print("  - Loaded best checkpoint weights")
+            eval_checkpoint_source = "best"
+            best_ckpt_load_ok = True
         except Exception as e:
-            print(f"  - Warning: Could not load checkpoint ({e}), using final model")
+            best_ckpt_error = str(e)
+            allow_fallback = cfg.training.get("allow_best_ckpt_fallback", False)
+            if allow_fallback:
+                print(
+                    f"  - WARNING: Could not load best checkpoint ({e}),"
+                    " falling back to final model"
+                )
+                eval_checkpoint_source = "final"
+            else:
+                # Log failure to W&B before crashing
+                if logger:
+                    logger.experiment.summary.update(
+                        {
+                            "_eval_checkpoint_source": "failed",
+                            "_best_ckpt_path": best_ckpt,
+                            "_best_ckpt_load_ok": False,
+                            "_best_ckpt_error": best_ckpt_error,
+                        }
+                    )
+                    logger.experiment.finish()
+                raise RuntimeError(
+                    f"Best checkpoint load failed: {e}. "
+                    f"Set training.allow_best_ckpt_fallback=true to use final model instead."
+                ) from e
         test_results = trainer.test(model, datamodule=datamodule)
     else:
         print("\n  No best checkpoint found, testing with final model")
+        eval_checkpoint_source = "final"
         test_results = trainer.test(model, datamodule=datamodule)
 
     # =========================================================================
@@ -267,6 +410,15 @@ def main(cfg: DictConfig) -> None:
 
         if logger:
             logger.experiment.summary.update(test_results[0])
+            logger.experiment.summary.update(
+                {
+                    "_eval_checkpoint_source": eval_checkpoint_source,
+                    **_evaluated_artifact_metadata(cfg, eval_checkpoint_source, best_ckpt),
+                    "_best_ckpt_path": best_ckpt or "",
+                    "_best_ckpt_load_ok": best_ckpt_load_ok,
+                    "_best_ckpt_error": best_ckpt_error or "",
+                }
+            )
 
     print(f"\n Output directory: {cfg.output_dir}")
     print(f"  - Checkpoints: {cfg.get('checkpoint_dir', 'checkpoints')}")

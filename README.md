@@ -21,11 +21,15 @@
 
 How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
 
+The benchmark includes controlled SSL objectives, supervised training from scratch,
+classical ICU baselines, and targeted extensions for temporal contrastive learning
+and model-capacity studies.
+
 ### The Comparison Triangle
 
 | Comparison | What Varies | What It Tests |
 |---|---|---|
-| **MAE vs JEPA** | Input-space vs latent-space prediction | Same masking, same encoder input |
+| **MAE vs JEPA** | Input-space vs latent-space prediction | Same encoder input, tokenization, and mask budget |
 | **JEPA vs Contrastive** | Local positional prediction vs global invariance | Both operate in latent space |
 | **MAE vs Contrastive** | Reconstruction vs discrimination | Opposite ends of the SSL spectrum |
 
@@ -37,7 +41,10 @@ Fair comparison of SSL objectives for clinical time series is currently impossib
 
 ## SSL Paradigms
 
-All observation-level objectives share the same `ObservationTransformerEncoder` (one token per observed measurement) and the same masking logic (`masking.py`), differing only in what they predict and how they compute loss:
+The controlled SSL objectives share the same timestep-level obs-aware Transformer
+encoder, obs-aware tokenization, and default mask budget. The masking strategy is
+reported as part of each objective because JEPA uses block masking to avoid the
+random-mask interpolation failure observed during development.
 
 | Objective | Predicts | Target | Loss |
 |---|---|---|---|
@@ -45,15 +52,17 @@ All observation-level objectives share the same `ObservationTransformerEncoder` 
 | **JEPA** | Latent representations at masked positions | EMA target encoder representations | MSE / Cosine |
 | **Contrastive** | Global embedding similarity across views | Positive pair agreement (NT-Xent) | Cross-entropy |
 
-**SMART** (NeurIPS 2024) is also included in the codebase as a sanity check and to demonstrate the framework's extensibility — it uses its own MART encoder and element-wise masking, so it is not part of the controlled thesis experiments.
+**TS2Vec** is included as a temporal-contrastive extension. **SMART** (NeurIPS
+2024) remains an external reference because it swaps in its own MART encoder and
+element-wise masking, so it is not part of the controlled comparison.
 
 ## Pipeline
 
 ```
 RICU (R) ──→ Parquet ──→ ICUDataset ──→ SSL Pretraining ──→ Downstream Finetuning
-  hourly-binned         dense tensors     MAE / JEPA /       mortality, LOS,
-  feature extraction    + obs masks       Contrastive          AKI
-  across datasets
+  hourly-binned         dense tensors     MAE / JEPA /       mortality, mortality_24h,
+  feature extraction    + obs masks       Contrastive          mortality_hospital,
+  across datasets                                            los_remaining, aki_kdigo
 ```
 
 1. **Extraction**: RICU (R package) harmonizes raw ICU data (MIMIC-IV, eICU) into hourly-binned parquet files
@@ -90,16 +99,26 @@ uv run python -c "from slices.models.pretraining import JEPAObjective, Contrasti
 # R extraction (once per dataset)
 Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
 
-# Python processing
+# Python processing + splits/normalization
+uv run python scripts/preprocessing/build_processed_data.py --datasets miiv
+
+# Full benchmark rebuild from existing RICU outputs
+uv run python scripts/preprocessing/build_processed_data.py --datasets miiv eicu --combined
+```
+
+The wrapper calls the lower-level scripts below. Use them directly when you need
+to rerun only one stage:
+
+```bash
 uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
 
-# Compute splits & normalization stats
 uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
 ```
 
 ### 2. Pretrain
 
-Pick SSL paradigm with `ssl=`. Training budget is matched across thesis paradigms:
+Pick SSL paradigm with `ssl=`. Training budget is matched across controlled
+paradigms:
 
 ```bash
 # MAE (masked autoencoder — reconstruction baseline, default)
@@ -111,7 +130,10 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
 # Contrastive (SimCLR-style with two masked views)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
 
-# SMART (sanity check / extensibility demo — not part of thesis experiments)
+# TS2Vec (temporal contrastive extension)
+uv run python scripts/training/pretrain.py dataset=miiv ssl=ts2vec
+
+# SMART (external reference with a different encoder/tokenization contract)
 uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
 ```
 
@@ -126,6 +148,33 @@ uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/.../e
 ```bash
 uv run python scripts/training/supervised.py dataset=miiv
 ```
+
+### 5. Validate
+
+```bash
+uv run pytest tests/ -q
+```
+
+## Benchmark Release Notes
+
+The public benchmark contract is the controlled comparison of MAE, JEPA, and
+contrastive SSL under the shared RICU pipeline, canonical obs-aware
+`TransformerEncoder`, fixed downstream tasks, and class-based experiment
+metadata. TS2Vec is a temporal-contrastive extension, and SMART is an external
+reference because it changes the encoder/tokenization contract.
+
+For thesis-scale reruns, use `scripts/internal/run_experiments.py` or
+`scripts/internal/launch_thesis_tmux.sh` with an explicit `--revision`,
+`--project`, and `--launch-commit`. Downstream SSL runs consume `encoder.pt`,
+the last encoder from the fixed pretraining schedule, not `encoder_best_val.pt`;
+downstream task evaluation still records the exact finetune checkpoint used for
+test metrics and post-hoc fairness.
+
+Final publication export expects post-hoc fairness metrics to be written first
+with `scripts/eval/evaluate_fairness.py`. The export emits per-seed rows,
+aggregate mean/std/min/max/95% CI columns, derived comparison views, and
+pairwise statistical tests. Do not use export or fairness escape hatches for
+final benchmark tables.
 
 ## Project Structure
 
@@ -143,15 +192,17 @@ SLICES/
 │   │   └── sliding_window.py       # Sliding window utilities
 │   ├── models/
 │   │   ├── encoders/               # Backbone architectures (factory pattern)
-│   │   │   ├── transformer.py      # Timestep-level Transformer
-│   │   │   ├── observation_transformer.py  # Observation-level Transformer
+│   │   │   ├── transformer.py      # Canonical timestep-level obs-aware Transformer
+│   │   │   ├── observation.py      # Observation-level Transformer (legacy/alternate)
+│   │   │   ├── gru_d.py            # GRU-D baseline encoder
 │   │   │   └── smart.py            # SMART/MART encoder
 │   │   ├── pretraining/            # SSL objectives (factory pattern)
 │   │   │   ├── masking.py          # Shared observation masking
 │   │   │   ├── mae.py              # Masked Autoencoder
 │   │   │   ├── jepa.py             # Joint-Embedding Predictive Architecture
 │   │   │   ├── contrastive.py      # SimCLR-style contrastive
-│   │   │   └── smart.py            # SMART (sanity check / extensibility demo)
+│   │   │   ├── ts2vec.py           # Temporal contrastive extension
+│   │   │   └── smart.py            # SMART (appendix-only external reference)
 │   │   ├── heads/                  # Task heads (MLP, Linear)
 │   │   └── common.py               # Shared utilities
 │   ├── training/
@@ -159,21 +210,23 @@ SLICES/
 │   │   ├── finetune_module.py      # FineTuneModule (Lightning)
 │   │   └── utils.py                # Shared helpers (optimizer, scheduler, callbacks, logger, validation)
 │   └── eval/
-│       ├── metrics.py              # AUROC, AUPRC, F1, MSE, etc.
-│       ├── fairness.py             # Per-group AUROC, demographic parity
+│       ├── metrics.py              # AUROC, AUPRC, Brier, ECE, MSE, MAE, etc.
+│       ├── fairness.py             # Fairness primitives (parity, odds, impact)
+│       ├── fairness_evaluator.py   # Patient-aware subgroup fairness reports
+│       ├── statistical.py          # Bootstrap, Wilcoxon, Bonferroni, Cohen's d
 │       └── imputation.py           # SSL reconstruction quality
 ├── configs/                        # Hydra configs
-│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/smart)
+│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/ts2vec/smart)
 │   ├── finetune.yaml
 │   ├── supervised.yaml
 │   ├── data/                       # Dataset configs
 │   ├── model/                      # Encoder configs
-│   ├── ssl/                        # SSL objective configs (mae, jepa, contrastive, smart)
+│   ├── ssl/                        # SSL objective configs (mae, jepa, contrastive, ts2vec, smart)
 │   └── tasks/                      # Downstream task definitions
 ├── scripts/                        # Entry point scripts
 │   ├── preprocessing/
 │   └── training/
-└── tests/                          # pytest test suite (940+ tests)
+└── tests/                          # pytest test suite
 ```
 
 ## Configuration
@@ -195,10 +248,12 @@ uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfi
 
 | Group | Options | Purpose |
 |---|---|---|
-| `ssl/` | `mae`, `jepa`, `contrastive`, `smart` | SSL objective hyperparameters |
-| `model/` | `transformer`, `observation_transformer`, `smart` | Encoder architecture |
+| `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` | SSL objective hyperparameters |
+| `model/` | `transformer`, `transformer_medium`, `transformer_large`, `observation_transformer`, `smart`, `gru_d`, `linear` | Encoder architecture |
 | `data/` | `ricu` | Dataset and paths |
-| `tasks/` | `mortality`, `los`, `aki`, ... | Downstream task definitions |
+| `tasks/` | `mortality`, `mortality_24h`, `mortality_hospital`, `los_remaining`, `aki_kdigo` | Downstream task definitions |
+| `protocol/` | `linear_probe`, `full_finetune` | Downstream evaluation protocol overrides |
+| `eval/` | `default` | Evaluation metric defaults |
 
 ## Data Format
 
@@ -206,8 +261,12 @@ Extracted ICU stays are stored as Parquet files:
 
 - `static.parquet` — Stay-level demographics and admission info
 - `timeseries.parquet` — Dense hourly-binned time-series with observation masks (T x D)
-- `labels.parquet` — Task labels (mortality, LOS, AKI, etc.)
+- `labels.parquet` — Configured task labels (for example `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining`, and optional `mortality`)
 - `metadata.yaml` — Feature names, sequence length, task definitions
+
+For task-specific supervised evaluation, stays with missing task labels are
+excluded. This matters most for `aki_kdigo`, which requires creatinine in both
+the 0-24h baseline window and the 24-48h prediction window.
 
 `ICUDataset` returns batches with:
 - `timeseries`: `FloatTensor (B, T, D)` — hourly-binned feature values
@@ -224,9 +283,9 @@ uv run pytest tests/ -v
 uv run pytest tests/ --cov=slices --cov-report=html --cov-report=term
 
 # Format / lint / type check
-black src/ scripts/ tests/
-ruff check src/ scripts/ tests/
-mypy src/
+uv run black src/ scripts/ tests/
+uv run ruff check src/ scripts/ tests/
+uv run mypy src/
 ```
 
 ## Key Design Decisions
@@ -234,15 +293,20 @@ mypy src/
 - **RICU-based extraction**: Data harmonization across datasets handled by RICU (R). Python reads the output.
 - **Normalize-then-zero-fill**: Single imputation strategy (z-normalize, fill missing with 0). Eliminates imputation as a confound.
 - **Observation masks**: Missingness tracked separately; SSL objectives use this for masking.
-- **Shared masking**: MAE, JEPA, and Contrastive share identical masking code (`masking.py`) for fair comparison.
+- **Controlled masking budget**: MAE, JEPA, and Contrastive share the same default mask ratio through the common `masking.py` infrastructure; objective-specific masking strategies are reported explicitly.
+- **Reported HP sensitivity**: Contrastive robustness rows that disable complementary masks are labeled as view/mask sensitivity, not pure mask-ratio sensitivity.
 - **Patient-level splits**: No data leakage between train/val/test.
 - **Config-driven ablations**: Change one YAML default to switch paradigm, encoder, or task.
 
 ## Extending SLICES
 
-<!-- TODO: Create EXTENDING_SLICES.md documenting how to add new downstream tasks, SSL objectives, encoder architectures, and datasets using the existing factory patterns. -->
+The framework uses factory patterns throughout, making it straightforward to add new components. The concrete extension points live in:
 
-The framework uses factory patterns throughout, making it straightforward to add new components. See `EXTENDING_SLICES.md` (coming soon) for details on adding new downstream tasks, SSL objectives, encoder architectures, and datasets.
+- `src/slices/models/encoders/factory.py` and `configs/model/`
+- `src/slices/models/pretraining/factory.py` and `configs/ssl/`
+- `src/slices/models/heads/factory.py`
+- `src/slices/data/tasks/` for package label semantics used during extraction
+- `configs/tasks/` for Hydra task configs used during training/evaluation
 
 ## References
 

@@ -5,8 +5,8 @@ positions where obs_mask=False, ensuring consistency between pretraining
 and finetuning stages.
 
 During MAE pretraining, the encoder sees MISSING_TOKEN at positions where
-obs_mask=False. Without this wrapper, finetuning would use forward-filled
-imputed values instead, creating a mismatch that may degrade performance.
+obs_mask=False. Without this wrapper, finetuning would use normalized
+zero-filled values instead, creating a mismatch that may degrade performance.
 """
 
 from typing import Optional

@@ -7,15 +7,24 @@ Tests cover:
 - Supervised script save_encoder_weights: v3 format, loadable by FineTuneModule
 """
 
+from dataclasses import fields
+from pathlib import Path
+
 import pytest
 import torch
 import torch.nn as nn
+import yaml
 from omegaconf import OmegaConf
+
+from slices.data.labels import LabelBuilder, LabelConfig
 from slices.training import FineTuneModule
 from slices.training.utils import (
     build_optimizer,
     build_scheduler,
+    report_and_validate_train_label_support,
+    run_fairness_evaluation,
     save_encoder_checkpoint,
+    setup_finetune_callbacks,
 )
 
 
@@ -175,6 +184,247 @@ class TestSaveEncoderCheckpoint:
 
         assert torch.allclose(new_encoder.weight, encoder.weight)
         assert torch.allclose(new_encoder.bias, encoder.bias)
+
+
+class TestTrainLabelSupportGuard:
+    """Tests for label-efficiency train support reporting."""
+
+    class _DummyDataModule:
+        def __init__(self, subset_stats, full_stats=None):
+            self._subset_stats = subset_stats
+            self._full_stats = full_stats or subset_stats
+
+        def get_train_label_statistics(self, use_full_train: bool = False):
+            return self._full_stats if use_full_train else self._subset_stats
+
+    def test_reports_binary_train_support(self, capsys):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 5,
+                    "negative": 315,
+                    "prevalence": 5 / 320,
+                }
+            },
+            full_stats={
+                "mortality_24h": {
+                    "total": 32000,
+                    "positive": 544,
+                    "negative": 31456,
+                    "prevalence": 544 / 32000,
+                }
+            },
+        )
+
+        stats = report_and_validate_train_label_support(
+            datamodule=dm,
+            task_name="mortality_24h",
+            task_type="binary",
+            dataset="miiv",
+            seed=42,
+            label_fraction=0.01,
+            min_train_positives=3,
+        )
+
+        captured = capsys.readouterr()
+        assert "miiv / mortality_24h / 42 / 0.01" in captured.out
+        assert stats["train_subset_positive"] == 5
+        assert stats["full_train_positive"] == 544
+
+    def test_raises_when_label_efficiency_subset_has_too_few_positives(self):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 2,
+                    "negative": 318,
+                    "prevalence": 2 / 320,
+                }
+            }
+        )
+
+        with pytest.raises(ValueError, match="Too few positive training examples"):
+            report_and_validate_train_label_support(
+                datamodule=dm,
+                task_name="mortality_24h",
+                task_type="binary",
+                dataset="eicu",
+                seed=7,
+                label_fraction=0.01,
+                min_train_positives=3,
+            )
+
+    def test_raises_when_binary_train_subset_loses_a_class(self):
+        dm = self._DummyDataModule(
+            subset_stats={
+                "mortality_24h": {
+                    "total": 320,
+                    "positive": 0,
+                    "negative": 320,
+                    "prevalence": 0.0,
+                }
+            }
+        )
+
+        with pytest.raises(ValueError, match="lost a class"):
+            report_and_validate_train_label_support(
+                datamodule=dm,
+                task_name="mortality_24h",
+                task_type="binary",
+                dataset="miiv",
+                seed=1,
+                label_fraction=0.01,
+                min_train_positives=3,
+            )
+
+
+class TestSetupFinetuneCallbacks:
+    """Tests task-aware checkpoint monitor selection."""
+
+    @staticmethod
+    def _make_cfg(task_cfg: dict, training_cfg: dict | None = None):
+        return OmegaConf.create(
+            {
+                "task": task_cfg,
+                "training": {"early_stopping_patience": 10, **(training_cfg or {})},
+                "checkpoint_dir": "checkpoints",
+            }
+        )
+
+    def test_classification_defaults_to_auprc_when_no_primary_metric(self):
+        cfg = self._make_cfg({"task_name": "mortality_24h", "task_type": "binary"})
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/auprc"
+        assert callbacks[0].mode == "max"
+        assert callbacks[1].monitor == "val/auprc"
+        assert callbacks[1].mode == "max"
+
+    def test_regression_uses_task_primary_metric(self):
+        cfg = self._make_cfg(
+            {"task_name": "los_remaining", "task_type": "regression", "primary_metric": "mae"}
+        )
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/mae"
+        assert callbacks[0].mode == "min"
+        assert callbacks[1].monitor == "val/mae"
+        assert callbacks[1].mode == "min"
+
+    def test_explicit_monitor_override_still_wins(self):
+        cfg = self._make_cfg(
+            {"task_name": "los_remaining", "task_type": "regression", "primary_metric": "mae"},
+            {"early_stopping_monitor": "val/r2"},
+        )
+
+        callbacks = setup_finetune_callbacks(cfg)
+
+        assert callbacks[0].monitor == "val/r2"
+        assert callbacks[0].mode == "max"
+        assert callbacks[1].monitor == "val/r2"
+        assert callbacks[1].mode == "max"
+
+    def test_training_task_configs_cover_package_tasks(self):
+        package_tasks_dir = Path("src/slices/data/tasks")
+        hydra_tasks_dir = Path("configs/tasks")
+        label_config_fields = {field.name for field in fields(LabelConfig)}
+
+        package_tasks = {
+            yaml.safe_load(path.read_text())["task_name"]
+            for path in package_tasks_dir.glob("*.yaml")
+        }
+        hydra_tasks = {
+            yaml.safe_load(path.read_text())["task_name"] for path in hydra_tasks_dir.glob("*.yaml")
+        }
+
+        assert hydra_tasks == package_tasks
+
+        for task_name in sorted(package_tasks):
+            package_config = LabelConfig(
+                **yaml.safe_load((package_tasks_dir / f"{task_name}.yaml").read_text())
+            )
+            hydra_raw = yaml.safe_load((hydra_tasks_dir / f"{task_name}.yaml").read_text())
+            hydra_config = LabelConfig(
+                **{key: value for key, value in hydra_raw.items() if key in label_config_fields}
+            )
+            assert LabelBuilder.config_hash(hydra_config) == LabelBuilder.config_hash(
+                package_config
+            )
+
+
+class TestRunFairnessEvaluation:
+    """Tests for inline fairness evaluator setup."""
+
+    def test_passes_task_type_to_fairness_evaluator(self, monkeypatch):
+        import slices.eval.fairness_evaluator as fairness_module
+        import slices.eval.inference as inference_module
+
+        captured = {}
+
+        class DummyEvaluator:
+            def __init__(
+                self,
+                static_df,
+                protected_attributes,
+                min_subgroup_size,
+                task_type,
+                dataset_name,
+            ):
+                captured["task_type"] = task_type
+                captured["dataset_name"] = dataset_name
+
+            def evaluate(self, predictions, labels_tensor, all_stay_ids):
+                return {"gender": {"n_valid_groups": 1}}
+
+            def print_report(self, fairness_report):
+                captured["printed"] = fairness_report
+
+        class DummyModel:
+            device = torch.device("cpu")
+
+        class DummyDataset:
+            static_df = object()
+
+        class DummyDataModule:
+            dataset = DummyDataset()
+            processed_dir = Path("data/processed/miiv")
+
+            def test_dataloader(self):
+                return []
+
+        monkeypatch.setattr(
+            inference_module,
+            "run_inference",
+            lambda *args, **kwargs: (torch.tensor([1.2]), torch.tensor([1.0]), [10]),
+        )
+        monkeypatch.setattr(fairness_module, "FairnessEvaluator", DummyEvaluator)
+        monkeypatch.setattr(
+            fairness_module,
+            "flatten_fairness_report",
+            lambda report: {"fairness/gender/n_valid_groups": 1},
+        )
+
+        cfg = OmegaConf.create(
+            {
+                "task": {"task_type": "regression"},
+                "eval": {
+                    "fairness": {
+                        "enabled": True,
+                        "protected_attributes": ["gender"],
+                        "min_subgroup_size": 5,
+                    }
+                },
+            }
+        )
+
+        report = run_fairness_evaluation(DummyModel(), DummyDataModule(), cfg)
+
+        assert report == {"gender": {"n_valid_groups": 1}}
+        assert captured["task_type"] == "regression"
+        assert captured["dataset_name"] == "miiv"
 
 
 class TestSupervisedCheckpointFormat:

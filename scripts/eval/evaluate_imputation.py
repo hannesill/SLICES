@@ -7,12 +7,12 @@ Example usage:
     # Evaluate MAE checkpoint with all strategies
     uv run python scripts/eval/evaluate_imputation.py \
         checkpoint=outputs/pretrain/encoder.pt \
-        data.processed_dir=data/processed/mimic-iv
+        data.processed_dir=data/processed/miiv
 
-    # Evaluate full pretrain checkpoint (MAE with decoder)
+    # Evaluate a full pretrain checkpoint (reuses the encoder, trains a probe decoder)
     uv run python scripts/eval/evaluate_imputation.py \
         pretrain_checkpoint=outputs/pretrain/ssl-last.ckpt \
-        data.processed_dir=data/processed/mimic-iv
+        data.processed_dir=data/processed/miiv
 
     # Single strategy
     uv run python scripts/eval/evaluate_imputation.py \
@@ -20,12 +20,18 @@ Example usage:
         masking.strategies=[random]
 """
 
+import json
+from pathlib import Path
+
 import hydra
 import lightning.pytorch as pl
 import torch
 from omegaconf import DictConfig, OmegaConf
-from slices.data.datamodule import ICUDataModule
+from torch.utils.data import DataLoader, Subset
+
+from slices.data.datamodule import ICUDataModule, icu_collate_fn
 from slices.eval.imputation import ImputationEvaluator
+from slices.training.utils import validate_data_prerequisites
 
 
 @hydra.main(
@@ -45,6 +51,8 @@ def main(cfg: DictConfig) -> None:
 
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
+
+    validate_data_prerequisites(cfg.data.processed_dir, cfg.dataset)
 
     # Set random seed
     pl.seed_everything(cfg.seed, workers=True)
@@ -100,19 +108,20 @@ def main(cfg: DictConfig) -> None:
         )
 
     # =========================================================================
-    # 3. Train decoder (if not MAE)
+    # 3. Train reconstruction decoder probe
     # =========================================================================
-    if not pretrain_ckpt:
-        print("\n" + "=" * 80)
-        print("3. Training Reconstruction Decoder")
-        print("=" * 80)
+    print("\n" + "=" * 80)
+    print("3. Training Reconstruction Decoder")
+    print("=" * 80)
+    if pretrain_ckpt:
+        print("  Using the MAE checkpoint to initialize the encoder, then fitting a probe decoder.")
 
-        recon_cfg = cfg.get("reconstruction_head", {})
-        evaluator.train_decoder(
-            dataloader=datamodule.train_dataloader(),
-            max_epochs=recon_cfg.get("max_epochs", 10),
-            lr=recon_cfg.get("lr", 1e-3),
-        )
+    recon_cfg = cfg.get("reconstruction_head", {})
+    evaluator.train_decoder(
+        dataloader=datamodule.train_dataloader(),
+        max_epochs=recon_cfg.get("max_epochs", 10),
+        lr=recon_cfg.get("lr", 1e-3),
+    )
 
     # =========================================================================
     # 4. Evaluate
@@ -124,6 +133,16 @@ def main(cfg: DictConfig) -> None:
     strategies = cfg.masking.strategies
     mask_ratio = cfg.masking.mask_ratio
     test_loader = datamodule.test_dataloader()
+    train_stats_loader = DataLoader(
+        Subset(datamodule.dataset, datamodule.train_indices),
+        batch_size=cfg.get("batch_size", 64),
+        shuffle=False,
+        num_workers=cfg.data.get("num_workers", 4),
+        pin_memory=datamodule.pin_memory,
+        collate_fn=icu_collate_fn,
+        drop_last=False,
+    )
+    train_feature_stds = evaluator.compute_feature_stds(train_stats_loader)
 
     # Setup W&B logger if configured
     logger = None
@@ -146,7 +165,12 @@ def main(cfg: DictConfig) -> None:
         print(f"\n  Strategy: {strategy} (mask_ratio={mask_ratio})")
         print("  " + "-" * 40)
 
-        results = evaluator.evaluate(test_loader, mask_strategy=strategy, mask_ratio=mask_ratio)
+        results = evaluator.evaluate(
+            test_loader,
+            mask_strategy=strategy,
+            mask_ratio=mask_ratio,
+            feature_stds=train_feature_stds,
+        )
         all_results[strategy] = results
 
         print(f"  NRMSE overall: {results['nrmse_overall']:.4f}")
@@ -186,10 +210,22 @@ def main(cfg: DictConfig) -> None:
             f"{results['mae_overall']:>10.4f}"
         )
 
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_path = output_dir / "imputation_results.json"
+    payload = {
+        "checkpoint": encoder_ckpt,
+        "pretrain_checkpoint": pretrain_ckpt,
+        "config": OmegaConf.to_container(cfg, resolve=True),
+        "results": all_results,
+    }
+    results_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
     if logger:
         wandb.finish()
 
     print(f"\n  Output directory: {cfg.output_dir}")
+    print(f"  Results: {results_path}")
     print("\n" + "=" * 80)
 
 

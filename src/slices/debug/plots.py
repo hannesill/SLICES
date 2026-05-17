@@ -348,9 +348,11 @@ def plot_missingness_heatmap(
     # Create figure with subplots for each patient
     fig, axes = plt.subplots(n_stays_actual, 1, figsize=(12, 2 * n_stays_actual), sharex=True)
     if n_stays_actual == 1:
-        axes = [axes]
+        axes_list: List[Any] = [axes]
+    else:
+        axes_list = list(axes)
 
-    for idx, ax in enumerate(axes):
+    for idx, ax in enumerate(axes_list):
         ax.imshow(
             mask[idx].T, aspect="auto", cmap="Greens", vmin=0, vmax=1, interpolation="nearest"
         )
@@ -365,7 +367,7 @@ def plot_missingness_heatmap(
             ax.set_yticks(range(n_features))
             ax.set_yticklabels(feature_names, fontsize=6)
 
-    axes[-1].set_xlabel("Hour")
+    axes_list[-1].set_xlabel("Hour")
 
     fig.suptitle(f"{title}\n(Green = Observed)")
     fig.tight_layout()

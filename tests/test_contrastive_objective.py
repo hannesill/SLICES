@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+
 from slices.models.encoders import (
     TransformerConfig,
     TransformerEncoder,
@@ -186,6 +187,67 @@ class TestContrastiveForward:
 
         assert metrics["contrastive_n_visible_view1"] > 0
         assert metrics["contrastive_n_visible_view2"] > 0
+
+    def test_empty_timesteps_are_excluded_from_visible_counts(self, encoder, contrastive_config):
+        """Contrastive diagnostics should ignore hours with no observed variables."""
+        obj = ContrastiveObjective(encoder, contrastive_config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 2, :4] = True
+        obs_mask[:, 6, :4] = True
+
+        _, metrics = obj(x, obs_mask)
+
+        assert metrics["contrastive_n_visible_view1"] <= 2
+        assert metrics["contrastive_n_visible_view2"] <= 2
+        assert metrics["contrastive_n_visible_view1"] + metrics[
+            "contrastive_n_masked_view1"
+        ] == pytest.approx(2.0)
+        assert metrics["contrastive_n_visible_view2"] + metrics[
+            "contrastive_n_masked_view2"
+        ] == pytest.approx(2.0)
+
+    def test_single_eligible_timestep_falls_back_to_shared_view(self, encoder):
+        """Complementary masks should not create an all-padding view on sparse samples."""
+        config = ContrastiveConfig(
+            mode="instance",
+            mask_ratio=0.5,
+            complementary_masks=True,
+            proj_hidden_dim=64,
+            proj_output_dim=16,
+            temperature=0.1,
+        )
+        obj = ContrastiveObjective(encoder, config)
+
+        B, T, D = 2, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[:, 3, :4] = True
+
+        loss, metrics = obj(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(metrics["contrastive_loss"])
+        assert metrics["contrastive_n_visible_view1"] > 0
+        assert metrics["contrastive_n_visible_view2"] > 0
+
+    def test_instance_mode_skips_all_empty_samples(self, encoder, contrastive_config):
+        """All-empty rows should be excluded from instance NT-Xent denominators."""
+        obj = ContrastiveObjective(encoder, contrastive_config)
+
+        B, T, D = 3, 8, 10
+        x = torch.randn(B, T, D)
+        obs_mask = torch.zeros(B, T, D, dtype=torch.bool)
+        obs_mask[1:, 2:5, :4] = True
+
+        loss, metrics = obj(x, obs_mask)
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(metrics["contrastive_loss"])
+        assert metrics["contrastive_n_samples_used"] == 2
+        assert metrics["contrastive_n_samples_skipped"] == 1
 
 
 # =============================================================================
@@ -491,6 +553,29 @@ class TestTemporalContrastive:
         assert (full[:, 4:, :] == 0).all()
         # Visible positions should be non-zero (with high probability)
         assert full[:, :4, :].abs().sum() > 0
+
+    def test_scatter_to_full_ignores_padded_visible_tokens(self, encoder, temporal_config):
+        """Uneven visible counts should not scatter padded tokens into masked slots."""
+        from slices.models.pretraining.contrastive import ContrastiveObjective
+
+        encoded = torch.tensor(
+            [
+                [[10.0], [11.0]],
+                [[20.0], [99.0]],
+            ]
+        )
+        ssl_mask = torch.tensor(
+            [
+                [True, True, False],
+                [True, False, False],
+            ]
+        )
+
+        full = ContrastiveObjective._scatter_to_full(encoded, ssl_mask, n_timesteps=3)
+
+        assert torch.allclose(full[1, 0], torch.tensor([20.0]))
+        assert torch.allclose(full[1, 1], torch.tensor([0.0]))
+        assert torch.allclose(full[1, 2], torch.tensor([0.0]))
 
     def test_scatter_to_full_gradient_flow(self):
         """Gradients flow through scatter into torch.zeros back to the source tensor."""

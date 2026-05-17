@@ -195,11 +195,14 @@ cython_debug/
 .pypirc
 
 # AI
+.agents/
+.codex/
 .cursorignore
 .cursorindexingignore
 .cursorrules
 .claude/
 .cursor/
+.rulesync/
 
 # Marimo
 marimo/_static/
@@ -208,13 +211,16 @@ __marimo__/
 
 # Notes
 notes/
-docs/
+docs/internal/
 
 # SLICES-specific
 /data/
 outputs/
+/results/*
+!/results/.gitkeep
 wandb/
 .tensor_cache/
+logs/
 
 # PyTorch Lightning
 lightning_logs/

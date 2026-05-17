@@ -16,7 +16,7 @@ not duplicated here.
 
 from typing import Any, List, Literal, Optional, Union
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskConfig(BaseModel):
@@ -30,11 +30,22 @@ class TaskConfig(BaseModel):
 
     task_name: str
     task_type: str = "binary"
+    prediction_window_hours: Optional[int] = None
+    observation_window_hours: Optional[int] = None
+    gap_hours: int = 0
+    label_sources: List[str] = Field(default_factory=list)
+    label_params: dict[str, Any] = Field(default_factory=dict)
+    quality_checks: dict[str, Any] = Field(default_factory=dict)
+    primary_metric: Optional[str] = None
+    additional_metrics: List[str] = Field(default_factory=list)
     head_type: str = "mlp"
     hidden_dims: List[int] = [64]
     dropout: float = 0.1
     activation: str = "relu"
     n_classes: Optional[int] = None
+    class_names: Optional[List[str]] = None
+    positive_class: Optional[str] = None
+    supported_datasets: Optional[List[str]] = None
     use_layer_norm: bool = False
     projection_dim: Optional[int] = None
 
@@ -87,6 +98,23 @@ class TrainingConfig(BaseModel):
     early_stopping_monitor: Optional[str] = None
     early_stopping_mode: Optional[str] = None
     label_smoothing: float = 0.0
+    overfit_batches: Union[int, float] = 0
+    allow_best_ckpt_fallback: bool = False
+
+
+class PretrainTrainingConfig(BaseModel):
+    """Validated training configuration for SSL pretraining."""
+
+    model_config = {"extra": "forbid"}
+
+    max_epochs: int = 100
+    batch_size: int = 256
+    accelerator: str = "auto"
+    devices: Any = "auto"
+    precision: Any = 32
+    gradient_clip_val: Optional[float] = 1.0
+    accumulate_grad_batches: int = 1
+    early_stopping_patience: Optional[int] = None
     overfit_batches: Union[int, float] = 0
 
 

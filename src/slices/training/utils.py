@@ -5,11 +5,14 @@ shared callback/logger setup, fairness evaluation, and checkpoint save helper.
 """
 
 import math
+from dataclasses import fields
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 import torch
 import torch.nn as nn
+import wandb
+import yaml
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -17,6 +20,21 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
+
+from slices.constants import (
+    FEATURE_BLOCKLIST,
+    LABEL_HORIZON_HOURS,
+    MIN_STAY_HOURS,
+    SEQ_LENGTH_HOURS,
+    canonical_downstream_protocol,
+    downstream_protocol_from_freeze,
+)
+from slices.data.labels import LabelBuilder, LabelBuilderFactory, LabelConfig
+
+
+class WandbEntityNotFoundError(ValueError):
+    """Raised when an explicit W&B entity does not exist."""
+
 
 # =============================================================================
 # Optimizer / Scheduler
@@ -160,12 +178,13 @@ def setup_pretrain_callbacks(cfg: DictConfig) -> list:
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename="ssl-{epoch:03d}-{val/loss:.4f}",
+        filename="ssl-{epoch:03d}",
         monitor="val/loss",
         mode="min",
         save_top_k=3,
         save_last=True,
         verbose=True,
+        auto_insert_metric_name=False,
     )
     callbacks.append(checkpoint_callback)
 
@@ -187,27 +206,55 @@ def setup_pretrain_callbacks(cfg: DictConfig) -> list:
 def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune") -> list:
     """Set up training callbacks for finetuning / supervised training.
 
-    Task-type-aware: monitors val/auprc (max) for classification,
-    val/mse (min) for regression.
+    Defaults to the task's declared primary metric when available; otherwise
+    falls back to val/auprc for classification and val/mse for regression.
     """
     callbacks = []
 
+    lower_is_better = {"loss", "mse", "mae", "rmse", "brier_score", "ece"}
+    higher_is_better = {
+        "auroc",
+        "auprc",
+        "accuracy",
+        "f1",
+        "precision",
+        "recall",
+        "specificity",
+        "r2",
+    }
+
     task_type = cfg.task.get("task_type", "binary")
-    if task_type == "regression":
-        default_monitor, default_mode = "val/mse", "min"
+    default_metric = cfg.task.get("primary_metric", None)
+    if default_metric:
+        default_monitor = default_metric if "/" in default_metric else f"val/{default_metric}"
+    elif task_type == "regression":
+        default_monitor = "val/mse"
     else:
-        default_monitor, default_mode = "val/auprc", "max"
+        default_monitor = "val/auprc"
+
     monitor = cfg.training.get("early_stopping_monitor", default_monitor)
+    metric_name = monitor.split("/", 1)[-1]
+    if metric_name in lower_is_better:
+        default_mode = "min"
+    elif metric_name in higher_is_better:
+        default_mode = "max"
+    else:
+        raise ValueError(
+            f"Cannot infer checkpoint mode for finetune monitor '{monitor}'. "
+            "Set training.early_stopping_mode explicitly."
+        )
+
     mode = cfg.training.get("early_stopping_mode", default_mode)
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.get("checkpoint_dir", "checkpoints"),
-        filename=f"{checkpoint_prefix}-{{epoch:03d}}-{{{monitor}:.4f}}",
+        filename=f"{checkpoint_prefix}-{{epoch:03d}}",
         monitor=monitor,
         mode=mode,
         save_top_k=3,
         save_last=True,
         verbose=True,
+        auto_insert_metric_name=False,
     )
     callbacks.append(checkpoint_callback)
 
@@ -231,6 +278,70 @@ def setup_finetune_callbacks(cfg: DictConfig, checkpoint_prefix: str = "finetune
 # =============================================================================
 
 
+def _add_wandb_tag(tags: list[str], tag: str | None) -> None:
+    """Append a W&B tag once, ignoring unset values."""
+    if not tag:
+        return
+    if tag not in tags:
+        tags.append(tag)
+
+
+def _short_wandb_value(value: Any) -> str:
+    """Compact a numeric/string config value for stable W&B display names."""
+    return str(value).replace(".", "").replace("-", "m")
+
+
+def append_wandb_identity_suffixes(name: str | None, cfg: DictConfig) -> str | None:
+    """Append scientific identity fields omitted by the base Hydra run name."""
+    if not name:
+        return name
+
+    suffixes: list[str] = []
+    experiment_subtype = cfg.get("experiment_subtype")
+    if experiment_subtype is not None:
+        suffixes.append(str(experiment_subtype))
+
+    source_dataset = cfg.get("source_dataset")
+    if source_dataset is not None:
+        suffixes.append(f"from_{source_dataset}")
+
+    upstream_lr = cfg.get("upstream_pretrain_lr")
+    if upstream_lr is not None:
+        suffixes.append(f"uplr{_short_wandb_value(upstream_lr)}")
+    elif experiment_subtype == "lr_sensitivity":
+        optimizer_cfg = cfg.get("optimizer", {})
+        lr = optimizer_cfg.get("lr") if optimizer_cfg else None
+        if lr is not None:
+            suffixes.append(f"lr{_short_wandb_value(lr)}")
+
+    upstream_mask_ratio = cfg.get("upstream_pretrain_mask_ratio")
+    if upstream_mask_ratio is not None:
+        suffixes.append(f"upmr{_short_wandb_value(upstream_mask_ratio)}")
+    elif experiment_subtype in {"mask_ratio_sensitivity", "view_mask_sensitivity"}:
+        ssl_cfg = cfg.get("ssl", {})
+        mask_ratio = ssl_cfg.get("mask_ratio") if ssl_cfg else None
+        if mask_ratio is not None:
+            suffixes.append(f"mr{_short_wandb_value(mask_ratio)}")
+
+    if not suffixes:
+        return name
+    return f"{name}_{'_'.join(suffixes)}"
+
+
+def train_label_support_summary(stats: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Format train-label support stats for W&B summary logging."""
+    if not stats:
+        return {}
+
+    summary: dict[str, Any] = {}
+    for key, value in stats.items():
+        if value is None:
+            continue
+        if isinstance(value, (str, bool, int, float)):
+            summary[f"train_label_support/{key}"] = value
+    return summary
+
+
 def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     """Set up W&B experiment logger.
 
@@ -240,31 +351,64 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         return None
 
     tags = list(cfg.logging.get("wandb_tags", []))
-    if cfg.get("sprint") is not None:
-        tags.append(f"sprint:{cfg.sprint}")
+    if cfg.get("experiment_class") is not None:
+        _add_wandb_tag(tags, f"experiment_class:{cfg.experiment_class}")
+    if cfg.get("experiment_subtype") is not None:
+        _add_wandb_tag(tags, f"experiment_subtype:{cfg.experiment_subtype}")
     if cfg.get("revision") is not None:
-        tags.append(f"revision:{cfg.revision}")
+        _add_wandb_tag(tags, f"revision:{cfg.revision}")
     if cfg.get("rerun_reason") is not None:
         tag = f"rerun-reason:{cfg.rerun_reason}"
         if len(tag) > 64:
             tag = tag[:61] + "..."
-        tags.append(tag)
+        _add_wandb_tag(tags, tag)
+    if cfg.get("launch_commit") is not None:
+        _add_wandb_tag(tags, f"commit:{str(cfg.launch_commit)[:12]}")
+    if cfg.get("phase") is not None:
+        _add_wandb_tag(tags, f"phase:{cfg.phase}")
+    if cfg.get("dataset") is not None:
+        _add_wandb_tag(tags, f"dataset:{cfg.dataset}")
+    if cfg.get("paradigm") is not None:
+        _add_wandb_tag(tags, f"paradigm:{cfg.paradigm}")
+    elif cfg.get("ssl") and cfg.ssl.get("name") is not None:
+        _add_wandb_tag(tags, f"paradigm:{cfg.ssl.name}")
+    task_name = cfg.get("task", {}).get("task_name")
+    if task_name is not None:
+        _add_wandb_tag(tags, f"task:{task_name}")
+    if cfg.get("seed") is not None:
+        _add_wandb_tag(tags, f"seed:{cfg.seed}")
+    model_size = cfg.get("model_size")
+    if model_size is not None:
+        _add_wandb_tag(tags, f"model_size:{model_size}")
 
-    # Add protocol tag for finetune runs (Protocol A = frozen, Protocol B = unfrozen)
+    # Add downstream protocol family tag. Supervised-from-scratch shares the
+    # full-finetune optimization budget; the phase tag distinguishes it from SSL.
     freeze_encoder = cfg.get("training", {}).get("freeze_encoder")
-    if freeze_encoder is not None:
-        protocol = "A" if freeze_encoder else "B"
-        tags.append(f"protocol:{protocol}")
+    if cfg.get("protocol") is not None:
+        protocol = canonical_downstream_protocol(cfg.protocol)
+        _add_wandb_tag(tags, f"protocol:{protocol}")
+    elif freeze_encoder is not None:
+        protocol = downstream_protocol_from_freeze(freeze_encoder)
+        _add_wandb_tag(tags, f"protocol:{protocol}")
 
     # Add mask_ratio tag for pretrain runs (useful for ablation filtering)
     ssl_cfg = cfg.get("ssl", {})
     if ssl_cfg and ssl_cfg.get("mask_ratio") is not None:
-        tags.append(f"mask_ratio:{ssl_cfg.mask_ratio}")
+        _add_wandb_tag(tags, f"mask_ratio:{ssl_cfg.mask_ratio}")
 
     # Add label_fraction tag when subsampling training data
     label_fraction = cfg.get("label_fraction")
     if label_fraction is not None and label_fraction < 1.0:
-        tags.append(f"label_fraction:{label_fraction}")
+        _add_wandb_tag(tags, f"label_fraction:{label_fraction}")
+        _add_wandb_tag(tags, "ablation:label-efficiency")
+
+    if cfg.get("source_dataset") is not None:
+        _add_wandb_tag(tags, f"source_dataset:{cfg.source_dataset}")
+        _add_wandb_tag(tags, "ablation:transfer")
+    if cfg.get("upstream_pretrain_lr") is not None:
+        _add_wandb_tag(tags, f"upstream_pretrain_lr:{cfg.upstream_pretrain_lr}")
+    if cfg.get("upstream_pretrain_mask_ratio") is not None:
+        _add_wandb_tag(tags, f"upstream_pretrain_mask_ratio:{cfg.upstream_pretrain_mask_ratio}")
 
     tags = tags or None
 
@@ -272,18 +416,49 @@ def setup_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
     run_name = cfg.logging.get("run_name", None)
     if run_name and freeze_encoder is True:
         run_name = run_name.replace("_finetune_", "_probe_", 1)
+    run_name = append_wandb_identity_suffixes(run_name, cfg)
+    if run_name and model_size is not None:
+        run_name += f"_{model_size}"
+    if run_name and label_fraction is not None and label_fraction < 1.0:
+        frac_str = str(label_fraction).replace(".", "")
+        run_name += f"_frac{frac_str}"
+
+    # Adjust group to include protocol and label_fraction so that W&B "Group" view
+    # aggregates exactly the runs that differ only by seed.
+    group = cfg.logging.get("wandb_group", None)
+    if group:
+        if freeze_encoder is True:
+            group = group.replace("finetune_", "probe_", 1)
+        group = append_wandb_identity_suffixes(group, cfg)
+        if model_size is not None:
+            group += f"_{model_size}"
+        if label_fraction is not None and label_fraction < 1.0:
+            frac_str = str(label_fraction).replace(".", "")
+            group += f"_frac{frac_str}"
+
+    wandb_entity = cfg.logging.get("wandb_entity", None)
 
     logger = WandbLogger(
         project=cfg.logging.wandb_project,
-        entity=cfg.logging.get("wandb_entity", None),
+        entity=wandb_entity,
         name=run_name,
-        group=cfg.logging.get("wandb_group", None),
+        group=group,
         tags=tags,
         save_dir=cfg.output_dir,
         log_model=False,
     )
 
-    logger.experiment.config.update(OmegaConf.to_container(cfg, resolve=True))
+    try:
+        logger.experiment.config.update(OmegaConf.to_container(cfg, resolve=True))
+    except wandb.errors.CommError as exc:
+        message = str(exc)
+        if wandb_entity and "entity" in message and "not found" in message:
+            raise WandbEntityNotFoundError(
+                f"W&B entity '{wandb_entity}' could not be found. "
+                "Remove logging.wandb_entity to use the signed-in account, "
+                "or provide a valid W&B username/team."
+            ) from None
+        raise
 
     return logger
 
@@ -311,30 +486,15 @@ def run_fairness_evaluation(
     print("Fairness Evaluation")
     print("=" * 80)
 
-    from slices.eval.fairness_evaluator import FairnessEvaluator
+    from slices.eval.fairness_evaluator import FairnessEvaluator, flatten_fairness_report
+    from slices.eval.inference import run_inference
 
-    model.eval()
-    all_preds, all_labels, all_stay_ids = [], [], []
-    for batch in datamodule.test_dataloader():
-        with torch.no_grad():
-            outputs = model(
-                batch["timeseries"].to(model.device),
-                batch["mask"].to(model.device),
-            )
-        probs = outputs["probs"]
-        if probs.dim() > 1 and probs.shape[1] == 2:
-            all_preds.append(probs[:, 1].cpu())
-        else:
-            all_preds.append(probs.cpu())
-        all_labels.append(batch["label"].cpu())
-        all_stay_ids.extend(
-            batch["stay_id"].tolist()
-            if isinstance(batch["stay_id"], torch.Tensor)
-            else batch["stay_id"]
-        )
-
-    predictions = torch.cat(all_preds)
-    labels_tensor = torch.cat(all_labels)
+    predictions, labels_tensor, all_stay_ids = run_inference(
+        model,
+        datamodule.test_dataloader(),
+        device=model.device,
+    )
+    task_type = cfg.get("task", {}).get("task_type", "binary")
 
     evaluator = FairnessEvaluator(
         static_df=datamodule.dataset.static_df,
@@ -342,21 +502,15 @@ def run_fairness_evaluation(
             fairness_cfg.get("protected_attributes", ["gender", "age_group"])
         ),
         min_subgroup_size=fairness_cfg.get("min_subgroup_size", 50),
+        task_type=task_type,
+        dataset_name=getattr(getattr(datamodule, "processed_dir", None), "name", None),
     )
     fairness_report = evaluator.evaluate(predictions, labels_tensor, all_stay_ids)
     evaluator.print_report(fairness_report)
 
     if logger:
-        for attr, metrics in fairness_report.items():
-            for metric_name, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    logger.experiment.summary[f"fairness/{attr}/{metric_name}"] = value
-                elif isinstance(value, dict):
-                    for sub_key, sub_val in value.items():
-                        if isinstance(sub_val, (int, float)):
-                            logger.experiment.summary[
-                                f"fairness/{attr}/{metric_name}/{sub_key}"
-                            ] = sub_val
+        for key, value in flatten_fairness_report(fairness_report).items():
+            logger.experiment.summary[key] = value
 
     return fairness_report
 
@@ -366,12 +520,199 @@ def run_fairness_evaluation(
 # =============================================================================
 
 
-def validate_data_prerequisites(processed_dir: str, dataset: str) -> None:
+def report_and_validate_train_label_support(
+    *,
+    datamodule: Any,
+    task_name: str,
+    task_type: str,
+    dataset: str,
+    seed: int,
+    label_fraction: float,
+    min_train_positives: int = 3,
+) -> Dict[str, Any]:
+    """Report effective train-set class support and fail on degenerate subsets.
+
+    This is primarily aimed at label-efficiency runs where aggressive
+    subsampling can leave the optimization subset with too few positive
+    examples to produce meaningful metrics.
+    """
+    if task_type != "binary":
+        return {}
+
+    subset_stats = datamodule.get_train_label_statistics()
+    full_stats = datamodule.get_train_label_statistics(use_full_train=True)
+
+    if task_name not in subset_stats:
+        return {}
+
+    subset = subset_stats[task_name]
+    full = full_stats.get(task_name, subset)
+
+    subset_total = int(subset.get("total", 0))
+    subset_pos = int(subset.get("positive", 0))
+    subset_neg = int(subset.get("negative", 0))
+    subset_prev = float(subset.get("prevalence", 0.0))
+
+    full_total = int(full.get("total", 0))
+    full_pos = int(full.get("positive", 0))
+    full_neg = int(full.get("negative", 0))
+    full_prev = float(full.get("prevalence", 0.0))
+
+    print("\n Train label support:")
+    print(
+        f"  - Dataset / task / seed / fraction: {dataset} / {task_name} / {seed} / {label_fraction}"
+    )
+    print(
+        f"  - Full train split: {full_pos} positive, {full_neg} negative, "
+        f"{full_total} total ({full_prev * 100:.2f}% positive)"
+    )
+    print(
+        f"  - Optimization subset: {subset_pos} positive, {subset_neg} negative, "
+        f"{subset_total} total ({subset_prev * 100:.2f}% positive)"
+    )
+
+    if subset_pos == 0 or subset_neg == 0:
+        raise ValueError(
+            "Binary training subset lost a class: "
+            f"dataset={dataset}, task={task_name}, seed={seed}, "
+            f"label_fraction={label_fraction}, positives={subset_pos}, negatives={subset_neg}. "
+            "Adjust the fraction or seed before training."
+        )
+
+    if label_fraction < 1.0 and subset_pos < min_train_positives:
+        raise ValueError(
+            "Too few positive training examples in the label-efficiency subset: "
+            f"dataset={dataset}, task={task_name}, seed={seed}, "
+            f"label_fraction={label_fraction}, positives={subset_pos} < {min_train_positives}. "
+            "Increase the fraction or drop this run."
+        )
+
+    return {
+        "task_name": task_name,
+        "dataset": dataset,
+        "seed": seed,
+        "label_fraction": label_fraction,
+        "full_train_total": full_total,
+        "full_train_positive": full_pos,
+        "full_train_negative": full_neg,
+        "full_train_prevalence": full_prev,
+        "train_subset_total": subset_total,
+        "train_subset_positive": subset_pos,
+        "train_subset_negative": subset_neg,
+        "train_subset_prevalence": subset_prev,
+    }
+
+
+def resolve_balanced_class_weights(
+    task_name: str,
+    task_type: str,
+    train_label_stats: Dict[str, Dict[str, Any]],
+) -> Optional[List[float]]:
+    """Resolve ``class_weight='balanced'`` for supported task types.
+
+    Only binary classification is supported. Regression returns ``None`` because
+    class weights do not apply. Other task types fail closed instead of
+    constructing incorrect weights.
+    """
+    normalized_task_type = {
+        "binary_classification": "binary",
+        "multiclass_classification": "multiclass",
+        "multilabel_classification": "multilabel",
+    }.get(task_type, task_type)
+
+    if normalized_task_type == "regression":
+        return None
+
+    if normalized_task_type != "binary":
+        raise ValueError(
+            f"class_weight='balanced' is only supported for binary tasks, got "
+            f"task_type='{task_type}'. Set class_weight=null or provide explicit weights."
+        )
+
+    if task_name not in train_label_stats:
+        return None
+
+    stats = train_label_stats[task_name]
+    n_pos = int(stats.get("positive", 0))
+    n_neg = int(stats.get("negative", 0))
+    n_total = n_pos + n_neg
+
+    if n_pos == 0 or n_neg == 0:
+        raise ValueError(
+            f"Cannot compute balanced class weights for '{task_name}': "
+            f"{n_pos} positive, {n_neg} negative. Check label extraction."
+        )
+
+    raw = [n_total / (2 * n_neg), n_total / (2 * n_pos)]
+    return [w**0.5 for w in raw]
+
+
+def _validate_benchmark_metadata(metadata: dict[str, Any], path: Path) -> None:
+    """Validate fixed benchmark invariants declared by a processed artifact."""
+    declared_values = {
+        "seq_length_hours": (metadata.get("seq_length_hours"), SEQ_LENGTH_HOURS),
+        "input_seq_length_hours": (metadata.get("input_seq_length_hours"), SEQ_LENGTH_HOURS),
+        "min_stay_hours": (metadata.get("min_stay_hours"), MIN_STAY_HOURS),
+        "label_horizon_hours": (metadata.get("label_horizon_hours"), LABEL_HORIZON_HOURS),
+    }
+    extraction_config = metadata.get("extraction_config") or {}
+    if isinstance(extraction_config, dict):
+        declared_values["extraction_config.seq_length_hours"] = (
+            extraction_config.get("seq_length_hours"),
+            SEQ_LENGTH_HOURS,
+        )
+        declared_values["extraction_config.min_stay_hours"] = (
+            extraction_config.get("min_stay_hours"),
+            MIN_STAY_HOURS,
+        )
+
+    for field_name, (observed, expected) in declared_values.items():
+        if observed is None:
+            continue
+        try:
+            observed_int = int(observed)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Processed data in {path} has non-integer benchmark invariant "
+                f"{field_name}: observed={observed!r}, expected={expected}."
+            ) from exc
+        if observed_int != expected:
+            raise RuntimeError(
+                f"Processed data in {path} violates benchmark invariant "
+                f"{field_name}: observed={observed}, expected={expected}."
+            )
+
+    feature_names = metadata.get("feature_names") or []
+    blocked = sorted(set(feature_names) & set(FEATURE_BLOCKLIST))
+    if blocked:
+        raise RuntimeError(
+            f"Processed data in {path} contains blocked leakage/future-derived "
+            f"feature(s): {blocked}."
+        )
+
+
+def validate_data_prerequisites(
+    processed_dir: str,
+    dataset: str,
+    task_names: Optional[List[str]] = None,
+    task_configs: Optional[List[Union[LabelConfig, DictConfig, Dict[str, Any]]]] = None,
+) -> None:
     """Validate that required data files exist before training.
+
+    Checks file existence and, if task definitions are provided, validates the
+    label manifest in metadata.yaml to ensure labels were built with the
+    current builder version and task config. When metadata declares benchmark
+    window or feature fields, those declarations must match fixed invariants.
+
+    When ``task_configs`` are supplied, they are treated as the source of truth
+    because they represent the active Hydra-composed task configuration for the
+    run. ``task_names`` remain as a fallback for callers that only know names.
 
     Raises:
         FileNotFoundError: If required files are missing.
+        RuntimeError: If label manifest indicates stale labels.
     """
+
     path = Path(processed_dir)
 
     if not path.exists():
@@ -387,12 +728,119 @@ def validate_data_prerequisites(processed_dir: str, dataset: str) -> None:
             f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
         )
 
-    stats_path = path / "normalization_stats.yaml"
-    if not stats_path.exists():
-        raise FileNotFoundError(
-            f"normalization_stats.yaml not found in {path}\n"
-            f"Run first: uv run python scripts/preprocessing/prepare_dataset.py dataset={dataset}"
-        )
+    metadata_path = path / "metadata.yaml"
+    metadata: dict[str, Any] | None = None
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f) or {}
+        _validate_benchmark_metadata(metadata, path)
+
+    label_config_fields = {field.name for field in fields(LabelConfig)}
+
+    def coerce_label_config(
+        task_config: Union[LabelConfig, DictConfig, Dict[str, Any]],
+    ) -> LabelConfig:
+        if isinstance(task_config, LabelConfig):
+            return task_config
+
+        if isinstance(task_config, DictConfig):
+            raw_config = OmegaConf.to_container(task_config, resolve=True)
+        else:
+            raw_config = dict(task_config)
+
+        if not isinstance(raw_config, dict):
+            raise TypeError("Task configuration must resolve to a mapping.")
+
+        label_config_dict = {
+            key: value for key, value in raw_config.items() if key in label_config_fields
+        }
+        return LabelConfig(**label_config_dict)
+
+    def get_training_tasks_path() -> Path:
+        repo_root = Path(__file__).resolve().parents[3]
+        hydra_tasks_path = repo_root / "configs" / "tasks"
+        if hydra_tasks_path.exists():
+            return hydra_tasks_path
+        return Path(__file__).resolve().parents[1] / "data" / "tasks"
+
+    resolved_task_configs: List[LabelConfig] = []
+    if task_configs is not None:
+        resolved_task_configs = [coerce_label_config(task_config) for task_config in task_configs]
+        if task_names is not None:
+            resolved_names = {task_config.task_name for task_config in resolved_task_configs}
+            requested_names = set(task_names)
+            if resolved_names != requested_names:
+                raise ValueError(
+                    "task_names does not match task_configs: "
+                    f"task_names={sorted(requested_names)}, "
+                    f"task_configs={sorted(resolved_names)}"
+                )
+    elif task_names:
+        tasks_path = get_training_tasks_path()
+        for task_name in task_names:
+            config_file = tasks_path / f"{task_name}.yaml"
+            if not config_file.exists():
+                raise FileNotFoundError(
+                    f"Task config not found for '{task_name}': {config_file}. "
+                    "Cannot validate label freshness safely."
+                )
+
+            with open(config_file) as f:
+                config_dict = yaml.safe_load(f)
+            resolved_task_configs.append(coerce_label_config(config_dict))
+
+    # Validate label manifest if task configs are provided or can be resolved.
+    if resolved_task_configs:
+        if metadata is None:
+            raise FileNotFoundError(
+                f"metadata.yaml not found in {path} — cannot validate label freshness.\n"
+                f"Re-run extraction: uv run python scripts/preprocessing/"
+                f"extract_ricu.py dataset={dataset}"
+            )
+
+        label_manifest = metadata.get("label_manifest")
+        if label_manifest is None:
+            raise RuntimeError(
+                f"metadata.yaml in {path} has no label_manifest. "
+                "Labels were extracted before manifest support was added.\n"
+                f"Re-run extraction: uv run python scripts/preprocessing/"
+                f"extract_ricu.py dataset={dataset}"
+            )
+
+        for current_config in resolved_task_configs:
+            task_name = current_config.task_name
+            current_hash = LabelBuilder.config_hash(current_config)
+
+            builder = LabelBuilderFactory.create(current_config)
+            current_version = builder.SEMANTIC_VERSION
+
+            manifest_entry = label_manifest.get(task_name)
+            if manifest_entry is None:
+                raise RuntimeError(
+                    f"Task '{task_name}' not found in label manifest. "
+                    "Labels were extracted without this task.\n"
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
+
+            stored_version = manifest_entry.get("builder_version")
+            stored_hash = manifest_entry.get("config_hash")
+
+            if stored_version != current_version:
+                raise RuntimeError(
+                    f"Label builder version mismatch for task '{task_name}': "
+                    f"stored={stored_version}, current={current_version}. "
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
+
+            if stored_hash != current_hash:
+                raise RuntimeError(
+                    f"Task config changed for '{task_name}': "
+                    f"stored_hash={stored_hash}, current_hash={current_hash}. "
+                    f"Re-run extraction: uv run python scripts/preprocessing/"
+                    f"extract_ricu.py dataset={dataset}"
+                )
 
 
 # =============================================================================
