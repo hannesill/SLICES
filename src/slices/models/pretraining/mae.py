@@ -17,10 +17,10 @@ from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 
-from slices.models.common import build_sinusoidal_pe
-
 from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import create_timestep_mask, extract_visible_timesteps, scatter_visible_timesteps
+
+from slices.models.common import build_sinusoidal_pe
 
 
 @dataclass

@@ -5,9 +5,9 @@ from typing import Any, Dict
 
 import polars as pl
 
-from slices.constants import SEQ_LENGTH_HOURS
-
 from .base import LabelBuilder
+
+from slices.constants import SEQ_LENGTH_HOURS
 
 logger = logging.getLogger(__name__)
 

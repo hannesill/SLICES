@@ -10,14 +10,14 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 
+from .base import BaseEncoder, EncoderConfig
+
 from slices.models.common import (
     PositionalEncoding,
     apply_pooling,
     build_sinusoidal_pe,
     get_activation,
 )
-
-from .base import BaseEncoder, EncoderConfig
 
 
 @dataclass

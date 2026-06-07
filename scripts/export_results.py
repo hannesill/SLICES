@@ -40,13 +40,12 @@ import pandas as pd
 from scipy import stats as scipy_stats
 
 import wandb
+
 from slices.constants import (
     FULL_FINETUNE_PROTOCOL,
+    THESIS_TASKS as BENCHMARK_THESIS_TASKS,
     canonical_downstream_protocol,
     downstream_protocol_from_freeze,
-)
-from slices.constants import (
-    THESIS_TASKS as BENCHMARK_THESIS_TASKS,
 )
 from slices.eval.fairness_metadata import (
     EVAL_ARTIFACT_PATH_KEY,

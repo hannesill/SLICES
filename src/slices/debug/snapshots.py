@@ -14,12 +14,12 @@ import numpy as np
 import polars as pl
 import yaml
 
-from slices.constants import SEQ_LENGTH_HOURS
-
 # Import the canonical PipelineStage from staged_snapshots
 # This module previously had its own PipelineStage with different stage names.
 # For backwards compatibility, we keep the old stage names as aliases.
 from .staged_snapshots import PipelineStage
+
+from slices.constants import SEQ_LENGTH_HOURS
 
 
 class LegacyPipelineStage(str, Enum):
