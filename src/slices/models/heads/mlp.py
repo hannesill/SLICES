@@ -9,9 +9,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from slices.models.common import get_activation
-
 from .base import BaseTaskHead, TaskHeadConfig
+
+from slices.models.common import get_activation
 
 
 class MLPTaskHead(BaseTaskHead):

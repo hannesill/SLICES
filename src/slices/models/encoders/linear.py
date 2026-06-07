@@ -11,9 +11,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from slices.models.common import apply_pooling
-
 from .base import BaseEncoder, EncoderConfig
+
+from slices.models.common import apply_pooling
 
 
 @dataclass

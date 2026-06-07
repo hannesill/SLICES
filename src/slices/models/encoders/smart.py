@@ -17,9 +17,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from slices.models.common import PositionalEncoding
-
 from .base import BaseEncoder, EncoderConfig
+
+from slices.models.common import PositionalEncoding
 
 
 @dataclass

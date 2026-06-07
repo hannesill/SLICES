@@ -61,6 +61,14 @@ ignore = [
     "E741",  # Ambiguous variable name (allow `l` for layer)
 ]
 
+[tool.ruff.lint.isort]
+forced-separate = ["slices"]
+known-first-party = ["slices"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/export_results.py" = ["I001"]
+"src/slices/training/utils.py" = ["I001"]
+
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = false

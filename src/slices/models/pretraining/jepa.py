@@ -23,8 +23,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from slices.models.common import build_sinusoidal_pe
-
 from .base import BaseSSLObjective, SSLConfig, require_ssl_tokenizing_encoder
 from .masking import (
     create_block_timestep_mask,
@@ -32,6 +30,8 @@ from .masking import (
     extract_visible_timesteps,
     scatter_visible_timesteps,
 )
+
+from slices.models.common import build_sinusoidal_pe
 
 
 @dataclass

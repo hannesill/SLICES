@@ -18,10 +18,10 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from slices.models.common import apply_pooling
-
 from .base import BaseEncoder, EncoderConfig
 from .transformer import TransformerEncoderLayer
+
+from slices.models.common import apply_pooling
 
 
 @dataclass

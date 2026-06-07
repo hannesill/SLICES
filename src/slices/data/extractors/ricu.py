@@ -27,11 +27,11 @@ from rich.progress import (
     TextColumn,
 )
 
+from .base import BaseExtractor, ExtractorConfig
+
 from slices.constants import FEATURE_BLOCKLIST, LABEL_HORIZON_HOURS
 from slices.data.config_schemas import TimeSeriesConceptConfig
 from slices.data.labels import LabelBuilderFactory, LabelConfig
-
-from .base import BaseExtractor, ExtractorConfig
 
 
 def _resolve_parquet_path(path: Path) -> Union[Path, str]:
