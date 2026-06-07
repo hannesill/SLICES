@@ -13,8 +13,8 @@ ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
 EXPECTED_FEATURES="${EXPECTED_FEATURES:-84}"
 VALIDATE_PROCESSED_ARTIFACTS="${VALIDATE_PROCESSED_ARTIFACTS:-1}"
 PURGE_RUNTIME_CACHES="${PURGE_RUNTIME_CACHES:-1}"
-PARALLEL_MAIN="${PARALLEL_MAIN:-4}"
-PARALLEL_APPENDIX="${PARALLEL_APPENDIX:-4}"
+PARALLEL_MAIN="${PARALLEL_MAIN:-16}"
+PARALLEL_APPENDIX="${PARALLEL_APPENDIX:-16}"
 BATCH_SIZE_FAIRNESS="${BATCH_SIZE_FAIRNESS:-64}"
 DEVICE_FAIRNESS="${DEVICE_FAIRNESS:-auto}"
 INCLUDE_SMART_REFERENCE="${INCLUDE_SMART_REFERENCE:-1}"
@@ -300,6 +300,10 @@ echo "W&B project: $(printf "%q" "$WANDB_PROJECT")"
 echo "W&B entity: $(printf "%q" "$WANDB_ENTITY")"
 echo "Revision: $(printf "%q" "$REVISION")"
 echo "Launch commit: $(printf "%q" "$LAUNCH_COMMIT")"
+echo "Parallel main slots: $(printf "%q" "$PARALLEL_MAIN")"
+echo "Parallel appendix slots: $(printf "%q" "$PARALLEL_APPENDIX")"
+echo "Note: pretrain runs consume 4 scheduler slots each; with PARALLEL_MAIN=16, up to 4 pretrains run at once."
+echo "Per-run training logs are written to $(printf "%q" "$LOG_DIR")/<run-id>.log"
 echo "Main classes: ${main_classes[*]}"
 echo "Fairness classes: ${fairness_classes[*]}"
 echo "Appendix classes: ${appendix_classes[*]:-none}"
@@ -314,6 +318,7 @@ if [[ "$(printf "%q" "$SKIP_LAUNCH_GIT_CHECK")" != "1" ]]; then
 fi
 
 uv sync --dev --locked
+export PYTHONUNBUFFERED=1
 ${warmup_line}
 ${main_line}
 ${appendix_block}${fairness_line}
