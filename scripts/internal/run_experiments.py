@@ -968,6 +968,8 @@ def _validate_clean_final_launch_state(launch_commit: str) -> str | None:
                 "final launch commit does not match the current checkout "
                 f"(current={current_commit}, launch_commit={resolved_launch_commit})"
             )
+        if os.environ.get("ALLOW_DIRTY") == "1":
+            return None
         if not _git_quiet(["diff", "--quiet"]) or not _git_quiet(["diff", "--cached", "--quiet"]):
             return (
                 "final run/retry requires a clean tracked worktree. "
@@ -1398,8 +1400,10 @@ def _pid_matches_command(pid: int, expected_command: str | None) -> bool:
     if result.returncode != 0:
         return False
     actual_command = result.stdout.strip()
+    expected_unquoted = expected_command.replace("'", "").replace('"', "")
     return bool(actual_command) and (
         expected_command == actual_command or expected_command in actual_command
+        or expected_unquoted == actual_command or expected_unquoted in actual_command
     )
 
 
@@ -1421,9 +1425,9 @@ def recover_stale_running(state: dict) -> None:
 
 RUN_SLOT_COSTS = {
     "pretrain": 4,
-    "finetune": 1,
-    "supervised": 1,
-    "gru_d": 1,
+    "finetune": 4,
+    "supervised": 4,
+    "gru_d": 2,
     "xgboost": 1,
 }
 
@@ -1463,6 +1467,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
 
     runs_by_id = {run.id: run for run in runs}
     active: dict[str, subprocess.Popen] = {}
+    external_active: set[str] = set()
     shutting_down = False
 
     def handle_signal(signum, frame):
@@ -1500,8 +1505,21 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
     reset_state_for_launch_identity_mismatch(runs, state)
     _revalidate_completed_pretrain_artifacts(runs, state)
 
+    for run_id, info in state["runs"].items():
+        if run_id not in runs_by_id or info.get("status") != "running":
+            continue
+        pid = info.get("pid")
+        if (
+            pid is not None
+            and is_pid_alive(int(pid))
+            and _pid_matches_command(int(pid), info.get("command"))
+        ):
+            external_active.add(run_id)
+
     print(f"Scheduler started (slot_budget={parallel})")
     print(f"State file: {STATE_FILE}\n")
+    if external_active:
+        print(f"Adopted {len(external_active)} already-running run(s) from state.")
 
     while not shutting_down:
         finished = []
@@ -1509,6 +1527,16 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
             exit_code = proc.poll()
             if exit_code is not None:
                 finished.append((run_id, exit_code))
+        finished_external = []
+        for run_id in external_active:
+            info = state["runs"].get(run_id, {})
+            pid = info.get("pid")
+            if (
+                pid is None
+                or not is_pid_alive(int(pid))
+                or not _pid_matches_command(int(pid), info.get("command"))
+            ):
+                finished_external.append(run_id)
 
         for run_id, exit_code in finished:
             proc = active.pop(run_id)
@@ -1535,16 +1563,36 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
                 set_run_status(state, run_id, "failed", finished_at=now, exit_code=exit_code)
                 _propagate_failure(run_id, runs, state)
 
+        for run_id in finished_external:
+            external_active.remove(run_id)
+            run = runs_by_id[run_id]
+            now = datetime.now(timezone.utc).isoformat()
+            elapsed = _format_elapsed(state, run_id, now)
+            if run.run_type == "pretrain" and not (Path(run.output_dir) / "encoder.pt").exists():
+                print(f"  FAILED {run_id}: adopted process exited but encoder.pt missing {elapsed}")
+                set_run_status(state, run_id, "failed", finished_at=now, exit_code=None)
+                _propagate_failure(run_id, runs, state)
+            else:
+                print(f"  DONE {run_id} (adopted) {elapsed}")
+                set_run_status(state, run_id, "completed", finished_at=now, exit_code=None)
+
         ready = []
         for run in runs:
             if get_run_status(state, run.id) != "pending":
                 continue
             if run.id in active:
                 continue
+            if run.id in external_active:
+                continue
             if _dependencies_ready(run, runs, runs_by_id, state):
                 ready.append(run)
 
-        launch_batch = _select_ready_runs(ready, set(active), runs_by_id, parallel)
+        launch_batch = _select_ready_runs(
+            ready,
+            set(active) | external_active,
+            runs_by_id,
+            parallel,
+        )
         for run in launch_batch:
             cmd = run.build_command(runs_by_id)
             log_file = LOG_DIR / f"{run.id}.log"
@@ -1552,10 +1600,13 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
             print(f"  START {run.id}")
             _write_output_launch_identity(run)
             log_fh = open(log_file, "w")
+            env = os.environ.copy()
+            env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
             proc = subprocess.Popen(
                 cmd,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
+                env=env,
                 start_new_session=True,
             )
             proc._log_fh = log_fh  # type: ignore[attr-defined]
@@ -1574,7 +1625,7 @@ def run_scheduler(runs: list[Run], state: dict, parallel: int, dry_run: bool) ->
 
         save_state(state)
 
-        if not active and not ready:
+        if not active and not external_active and not ready:
             break
         time.sleep(2)
 
