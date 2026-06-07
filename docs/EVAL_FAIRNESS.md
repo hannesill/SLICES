@@ -14,8 +14,7 @@ to W&B summaries and the parquet exports produced by `scripts/export_results.py`
 - Default benchmark fairness corpus:
   - Experiment classes `core_ssl_benchmark`, `label_efficiency`,
     `cross_dataset_transfer`, `hp_robustness`, `capacity_study`,
-    `classical_baselines`, `ts2vec_extension`, and
-    `smart_external_reference`
+    `classical_baselines`, and `ts2vec_extension`
   - Phases `finetune`, `supervised`, and `baseline`
 - The script re-runs inference from the checkpoint provenance recorded by the
   original training run, then writes fairness metrics back to that same W&B run.
@@ -165,7 +164,7 @@ publication exports. Those flags are for exploratory cleanup only.
 
 ## Final Publication Sequence
 
-After Bucket 1 and Bucket 2 are merged into the branch used for final reruns:
+After the final rerun branch is reviewed:
 
 1. Set the final revision name used by the launcher and export commands:
 
