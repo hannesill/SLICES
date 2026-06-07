@@ -242,8 +242,39 @@ def test_fetch_all_runs_filters_by_config_before_tags(monkeypatch):
     )
 
     assert captured["path"] == "entity/proj"
-    assert captured["filters"] == {"state": "finished"}
+    assert captured["filters"] == {
+        "state": "finished",
+        "config.revision": {"$in": ["thesis-v1"]},
+    }
     assert [run.id for run in runs] == ["keep-config", "keep-tags"]
+
+
+def test_fetch_all_runs_default_scope_excludes_smart(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+    core = DummyRun(
+        config={"experiment_class": "core_ssl_benchmark", "revision": "thesis-v1"},
+        tags=[],
+    )
+    core.id = "core"
+    smart = DummyRun(
+        config={"experiment_class": "smart_external_reference", "revision": "thesis-v1"},
+        tags=[],
+    )
+    smart.id = "smart"
+
+    class DummyApi:
+        def __init__(self, timeout):
+            pass
+
+        def runs(self, path, filters, order):
+            return [core, smart]
+
+    monkeypatch.setattr(mod.wandb, "Api", DummyApi)
+
+    runs = mod.fetch_all_runs(project="proj", revision=["thesis-v1"])
+
+    assert [run.id for run in runs] == ["core"]
+    assert "smart_external_reference" not in mod.EXPERIMENT_CLASSES
 
 
 def test_build_per_seed_df_keeps_hp_robustness_rows_out_of_derived_views():
@@ -336,6 +367,118 @@ def test_extract_run_uses_xgboost_learning_rate_for_lr_metadata():
     )
 
     assert mod.extract_run(run, [])["lr"] == pytest.approx(0.1)
+
+
+def test_extract_run_exports_support_and_baseline_summary_numbers():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "dataset": "miiv",
+            "paradigm": "supervised",
+            "seed": 42,
+            "task": {"task_name": "mortality_24h"},
+            "training": {"freeze_encoder": False},
+        },
+        tags=["phase:supervised"],
+        summary={
+            "test/auprc": 0.41,
+            "test/n_samples": 1000,
+            "test/n_positive": 123,
+            "test/positive_ratio": 0.123,
+            "baseline/majority_accuracy": 0.877,
+            "baseline/random_auroc": 0.5,
+            "train_label_support/full_train_total": 7000,
+            "train_label_support/full_train_positive": 861,
+            "train_label_support/train_subset_total": 7000,
+            "train_label_support/train_subset_positive": 861,
+            "train_label_support/task_name": "mortality_24h",
+        },
+    )
+
+    row = mod.extract_run(run, mod.ALL_METRICS)
+
+    assert row["test/n_samples"] == pytest.approx(1000)
+    assert row["test/positive_ratio"] == pytest.approx(0.123)
+    assert row["baseline/majority_accuracy"] == pytest.approx(0.877)
+    assert row["train_label_support/full_train_total"] == pytest.approx(7000)
+    assert row["train_label_support/train_subset_positive"] == pytest.approx(861)
+    assert "train_label_support/task_name" not in row
+
+
+def test_run_configs_export_preserves_nested_config_json():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "revision": "thesis-v1",
+            "launch_commit": "abcdef",
+            "task": {"task_name": "mortality_24h"},
+            "encoder": {"d_model": 64, "n_layers": 2},
+            "training": {"freeze_encoder": False, "batch_size": 128},
+        },
+        tags=["phase:finetune"],
+    )
+
+    row = mod.extract_run(run, [])
+    configs = mod.build_run_configs_df(pd.DataFrame([row]))
+    config_json = json.loads(configs.iloc[0]["config_json"])
+
+    assert configs.iloc[0]["wandb_run_id"] == "dummy-id"
+    assert configs.iloc[0]["revision"] == "thesis-v1"
+    assert config_json["encoder"]["d_model"] == 64
+    assert config_json["training"]["batch_size"] == 128
+
+
+def test_metrics_long_exports_numeric_summary_metrics_only():
+    mod = importlib.import_module("scripts.export_results")
+
+    run = DummyRun(
+        config={
+            "experiment_class": "core_ssl_benchmark",
+            "dataset": "miiv",
+            "paradigm": "mae",
+            "seed": 42,
+            "revision": "thesis-v1",
+            "task": {"task_name": "mortality_24h"},
+            "training": {"freeze_encoder": False},
+        },
+        tags=["phase:finetune"],
+        summary={
+            "train/loss": 0.11,
+            "val/auprc": 0.22,
+            "test/auprc": 0.33,
+            "fairness/gender/worst_group_auroc": 0.44,
+            "baseline/random_auroc": 0.5,
+            "train_label_support/full_train_total": 7000,
+            "trainer/global_step": 123,
+            "_runtime": 456,
+            "train/comment": "skip",
+            "test/flag": True,
+            "other_numeric": 99,
+        },
+    )
+
+    row = mod.extract_run(run, [])
+    metrics_long = mod.build_metrics_long_df(pd.DataFrame([row]))
+    metrics = dict(zip(metrics_long["metric_name"], metrics_long["metric_value"], strict=True))
+
+    assert metrics["train/loss"] == pytest.approx(0.11)
+    assert metrics["val/auprc"] == pytest.approx(0.22)
+    assert metrics["test/auprc"] == pytest.approx(0.33)
+    assert metrics["fairness/gender/worst_group_auroc"] == pytest.approx(0.44)
+    assert metrics["baseline/random_auroc"] == pytest.approx(0.5)
+    assert metrics["train_label_support/full_train_total"] == pytest.approx(7000)
+    assert metrics["trainer/global_step"] == pytest.approx(123)
+    assert metrics["_runtime"] == pytest.approx(456)
+    assert "train/comment" not in metrics
+    assert "test/flag" not in metrics
+    assert "other_numeric" not in metrics
 
 
 def test_label_efficiency_view_adds_core_full_label_endpoint():
@@ -449,11 +592,19 @@ def test_build_aggregated_df_records_per_metric_non_null_counts():
     mod = importlib.import_module("scripts.export_results")
 
     rows = [
-        {**_row("core_ssl_benchmark", "mae", 42), "test/auroc": 0.7, "wandb_run_id": "run-42"},
+        {
+            **_row("core_ssl_benchmark", "mae", 42),
+            "test/auroc": 0.7,
+            "test/n_samples": 100,
+            "train_label_support/train_subset_positive": 12,
+            "wandb_run_id": "run-42",
+        },
         {
             **_row("core_ssl_benchmark", "mae", 123),
             "test/auprc": None,
             "test/auroc": 0.8,
+            "test/n_samples": 120,
+            "train_label_support/train_subset_positive": 15,
             "wandb_run_id": "run-123",
         },
     ]
@@ -466,6 +617,10 @@ def test_build_aggregated_df_records_per_metric_non_null_counts():
     assert aggregated.iloc[0]["test/auroc/ci95_lower"] < aggregated.iloc[0]["test/auroc/mean"]
     assert aggregated.iloc[0]["test/auroc/ci95_upper"] > aggregated.iloc[0]["test/auroc/mean"]
     assert pd.isna(aggregated.iloc[0]["test/auprc/ci95_lower"])
+    assert aggregated.iloc[0]["test/n_samples/mean"] == pytest.approx(110)
+    assert aggregated.iloc[0]["train_label_support/train_subset_positive/mean"] == pytest.approx(
+        13.5
+    )
 
 
 def test_validate_warns_when_evaluation_row_missing_primary_metric():
@@ -760,6 +915,14 @@ def test_filter_thesis_tasks_excludes_optional_mortality_by_default():
     assert unfiltered["wandb_run_id"].tolist() == ["main", "extension"]
 
 
+def test_build_expected_matrix_default_scope_excludes_smart():
+    mod = importlib.import_module("scripts.export_results")
+
+    expected = mod.build_expected_matrix_df()
+
+    assert "smart_external_reference" not in set(expected["experiment_class"])
+
+
 def test_parse_args_exposes_extension_task_escape_hatch(monkeypatch):
     mod = importlib.import_module("scripts.export_results")
 
@@ -772,6 +935,27 @@ def test_parse_args_exposes_extension_task_escape_hatch(monkeypatch):
     args = mod.parse_args()
 
     assert args.include_extension_tasks is True
+
+
+def test_parse_args_rejects_smart_experiment_class(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_results.py",
+            "--revision",
+            "thesis-v1",
+            "--experiment-class",
+            "smart_external_reference",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.parse_args()
+
+    assert excinfo.value.code == 2
 
 
 def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
@@ -915,6 +1099,83 @@ def test_validate_warns_when_revision_lacks_launch_commit():
     assert any(
         "revision=thesis-v1 has 1 runs missing launch_commit" in warning for warning in warnings
     )
+
+
+def test_main_writes_run_configs_and_metrics_long(monkeypatch, tmp_path):
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-42",
+        "wandb_run_url": "https://wandb.test/run-42",
+        "wandb_run_name": "run-name",
+        "revision": "thesis-v1",
+        "launch_commit": "abcdef",
+        "train/loss": 0.1,
+        "val/auprc": 0.2,
+        "train/gradient_steps": 12,
+        "_config_json": json.dumps({"encoder": {"d_model": 64}}),
+        "_metrics_long_json": json.dumps(
+            [
+                {"metric_name": "train/loss", "metric_value": 0.1},
+                {"metric_name": "val/auprc", "metric_value": 0.2},
+                {"metric_name": "_runtime", "metric_value": 30},
+            ]
+        ),
+    }
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--output-dir", str(tmp_path)],
+    )
+    monkeypatch.setattr(mod, "fetch_all_runs", lambda **_: [object()])
+    monkeypatch.setattr(mod, "build_per_seed_df", lambda *_, **__: pd.DataFrame([row]))
+    monkeypatch.setattr(mod, "build_expected_matrix_df", lambda **_: pd.DataFrame())
+    monkeypatch.setattr(mod, "validate", lambda *_, **__: [])
+
+    mod.main()
+
+    run_configs = pd.read_parquet(tmp_path / "run_configs.parquet")
+    metrics_long = pd.read_parquet(tmp_path / "metrics_long.parquet")
+    per_seed = pd.read_parquet(tmp_path / "per_seed_results.parquet")
+
+    assert (tmp_path / "aggregated_results.parquet").exists()
+    assert json.loads(run_configs.iloc[0]["config_json"])["encoder"]["d_model"] == 64
+    assert set(metrics_long["metric_name"]) == {"train/loss", "val/auprc", "_runtime"}
+    assert "_config_json" not in per_seed.columns
+    assert "_metrics_long_json" not in per_seed.columns
+
+
+def test_main_warn_only_optional_completeness_does_not_fail(monkeypatch, tmp_path):
+    mod = importlib.import_module("scripts.export_results")
+
+    row = {
+        **_row("core_ssl_benchmark", "mae", 42),
+        "wandb_run_id": "run-42",
+        "wandb_run_url": "https://wandb.test/run-42",
+        "wandb_run_name": "run-name",
+        "revision": "thesis-v1",
+        "launch_commit": "abcdef",
+        "_config_json": json.dumps({"encoder": {"d_model": 64}}),
+        "_metrics_long_json": json.dumps([]),
+    }
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_results.py", "--revision", "thesis-v1", "--output-dir", str(tmp_path)],
+    )
+    monkeypatch.setattr(mod, "fetch_all_runs", lambda **_: [object()])
+    monkeypatch.setattr(mod, "build_per_seed_df", lambda *_, **__: pd.DataFrame([row]))
+    monkeypatch.setattr(mod, "build_expected_matrix_df", lambda **_: pd.DataFrame())
+    monkeypatch.setattr(mod, "validate", lambda *_, **__: [])
+
+    mod.main()
+
+    assert (tmp_path / "per_seed_results.parquet").exists()
+    assert (tmp_path / "run_configs.parquet").exists()
+    assert (tmp_path / "metrics_long.parquet").exists()
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch, tmp_path):

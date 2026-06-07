@@ -6,6 +6,8 @@ publication-oriented parquet files:
 
   - results/per_seed_results.parquet
   - results/aggregated_results.parquet
+  - results/run_configs.parquet
+  - results/metrics_long.parquet
   - results/statistical_tests.parquet
   - results/label_efficiency_curves.parquet
   - results/capacity_study_comparison.parquet
@@ -35,9 +37,9 @@ from itertools import combinations
 from pathlib import Path
 
 import pandas as pd
-import wandb
 from scipy import stats as scipy_stats
 
+import wandb
 from slices.constants import (
     FULL_FINETUNE_PROTOCOL,
     canonical_downstream_protocol,
@@ -66,6 +68,7 @@ from slices.eval.fairness_metadata import (
     decode_protected_attributes,
     normalize_protected_attributes,
 )
+from slices.eval.metrics import AVAILABLE_METRICS
 from slices.eval.statistical import (
     bonferroni_correction,
     cohens_d,
@@ -84,7 +87,6 @@ EXPERIMENT_CLASSES = [
     "capacity_study",
     "classical_baselines",
     "ts2vec_extension",
-    "smart_external_reference",
 ]
 
 CONTEXTUAL_STAT_CLASSES = {
@@ -120,20 +122,27 @@ FINGERPRINT_AUDIT_COLUMNS = [
     "mask_ratio",
 ]
 
-TEST_METRICS = [
-    "test/auroc",
-    "test/auprc",
-    "test/accuracy",
-    "test/f1",
-    "test/precision",
-    "test/recall",
-    "test/specificity",
-    "test/brier_score",
-    "test/ece",
-    "test/mse",
-    "test/mae",
-    "test/r2",
-    "test/loss",
+TASK_METRIC_NAMES = sorted(
+    {metric_name for metric_names in AVAILABLE_METRICS.values() for metric_name in metric_names}
+)
+
+
+def _split_metrics(split: str) -> list[str]:
+    return [f"{split}/{metric_name}" for metric_name in TASK_METRIC_NAMES] + [f"{split}/loss"]
+
+
+TRAIN_METRICS = _split_metrics("train")
+VAL_METRICS = _split_metrics("val")
+TEST_TASK_METRICS = _split_metrics("test")
+
+TEST_SUPPORT_METRICS = [
+    "test/n_samples",
+    "test/n_positive",
+    "test/n_negative",
+    "test/positive_ratio",
+]
+
+FAIRNESS_METRICS = [
     "fairness/gender/worst_group_auroc",
     "fairness/gender/worst_group_auprc",
     "fairness/gender/auroc_gap",
@@ -175,14 +184,74 @@ TEST_METRICS = [
     "fairness/race/n_metric_valid_groups",
 ]
 
-VAL_METRICS = [
-    "val/auroc",
-    "val/auprc",
-    "val/loss",
+TEST_METRICS = TEST_TASK_METRICS + TEST_SUPPORT_METRICS + FAIRNESS_METRICS
+
+BASELINE_METRICS = [
+    "baseline/train_label_mean",
+    "baseline/train_label_std",
+    "baseline/train_label_median",
+    "baseline/mean_predictor_mse",
+    "baseline/median_predictor_mae",
+    "baseline/train_positive_ratio",
+    "baseline/random_auroc",
+    "baseline/majority_accuracy",
+    "baseline/trivial_auroc",
 ]
 
-ALL_METRICS = TEST_METRICS + VAL_METRICS
-PERFORMANCE_TEST_METRICS = [metric for metric in TEST_METRICS if metric.startswith("test/")]
+TRAIN_LABEL_SUPPORT_METRICS = [
+    "train_label_support/full_train_total",
+    "train_label_support/full_train_positive",
+    "train_label_support/full_train_negative",
+    "train_label_support/full_train_prevalence",
+    "train_label_support/train_subset_total",
+    "train_label_support/train_subset_positive",
+    "train_label_support/train_subset_negative",
+    "train_label_support/train_subset_prevalence",
+]
+
+COMPUTE_SUMMARY_METRICS = [
+    "train/gradient_steps",
+    "train/wall_clock_seconds",
+    "_runtime",
+    "_step",
+    "epoch",
+    "trainer/global_step",
+]
+
+ALL_METRICS = (
+    TRAIN_METRICS
+    + VAL_METRICS
+    + TEST_METRICS
+    + BASELINE_METRICS
+    + TRAIN_LABEL_SUPPORT_METRICS
+    + COMPUTE_SUMMARY_METRICS
+)
+PERFORMANCE_TEST_METRICS = TEST_TASK_METRICS
+DYNAMIC_NUMERIC_SUMMARY_PREFIXES = (
+    "train/",
+    "val/",
+    "test/",
+    "fairness/",
+    "baseline/",
+    "train_label_support/",
+    "trainer/",
+)
+DYNAMIC_NUMERIC_SUMMARY_KEYS = set(ALL_METRICS)
+
+RUN_IDENTITY_COLUMNS = [
+    "wandb_run_id",
+    "wandb_run_url",
+    "wandb_run_name",
+    "experiment_class",
+    "paradigm",
+    "dataset",
+    "task",
+    "seed",
+    "phase",
+    "revision",
+    "launch_commit",
+]
+INTERNAL_EXPORT_COLUMNS = ["_config_json", "_metrics_long_json"]
 
 MODEL_VARIANTS = {
     (64, 2): "default",
@@ -271,17 +340,28 @@ def fetch_all_runs(
     """Fetch runs from W&B with server-side filters where W&B supports them."""
     api = wandb.Api(timeout=300)
     path = f"{entity}/{project}" if entity else project
+    experiment_class = experiment_class or EXPERIMENT_CLASSES
 
     filters: dict = {}
     if state:
         filters["state"] = state
+    if revision:
+        filters["config.revision"] = {"$in": revision}
 
     print(f"Fetching runs from {path}...", file=sys.stderr)
     print(f"  Server-side filters: {json.dumps(filters, default=str)}", file=sys.stderr)
     runs_iter = api.runs(path, filters=filters or {}, order="-created_at")
 
     runs = []
+    seen = 0
     for run in runs_iter:
+        seen += 1
+        if seen % 100 == 0:
+            print(
+                f"  Scanned {seen} W&B runs, kept {len(runs)} after client filters...",
+                file=sys.stderr,
+                flush=True,
+            )
         if not _run_matches_filter(run, "experiment_class", "experiment_class", experiment_class):
             continue
         if not _run_matches_filter(run, "paradigm", "paradigm", paradigm):
@@ -450,6 +530,43 @@ def _metric_value_or_nan(value) -> float:
     return float(value)
 
 
+def _is_finite_numeric_summary_value(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return not math.isnan(value) and not math.isinf(value)
+
+
+def _is_dynamic_numeric_summary_key(key: str) -> bool:
+    """Return true for extra numeric summary keys that should follow W&B into export."""
+    return key in DYNAMIC_NUMERIC_SUMMARY_KEYS or key.startswith(DYNAMIC_NUMERIC_SUMMARY_PREFIXES)
+
+
+def _config_json(config: dict) -> str:
+    """Serialize the resolved W&B config as JSON while preserving nested structure."""
+    return json.dumps(config, default=str, sort_keys=True)
+
+
+def _identity_from_row(row: dict | pd.Series) -> dict:
+    return {col: row.get(col, None) for col in RUN_IDENTITY_COLUMNS}
+
+
+def _build_long_metric_rows(summary: dict, identity: dict) -> list[dict]:
+    rows = []
+    for key, value in summary.items():
+        if not _is_dynamic_numeric_summary_key(str(key)):
+            continue
+        if not _is_finite_numeric_summary_value(value):
+            continue
+        rows.append(
+            {
+                **identity,
+                "metric_name": str(key),
+                "metric_value": float(value),
+            }
+        )
+    return sorted(rows, key=lambda row: row["metric_name"])
+
+
 def extract_run(run, metric_keys: list[str]) -> dict:
     """Extract one W&B run to a class-based result row."""
     config, summary, run_id, run_url, run_name, tags, group, created_at = _retry(
@@ -484,7 +601,7 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     for key in metric_keys:
         metrics[key] = _metric_value_or_nan(summary.get(key, None))
     for key, value in summary.items():
-        if key.startswith("fairness/") and isinstance(value, (int, float)):
+        if _is_dynamic_numeric_summary_key(key) and isinstance(value, (int, float)):
             metrics[key] = _metric_value_or_nan(value)
     fairness_summary_keys = sorted(
         key for key, value in summary.items() if key.startswith("fairness/") and value is not None
@@ -530,6 +647,10 @@ def extract_run(run, metric_keys: list[str]) -> dict:
     for key in FAIRNESS_METADATA_COLUMNS:
         row[key] = summary.get(key, None)
     row.update(metrics)
+    row["_config_json"] = _config_json(config)
+    row["_metrics_long_json"] = json.dumps(
+        _build_long_metric_rows(summary, _identity_from_row(row))
+    )
     return row
 
 
@@ -650,6 +771,71 @@ def build_per_seed_df(
         print(f"    {experiment_class}: {count}", file=sys.stderr)
     print(f"    TOTAL: {len(df)}", file=sys.stderr)
     return df
+
+
+def _public_per_seed_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Drop internal payload columns before writing wide result tables."""
+    return per_seed_df.drop(
+        columns=[col for col in INTERNAL_EXPORT_COLUMNS if col in per_seed_df.columns],
+        errors="ignore",
+    )
+
+
+def build_run_configs_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Build one JSON config export row per exported run."""
+    if per_seed_df.empty:
+        return pd.DataFrame(columns=[*RUN_IDENTITY_COLUMNS, "config_json"])
+
+    rows = []
+    for _, row in per_seed_df.iterrows():
+        config_json = row.get("_config_json")
+        if _is_missing_export_value(config_json):
+            config_json = "{}"
+        rows.append({**_identity_from_row(row), "config_json": config_json})
+    return pd.DataFrame(rows)
+
+
+def build_metrics_long_df(per_seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Build one row per numeric W&B summary metric per exported run."""
+    columns = [*RUN_IDENTITY_COLUMNS, "metric_name", "metric_value"]
+    if per_seed_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for _, row in per_seed_df.iterrows():
+        payload = row.get("_metrics_long_json")
+        if _is_missing_export_value(payload):
+            continue
+        try:
+            metric_rows = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        identity = _identity_from_row(row)
+        for metric_row in metric_rows:
+            metric_name = metric_row.get("metric_name")
+            metric_value = metric_row.get("metric_value")
+            if metric_name is None or not _is_finite_numeric_summary_value(metric_value):
+                continue
+            rows.append(
+                {
+                    **identity,
+                    "metric_name": str(metric_name),
+                    "metric_value": float(metric_value),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame(rows)
+    sort_cols = [
+        col
+        for col in ["experiment_class", "paradigm", "dataset", "task", "seed", "metric_name"]
+        if col in df.columns
+    ]
+    return df.sort_values(
+        sort_cols,
+        na_position="last",
+    ).reset_index(drop=True)
 
 
 def filter_thesis_tasks(
@@ -1437,6 +1623,64 @@ def _fairness_metadata_staleness_issues(
     return issues
 
 
+def _row_has_any_metric(row: pd.Series, metric_names: list[str]) -> bool:
+    return any(
+        metric_name in row.index and not pd.isna(row.get(metric_name))
+        for metric_name in metric_names
+    )
+
+
+def _val_metric_optional_for_row(row: pd.Series) -> bool:
+    experiment_class = str(row.get("experiment_class", "") or "").lower()
+    paradigm = str(row.get("paradigm", "") or "").lower()
+    return experiment_class == "classical_baselines" or paradigm == "xgboost"
+
+
+def optional_completeness_warnings(per_seed_df: pd.DataFrame) -> list[str]:
+    """Warn about useful-but-nonstrict downstream export fields."""
+    if per_seed_df.empty:
+        return []
+
+    warnings = []
+    if "phase" not in per_seed_df.columns:
+        return warnings
+    eval_rows = per_seed_df[per_seed_df["phase"].isin(EVAL_PHASES)]
+    if eval_rows.empty:
+        return warnings
+
+    missing_train = [
+        row for _, row in eval_rows.iterrows() if not _row_has_any_metric(row, TRAIN_METRICS)
+    ]
+    if missing_train:
+        warnings.append(
+            f"WARNING: {len(missing_train)} evaluation rows have no train/* metrics. "
+            "This is warn-only completeness metadata."
+        )
+
+    missing_val = [
+        row
+        for _, row in eval_rows.iterrows()
+        if not _val_metric_optional_for_row(row) and not _row_has_any_metric(row, VAL_METRICS)
+    ]
+    if missing_val:
+        warnings.append(
+            f"WARNING: {len(missing_val)} evaluation rows have no val/* metrics. "
+            "This is warn-only completeness metadata."
+        )
+
+    if not any(
+        _row_has_any_metric(row, COMPUTE_SUMMARY_METRICS) for _, row in eval_rows.iterrows()
+    ):
+        warnings.append(
+            "WARNING: no compute-summary fields are present in evaluation rows. "
+            "Expected one of "
+            + ", ".join(COMPUTE_SUMMARY_METRICS)
+            + ". This is warn-only completeness metadata."
+        )
+
+    return warnings
+
+
 def _mixed_revision_group_warnings(per_seed_df: pd.DataFrame) -> list[str]:
     """Warn when one aggregated scientific config draws seeds from multiple revisions."""
     if per_seed_df.empty or "revision" not in per_seed_df.columns:
@@ -1544,7 +1788,7 @@ def build_expected_matrix_df(
     """Build the expected per-seed evaluation matrix for the selected export scope."""
     from scripts.internal.run_experiments import generate_all_runs
 
-    experiment_class_set = set(experiment_class) if experiment_class else None
+    experiment_class_set = set(experiment_class or EXPERIMENT_CLASSES)
     paradigm_set = set(paradigm) if paradigm else None
     dataset_set = set(dataset) if dataset else None
     phase_set = set(phase) if phase else set(EVAL_PHASES)
@@ -1989,9 +2233,19 @@ def main() -> None:
         print("Validation failed; no parquet outputs were written.", file=sys.stderr)
         sys.exit(1)
 
+    optional_warnings = optional_completeness_warnings(per_seed_df)
+    for warning in optional_warnings:
+        print(warning, file=sys.stderr)
+
+    public_per_seed_df = _public_per_seed_df(per_seed_df)
+    run_configs_df = build_run_configs_df(per_seed_df)
+    metrics_long_df = build_metrics_long_df(per_seed_df)
+
     outputs = {
-        "per_seed_results.parquet": per_seed_df,
+        "per_seed_results.parquet": public_per_seed_df,
         "aggregated_results.parquet": aggregated_df,
+        "run_configs.parquet": run_configs_df,
+        "metrics_long.parquet": metrics_long_df,
         "statistical_tests.parquet": statistical_df,
         "label_efficiency_curves.parquet": label_efficiency_df,
         "capacity_study_comparison.parquet": capacity_df,
