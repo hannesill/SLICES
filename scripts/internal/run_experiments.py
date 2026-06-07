@@ -1408,8 +1408,10 @@ def _pid_matches_command(pid: int, expected_command: str | None) -> bool:
     actual_command = result.stdout.strip()
     expected_unquoted = expected_command.replace("'", "").replace('"', "")
     return bool(actual_command) and (
-        expected_command == actual_command or expected_command in actual_command
-        or expected_unquoted == actual_command or expected_unquoted in actual_command
+        expected_command == actual_command
+        or expected_command in actual_command
+        or expected_unquoted == actual_command
+        or expected_unquoted in actual_command
     )
 
 
@@ -1456,7 +1458,13 @@ def _select_ready_runs(
     selected: list[Run] = []
 
     indexed_ready = list(enumerate(ready))
-    indexed_ready.sort(key=lambda item: (-_slot_cost(item[1], slot_budget), item[0]))
+    indexed_ready.sort(
+        key=lambda item: (
+            item[1].run_type != "pretrain",
+            -_slot_cost(item[1], slot_budget),
+            item[0],
+        )
+    )
     for _, run in indexed_ready:
         cost = _slot_cost(run, slot_budget)
         if cost <= available_slots:
