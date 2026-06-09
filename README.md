@@ -170,6 +170,15 @@ the last encoder from the fixed pretraining schedule, not `encoder_best_val.pt`;
 downstream task evaluation still records the exact finetune checkpoint used for
 test metrics and post-hoc fairness.
 
+Run provenance in W&B may reference pre-release commit hashes from the private
+working history. The public history preserves equivalent code states while
+omitting internal planning documents:
+
+| W&B commit | Public provenance |
+|---|---|
+| `ffd6dc52c2ed224da5290cfb5d1a6634b5ba6ab6` | Patch-equivalent to `d1b86f6` (`Handle invalid W&B entity errors cleanly`) |
+| `1a01467d40c464415e021831f65f4bb8dd520430` | Equivalent public code state represented by `8014839` after removal of internal planning documents |
+
 Final publication export expects post-hoc fairness metrics to be written first
 with `scripts/eval/evaluate_fairness.py`. The export emits per-seed rows,
 aggregate mean/std/min/max/95% CI columns, derived comparison views, and
