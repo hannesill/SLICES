@@ -17,6 +17,28 @@
 
 **SLICES** is a benchmark framework for controlled comparison of self-supervised learning (SSL) paradigms on sparse, irregularly-sampled ICU time-series data.
 
+## Status and Scope
+
+SLICES is Master's thesis work in progress. The code and benchmark protocol are
+public, but no ICU patient data is included in this repository. Reproduction
+requires credentialed access to source datasets such as MIMIC-IV and eICU.
+The final thesis PDF and full static result release may not yet be available.
+
+## What SLICES Is / Is Not
+
+SLICES is:
+
+- a controlled benchmark for comparing SSL objective families on sparse ICU time
+  series
+- focused on MAE, JEPA, and contrastive learning under a shared benchmark
+  contract
+
+SLICES is not:
+
+- a replacement for YAIB
+- a clinical deployment model
+- a public patient-data release
+
 ## Research Question
 
 How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
@@ -35,7 +57,11 @@ and model-capacity studies.
 
 ### Why a New Benchmark?
 
-Fair comparison of SSL objectives for clinical time series is currently impossible because published methods differ in preprocessing, cohort definitions, input modalities, and evaluation setups. SLICES standardizes everything that **can** be shared (data pipeline, encoder architecture, hyperparameter budget, evaluation protocol) and explicitly documents what **must** differ (tokenization strategy, encoder-data interface) as paradigm-intrinsic requirements.
+YAIB standardizes broad ICU prediction benchmarking. SLICES complements this by
+standardizing self-supervised objective attribution. The core issue is
+attribution: many SSL papers change preprocessing, representation, encoder,
+objective, and downstream protocol together. SLICES fixes the main benchmark
+interface so MAE, JEPA, and contrastive learning can be compared more cleanly.
 
 **Key insight**: SSL paradigm choice is not just "swap the loss function" — it imposes structural requirements on how the encoder interfaces with sparse clinical data. This interaction between paradigm and data sparsity is itself a contribution.
 
@@ -81,7 +107,7 @@ RICU (R) ──→ Parquet ──→ ICUDataset ──→ SSL Pretraining ──
 ### Setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/hannesill/SLICES.git
 cd SLICES
 uv sync --dev
 ```
