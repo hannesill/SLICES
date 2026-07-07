@@ -19,14 +19,15 @@ confidence intervals across finite seed values.
 
 Usage:
     uv run python scripts/export_results.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity>
+        --project slices-final --revision thesis-v1 --entity <entity>
     uv run python scripts/export_results.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --project slices-final --revision thesis-v1 --entity <entity> \
         --experiment-class core_ssl_benchmark label_efficiency
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -35,6 +36,7 @@ import sys
 import time
 from itertools import combinations
 from pathlib import Path
+from typing import Sequence
 
 import pandas as pd
 from scipy import stats as scipy_stats
@@ -273,6 +275,15 @@ LOWER_IS_BETTER_METRICS = {
 
 EVAL_PHASES = ["finetune", "supervised", "baseline"]
 FAIRNESS_ATTRIBUTES = FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES
+PUBLIC_PATH_PREFIXES = (
+    "/home/hannesill/SLICES/",
+    "/Users/hannesill/Developer/SLICES/",
+)
+PUBLIC_RESULTS_GENERATION_NOTE = (
+    "Public thesis result export. Local absolute host prefixes are replaced with "
+    "repo-relative paths; W&B run IDs/URLs, revisions, launch commits, seeds, "
+    "artifact SHA256 values, and scientific grouping fields are preserved."
+)
 FAIRNESS_SUMMARY_KEY_COLUMN = "_fairness_summary_keys"
 BINARY_FAIRNESS_REQUIRED_METRICS = [
     "n_valid_groups",
@@ -543,6 +554,65 @@ def _is_dynamic_numeric_summary_key(key: str) -> bool:
 def _config_json(config: dict) -> str:
     """Serialize the resolved W&B config as JSON while preserving nested structure."""
     return json.dumps(config, default=str, sort_keys=True)
+
+
+def _sanitize_public_text(text: str) -> str:
+    """Replace known local checkout prefixes with repo-relative paths."""
+    sanitized = text
+    for prefix in PUBLIC_PATH_PREFIXES:
+        sanitized = sanitized.replace(prefix, "")
+    return sanitized
+
+
+def _sanitize_public_value(value):
+    if isinstance(value, str):
+        return _sanitize_public_text(value)
+    return value
+
+
+def sanitize_public_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with local host paths removed from string-like cells."""
+    if df.empty:
+        return df.copy()
+
+    public = df.copy()
+    for col in public.columns:
+        if public[col].dtype == object or str(public[col].dtype).startswith("string"):
+            public[col] = public[col].map(_sanitize_public_value)
+    return public
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_evidence_manifest(
+    output_dir: Path,
+    outputs: dict[str, pd.DataFrame],
+    project: str,
+    entity: str | None,
+    revision: Sequence[str],
+) -> None:
+    manifest = {
+        "package": output_dir.name,
+        "source_wandb_project": f"{entity}/{project}" if entity else project,
+        "revision": list(revision),
+        "generation_note": PUBLIC_RESULTS_GENERATION_NOTE,
+        "files": {},
+    }
+    for name, df in sorted(outputs.items()):
+        path = output_dir / name
+        manifest["files"][name] = {
+            "rows": int(len(df)),
+            "columns": int(len(df.columns)),
+            "sha256": sha256_file(path),
+        }
+
+    (output_dir / "evidence_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def _identity_from_row(row: dict | pd.Series) -> dict:
@@ -2063,8 +2133,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--project",
-        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
-        help="W&B project name (default: WANDB_PROJECT env var or 'slices-thesis')",
+        default=os.environ.get("WANDB_PROJECT", "slices-final"),
+        help="W&B project name (default: WANDB_PROJECT env var or 'slices-final')",
     )
     parser.add_argument(
         "--entity",
@@ -2255,10 +2325,12 @@ def main() -> None:
         "classical_context.parquet": classical_context_df,
         "ts2vec_vs_core_contrastive.parquet": ts2vec_contrastive_df,
     }
+    outputs = {name: sanitize_public_df(df) for name, df in outputs.items()}
     for name, df in outputs.items():
         path = output_dir / name
         df.to_parquet(path, index=False)
         print(f"  {path} ({len(df)} rows)", file=sys.stderr)
+    write_evidence_manifest(output_dir, outputs, args.project, args.entity, args.revision)
 
     print("\n--- Quick Summary ---")
     print(

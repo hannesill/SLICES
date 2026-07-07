@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -28,6 +29,15 @@ import torch
 
 DEFAULT_ENCODER_ROOT = Path("outputs/archives/slices-thesis-encoders-thesis-v1")
 DEFAULT_OUTPUT = Path("results/slices-thesis-encoder-audit-v1/encoder_epoch_audit.csv")
+PUBLIC_PATH_PREFIXES = (
+    "/home/hannesill/SLICES/",
+    "/Users/hannesill/Developer/SLICES/",
+)
+PACKAGE_NOTE = (
+    "Public checkpoint-provenance CSV package. Encoder weights remain local under "
+    "outputs/archives/slices-thesis-encoders-thesis-v1/; local absolute host prefixes "
+    "are replaced with repo-relative paths."
+)
 CSV_COLUMNS = [
     "run",
     "dataset",
@@ -126,6 +136,20 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sanitize_public_text(text: str) -> str:
+    sanitized = text
+    for prefix in PUBLIC_PATH_PREFIXES:
+        sanitized = sanitized.replace(prefix, "")
+    return sanitized
+
+
+def sanitize_public_row(row: dict[str, str]) -> dict[str, str]:
+    return {
+        key: sanitize_public_text(value) if isinstance(value, str) else value
+        for key, value in row.items()
+    }
 
 
 def bool_to_csv(value: bool | None) -> str:
@@ -419,7 +443,47 @@ def write_csv(rows: Sequence[dict[str, str]], output_path: Path) -> None:
     with output_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(sanitize_public_row(row) for row in rows)
+
+
+def write_public_encoder_manifest(
+    manifest_rows: Sequence[dict[str, str]], output_dir: Path
+) -> Path | None:
+    if not manifest_rows:
+        return None
+
+    output_path = output_dir / "encoder_manifest.csv"
+    fieldnames = list(manifest_rows[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(sanitize_public_row(row) for row in manifest_rows)
+    return output_path
+
+
+def csv_shape(path: Path) -> tuple[int, int]:
+    with path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        rows = sum(1 for _ in reader)
+        columns = len(reader.fieldnames or [])
+    return rows, columns
+
+
+def write_checksum_manifest(output_dir: Path, files: Sequence[Path]) -> None:
+    manifest = {
+        "package": output_dir.name,
+        "generation_note": PACKAGE_NOTE,
+        "files": {},
+    }
+    for path in sorted(files):
+        rows, columns = csv_shape(path)
+        manifest["files"][path.name] = {
+            "rows": rows,
+            "columns": columns,
+            "sha256": sha256_file(path),
+        }
+    (output_dir / "checksum_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def percent(count: int, total: int) -> str:
@@ -532,6 +596,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest_rows = read_manifest(encoder_root)
     rows = [audit_run(row, encoder_root) for row in manifest_rows]
     write_csv(rows, output_path)
+    public_manifest = write_public_encoder_manifest(manifest_rows, output_path.parent)
+    manifest_files = [output_path]
+    if public_manifest is not None:
+        manifest_files.append(public_manifest)
+    write_checksum_manifest(output_path.parent, manifest_files)
     print_summary(rows, output_path)
 
     bad_rows = [row for row in rows if row["status"] != STATUS_OK]

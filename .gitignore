@@ -217,7 +217,13 @@ docs/internal/
 /data/
 outputs/
 /results/*
-!/results/.gitkeep
+!/results/README.md
+!/results/slices-thesis-v1/
+!/results/slices-thesis-v1/**
+!/results/slices-thesis-encoder-audit-v1/
+!/results/slices-thesis-encoder-audit-v1/**
+!/results/slices-thesis-jepa-collapse-diagnostic-v1/
+!/results/slices-thesis-jepa-collapse-diagnostic-v1/**
 wandb/
 .tensor_cache/
 logs/

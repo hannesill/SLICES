@@ -140,7 +140,7 @@ uv run python scripts/internal/run_experiments.py run \
     capacity_study \
     classical_baselines \
     ts2vec_extension \
-  --project slices-thesis \
+  --project slices-final \
   --revision thesis-v1 \
   --launch-commit <reviewed-git-commit> \
   --entity <entity>
@@ -209,7 +209,7 @@ uv run python scripts/export_results.py \
   --project slices-thesis \
   --revision thesis-v1 \
   --entity <entity> \
-  --output-dir results/slices-thesis_thesis-v1
+  --output-dir results/slices-thesis-v1
 ```
 
 The export writes canonical per-run and aggregated tables plus derived
