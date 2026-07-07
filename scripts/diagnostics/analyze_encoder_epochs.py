@@ -8,8 +8,8 @@ The final downstream encoder is ``encoder.pt``. It is saved after
 does not infer final training duration from ``checkpoints/last.ckpt``.
 
 Usage:
-    uv run python scripts/debug/analyze_encoder_epochs.py
-    uv run python scripts/debug/analyze_encoder_epochs.py --strict
+    uv run python scripts/diagnostics/analyze_encoder_epochs.py
+    uv run python scripts/diagnostics/analyze_encoder_epochs.py --strict
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ from typing import Any, Sequence
 
 import torch
 
-DEFAULT_ENCODER_ROOT = Path("results/slices-thesis-encoders-thesis-v1")
+DEFAULT_ENCODER_ROOT = Path("outputs/archives/slices-thesis-encoders-thesis-v1")
+DEFAULT_OUTPUT = Path("results/slices-thesis-encoder-audit-v1/encoder_epoch_audit.csv")
 CSV_COLUMNS = [
     "run",
     "dataset",
@@ -89,7 +90,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="CSV output path. Defaults to <encoder-root>/encoder_epoch_audit.csv.",
+        help=f"CSV output path. Defaults to {DEFAULT_OUTPUT}.",
     )
     parser.add_argument(
         "--strict",
@@ -526,7 +527,7 @@ def print_summary(rows: Sequence[dict[str, str]], output_path: Path) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     encoder_root = args.encoder_root
-    output_path = args.output or encoder_root / "encoder_epoch_audit.csv"
+    output_path = args.output or DEFAULT_OUTPUT
 
     manifest_rows = read_manifest(encoder_root)
     rows = [audit_run(row, encoder_root) for row in manifest_rows]
