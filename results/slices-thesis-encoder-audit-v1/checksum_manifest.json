@@ -1,0 +1,16 @@
+{
+  "package": "slices-thesis-encoder-audit-v1",
+  "generation_note": "Public checkpoint-provenance CSV package. Encoder weights remain local under outputs/archives/slices-thesis-encoders-thesis-v1/; local absolute host prefixes are replaced with repo-relative paths.",
+  "files": {
+    "encoder_epoch_audit.csv": {
+      "rows": 45,
+      "columns": 27,
+      "sha256": "4e72f3c10c7ddb22bfa50a4b08e7571459731e76fa01dad6c119b867ac4d5c49"
+    },
+    "encoder_manifest.csv": {
+      "rows": 45,
+      "columns": 14,
+      "sha256": "1306fdf6266abd693ef72e3e612b74532da6312da4654934cf5113f9812cee60"
+    }
+  }
+}
