@@ -435,6 +435,27 @@ def test_run_configs_export_preserves_nested_config_json():
     assert config_json["training"]["batch_size"] == 128
 
 
+def test_sanitize_public_df_rebases_known_local_paths():
+    mod = importlib.import_module("scripts.export_results")
+
+    df = pd.DataFrame(
+        [
+            {
+                "path": "/home/hannesill/SLICES/outputs/run/checkpoints/last.ckpt",
+                "json": '{"output_dir": "/Users/hannesill/Developer/SLICES/outputs/run"}',
+                "value": 1.0,
+            }
+        ]
+    )
+
+    public = mod.sanitize_public_df(df)
+
+    assert public.iloc[0]["path"] == "outputs/run/checkpoints/last.ckpt"
+    assert "/Users/hannesill" not in public.iloc[0]["json"]
+    assert "outputs/run" in public.iloc[0]["json"]
+    assert public.iloc[0]["value"] == pytest.approx(1.0)
+
+
 def test_metrics_long_exports_numeric_summary_metrics_only():
     mod = importlib.import_module("scripts.export_results")
 
@@ -969,7 +990,7 @@ def test_parse_args_uses_revision_env_when_cli_omits_it(monkeypatch):
     args = mod.parse_args()
 
     assert args.revision == ["thesis-v1"]
-    assert args.project == "slices-thesis"
+    assert args.project == "slices-final"
 
 
 def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):

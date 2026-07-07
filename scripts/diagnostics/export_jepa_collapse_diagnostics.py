@@ -25,6 +25,7 @@ Outputs (under --out):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -34,6 +35,10 @@ STD_KEY = "train/jepa_target_repr_std"
 COS_KEY = "train/jepa_target_repr_mean_cos"
 VAL_STD_KEY = "val/jepa_target_repr_std"
 VAL_COS_KEY = "val/jepa_target_repr_mean_cos"
+PACKAGE_NOTE = (
+    "Public JEPA anti-collapse diagnostic package exported from W&B history. "
+    "No model weights are included."
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +55,42 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--history-samples", type=int, default=1000)
     p.add_argument("--timeout", type=int, default=60)
     return p.parse_args()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tabular_shape(path: Path) -> tuple[int | None, int | None]:
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path)
+        return int(len(df)), int(len(df.columns))
+    if path.suffix == ".csv":
+        df = pd.read_csv(path)
+        return int(len(df)), int(len(df.columns))
+    return None, None
+
+
+def write_checksum_manifest(out_dir: Path, files: list[Path], args: argparse.Namespace) -> None:
+    manifest = {
+        "package": out_dir.name,
+        "source_wandb_project": f"{args.entity}/{args.project}",
+        "revision": args.revision,
+        "generation_note": PACKAGE_NOTE,
+        "files": {},
+    }
+    for path in sorted(files):
+        rows, columns = tabular_shape(path)
+        entry = {"sha256": sha256_file(path)}
+        if rows is not None:
+            entry["rows"] = rows
+            entry["columns"] = columns
+        manifest["files"][path.name] = entry
+    (out_dir / "checksum_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def main() -> None:
@@ -114,12 +155,14 @@ def main() -> None:
         )
 
     summary_df = pd.DataFrame(summary).sort_values(["dataset", "seed"])
-    summary_df.to_csv(out_dir / "jepa_collapse_summary.csv", index=False)
+    summary_path = out_dir / "jepa_collapse_summary.csv"
+    summary_df.to_csv(summary_path, index=False)
 
+    written_files = [summary_path]
     if hist_rows:
-        pd.concat(hist_rows, ignore_index=True).to_parquet(
-            out_dir / "jepa_collapse_history.parquet", index=False
-        )
+        history_path = out_dir / "jepa_collapse_history.parquet"
+        pd.concat(hist_rows, ignore_index=True).to_parquet(history_path, index=False)
+        written_files.append(history_path)
 
     overall = {
         "n_runs": int(len(runs)),
@@ -143,9 +186,14 @@ def main() -> None:
             "uses the final encoder.pt regardless."
         ),
     }
-    (out_dir / "jepa_collapse_overall.json").write_text(json.dumps(overall, indent=2))
+    overall_path = out_dir / "jepa_collapse_overall.json"
+    overall_path.write_text(json.dumps(overall, indent=2) + "\n")
+    written_files.append(overall_path)
+    manifest_path = out_dir / "checksum_manifest.json"
+    write_checksum_manifest(out_dir, written_files, args)
 
     print(f"Wrote diagnostics for {len(runs)} JEPA runs to {out_dir}")
+    print(f"Wrote checksum manifest to {manifest_path}")
     print(json.dumps(overall, indent=2))
 
 
