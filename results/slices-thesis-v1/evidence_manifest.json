@@ -1,0 +1,55 @@
+{
+  "package": "slices-thesis-v1",
+  "source_wandb_project": "hannes-ill/slices-final",
+  "revision": [
+    "thesis-v1"
+  ],
+  "generation_note": "Public thesis result export. Local absolute host prefixes are replaced with repo-relative paths; W&B run IDs/URLs, revisions, launch commits, seeds, artifact SHA256 values, and scientific grouping fields are preserved.",
+  "files": {
+    "aggregated_results.parquet": {
+      "rows": 462,
+      "columns": 1333,
+      "sha256": "d7ff615a2a6eb12e73bca63bc4c48b6490742405eaa6ff85ca3d6874393ff4ad"
+    },
+    "capacity_study_comparison.parquet": {
+      "rows": 150,
+      "columns": 235,
+      "sha256": "408b504449b322f73db90e04e5084948c2bd42af99b8d25fe789d7251b1fedd3"
+    },
+    "classical_context.parquet": {
+      "rows": 1230,
+      "columns": 235,
+      "sha256": "e77a5358ab8723068c07bd4b4c057193cdc01e612a190dc6ed58bd13cc21c90b"
+    },
+    "label_efficiency_curves.parquet": {
+      "rows": 1575,
+      "columns": 235,
+      "sha256": "03279f00d87fedee73d9092ec109bb60cb57db38aede188b75df36118af2109e"
+    },
+    "metrics_long.parquet": {
+      "rows": 241692,
+      "columns": 13,
+      "sha256": "42e6f7478c1305673cee5e0eefb90527035ac0c8a27315e47f8ba733452af0c1"
+    },
+    "per_seed_results.parquet": {
+      "rows": 2310,
+      "columns": 231,
+      "sha256": "9f9f060c194f82ff06200dcf737818e030eb12c3703fa5ef61ec9d6e15dbdc7a"
+    },
+    "run_configs.parquet": {
+      "rows": 2310,
+      "columns": 12,
+      "sha256": "1de725c49ac3e0e328c749c387c794e8838c38353a0b06acaf7148cb28151659"
+    },
+    "statistical_tests.parquet": {
+      "rows": 1010,
+      "columns": 38,
+      "sha256": "129efd72f3781f9c67918e1d09b1d4bb2be0ce07ee16e3ec969cd4e0d8f93b1a"
+    },
+    "ts2vec_vs_core_contrastive.parquet": {
+      "rows": 12,
+      "columns": 34,
+      "sha256": "43f0941068c2771fd8ce6a4d74d8f45521061830d558717f027259cb0332a8d1"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "package": "slices-thesis-jepa-collapse-diagnostic-v1",
+  "source_wandb_project": "hannes-ill/slices-final",
+  "revision": "thesis-v1",
+  "generation_note": "Public JEPA anti-collapse diagnostic package exported from W&B history. No model weights are included.",
+  "files": {
+    "jepa_collapse_history.parquet": {
+      "sha256": "3190498d1b4f15bfb908b6f78e58862e0c719355039e374c8eb8b948c5c8f08f",
+      "rows": 1500,
+      "columns": 6
+    },
+    "jepa_collapse_overall.json": {
+      "sha256": "34c84a15050fe89cce6ecb06d03292936233604ddfc63ad0104053f63ab782e8"
+    },
+    "jepa_collapse_summary.csv": {
+      "sha256": "eda5ce984eb49a8bc96213247baa843fdcb285c4a1d4f752eb99d42e97b8bbdc",
+      "rows": 15,
+      "columns": 9
+    }
+  }
+}
