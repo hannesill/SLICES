@@ -4,15 +4,15 @@
 Pulls final rerun-corpus W&B runs, extracts config plus test metrics, and writes
 publication-oriented parquet files:
 
-  - results/per_seed_results.parquet
-  - results/aggregated_results.parquet
-  - results/run_configs.parquet
-  - results/metrics_long.parquet
-  - results/statistical_tests.parquet
-  - results/label_efficiency_curves.parquet
-  - results/capacity_study_comparison.parquet
-  - results/classical_context.parquet
-  - results/ts2vec_vs_core_contrastive.parquet
+  - results/slices-thesis-v1/per_seed_results.parquet
+  - results/slices-thesis-v1/aggregated_results.parquet
+  - results/slices-thesis-v1/run_configs.parquet
+  - results/slices-thesis-v1/metrics_long.parquet
+  - results/slices-thesis-v1/statistical_tests.parquet
+  - results/slices-thesis-v1/label_efficiency_curves.parquet
+  - results/slices-thesis-v1/capacity_study_comparison.parquet
+  - results/slices-thesis-v1/classical_context.parquet
+  - results/slices-thesis-v1/ts2vec_vs_core_contrastive.parquet
 
 Aggregated metric columns include mean, standard deviation, min/max, and 95%
 confidence intervals across finite seed values.
@@ -2095,7 +2095,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--state", default="finished", help="Run state filter (default: finished)")
-    parser.add_argument("--output-dir", default="results", help="Output directory")
+    parser.add_argument(
+        "--output-dir",
+        default="results/slices-thesis-v1",
+        help="Output directory",
+    )
     parser.add_argument(
         "--expected-seeds",
         nargs="+",
