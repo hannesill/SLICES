@@ -1,110 +1,86 @@
-# SLICES: Self-Supervised Learning for Intensive Care Embeddings System
+# SLICES: Self-Supervised Learning for Intensive Care Embeddings
 
 <p align="center">
-  <img src=".github/SLICES-logo.png" alt="SLICES Logo" width="320"/>
+  <img src=".github/SLICES-logo.png" alt="SLICES logo" width="320"/>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/PyPI--uv-blueviolet?style=flat-square" alt="uv Package Manager"/>
-  <img src="https://img.shields.io/badge/pytorch-2.0+-e07c24?style=flat-square&logo=pytorch" alt="PyTorch Version"/>
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"/>
-  <img src="https://img.shields.io/badge/tested%20with-pytest-6fa8dc?style=flat-square" alt="Tested with pytest"/>
+  <img src="https://img.shields.io/badge/Python-3.12+-3776ab?style=flat-square&logo=python" alt="Python 3.12+"/>
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-e07c24?style=flat-square&logo=pytorch" alt="PyTorch 2.0+"/>
+  <img src="https://img.shields.io/badge/config-Hydra-89b4fa?style=flat-square" alt="Hydra"/>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license"/>
 </p>
 
 <p align="center">
-  <code>ICU</code> <code>Self-Supervised Learning</code> <code>PyTorch</code> <code>Time Series</code> <code>Benchmark</code> <code>Clinical AI</code> <code>Polars</code> <code>Lightning</code>
+  <code>ICU time series</code> <code>self-supervised learning</code> <code>clinical AI</code> <code>PyTorch Lightning</code> <code>RICU</code> <code>Hydra</code>
 </p>
 
-**SLICES** is a benchmark framework for controlled comparison of self-supervised learning (SSL) paradigms on sparse, irregularly-sampled ICU time-series data.
+**SLICES** is a benchmark and PyTorch codebase for comparing self-supervised
+learning objectives on sparse, irregular ICU time series.
 
-## Status and Scope
+The core question is narrow by design: when the data pipeline, encoder,
+tokenization, training budget, and downstream protocols are held fixed, how do
+**MAE**, **JEPA**, and **contrastive learning** differ?
 
-SLICES is Master's thesis work in progress. The code and benchmark protocol are
-public, but no ICU patient data is included in this repository. Reproduction
-requires credentialed access to source datasets such as MIMIC-IV and eICU.
-The final thesis PDF and full static result release may not yet be available.
+<p align="center">
+  <img src="docs/assets/benchmark-overview.svg" alt="SLICES benchmark overview" width="860"/>
+</p>
 
-## What SLICES Is / Is Not
+## Status
 
-SLICES is:
+- Master's thesis benchmark code is public.
+- Patient data is not included. Reproduction requires credentialed MIMIC-IV and
+  eICU access.
+- The frozen thesis result export is not bundled in this repository yet.
+- The public static result bundle, citation metadata, and paper-style summary are
+  planned after thesis finalization.
 
-- a controlled benchmark for comparing SSL objective families on sparse ICU time
-  series
-- focused on MAE, JEPA, and contrastive learning under a shared benchmark
-  contract
+## What Is Included
 
-SLICES is not:
+| Area | Scope |
+|---|---|
+| Data pipeline | RICU extraction, hourly ICU tensors, observation masks, train-only normalization |
+| Core SSL objectives | MAE, JEPA, contrastive |
+| Extension objective | TS2Vec temporal contrastive learning |
+| External reference | SMART implementation, outside the controlled thesis comparison |
+| Encoders | Observation-aware Transformer, GRU-D, SMART/MART, linear |
+| Downstream tasks | 24h mortality, hospital mortality, AKI KDIGO, remaining LOS |
+| Protocols | Linear probing and full fine-tuning |
+| Baselines | Supervised Transformer, GRU-D, XGBoost |
+| Evaluation | AUROC, AUPRC, calibration, regression metrics, fairness summaries, paired tests |
 
-- a replacement for YAIB
-- a clinical deployment model
-- a public patient-data release
+SLICES is not a clinical deployment model, a public patient-data release, or a
+replacement for broad ICU benchmarks such as YAIB. It is focused on objective
+attribution for SSL in sparse clinical time series.
 
-## Research Question
+## Result Snapshot
 
-How do the three major SSL paradigm families — **reconstruction** (masked autoencoding), **self-distillation** (JEPA), and **contrastive learning** — compare when applied to clinical time series under controlled conditions?
+These claims are from the frozen thesis export
+`results/slices-final_thesis-v1`, which is currently local and not yet bundled:
 
-The benchmark includes controlled SSL objectives, supervised training from scratch,
-classical ICU baselines, and targeted extensions for temporal contrastive learning
-and model-capacity studies.
+- In the core SSL benchmark, MAE is the best or tied-best SSL method on most
+  classification comparisons, especially under linear probing.
+- In pooled classification tests, MAE significantly exceeds JEPA and contrastive
+  under several core settings, but MAE is not significantly different from the
+  supervised Transformer under full fine-tuning.
+- No per-task core SSL comparison is statistically significant after the thesis
+  correction rules; task-level claims should be read descriptively.
+- LOS behaves differently from classification: contrastive often has the best
+  frozen linear-probe `test/mae`.
+- In the label-efficiency analysis, MAE has the best mean in `35/45`
+  full-finetune cells and `37/45` linear-probe cells.
 
-### The Comparison Triangle
+<p align="center">
+  <img src="docs/assets/label-efficiency-curves.png" alt="SLICES label-efficiency curves" width="860"/>
+</p>
 
-| Comparison | What Varies | What It Tests |
-|---|---|---|
-| **MAE vs JEPA** | Input-space vs latent-space prediction | Same encoder input, tokenization, and mask budget |
-| **JEPA vs Contrastive** | Local positional prediction vs global invariance | Both operate in latent space |
-| **MAE vs Contrastive** | Reconstruction vs discrimination | Opposite ends of the SSL spectrum |
+## Install
 
-### Why a New Benchmark?
-
-YAIB standardizes broad ICU prediction benchmarking. SLICES complements this by
-standardizing self-supervised objective attribution. The core issue is
-attribution: many SSL papers change preprocessing, representation, encoder,
-objective, and downstream protocol together. SLICES fixes the main benchmark
-interface so MAE, JEPA, and contrastive learning can be compared more cleanly.
-
-**Key insight**: SSL paradigm choice is not just "swap the loss function" — it imposes structural requirements on how the encoder interfaces with sparse clinical data. This interaction between paradigm and data sparsity is itself a contribution.
-
-## SSL Paradigms
-
-The controlled SSL objectives share the same timestep-level obs-aware Transformer
-encoder, obs-aware tokenization, and default mask budget. The masking strategy is
-reported as part of each objective because JEPA uses block masking to avoid the
-random-mask interpolation failure observed during development.
-
-| Objective | Predicts | Target | Loss |
-|---|---|---|---|
-| **MAE** | Raw scalar values at masked positions | Input values | MSE |
-| **JEPA** | Latent representations at masked positions | EMA target encoder representations | MSE / Cosine |
-| **Contrastive** | Global embedding similarity across views | Positive pair agreement (NT-Xent) | Cross-entropy |
-
-**TS2Vec** is included as a temporal-contrastive extension. **SMART** (NeurIPS
-2024) remains an external reference because it swaps in its own MART encoder and
-element-wise masking, so it is not part of the controlled comparison.
-
-## Pipeline
-
-```
-RICU (R) ──→ Parquet ──→ ICUDataset ──→ SSL Pretraining ──→ Downstream Finetuning
-  hourly-binned         dense tensors     MAE / JEPA /       mortality, mortality_24h,
-  feature extraction    + obs masks       Contrastive          mortality_hospital,
-  across datasets                                            los_remaining, aki_kdigo
-```
-
-1. **Extraction**: RICU (R package) harmonizes raw ICU data (MIMIC-IV, eICU) into hourly-binned parquet files
-2. **Ingestion**: `RicuExtractor` reads RICU output into dense tensors + observation masks + labels
-3. **Loading**: `ICUDataset` applies normalize-then-zero-fill imputation with patient-level splits
-4. **Pretraining**: Config-driven SSL with any registered objective — switch paradigm by changing one config
-5. **Evaluation**: Fine-tune on downstream clinical tasks with fairness metrics
-
-## Installation
-
-### Prerequisites
+Prerequisites:
 
 - Python 3.12+
-- [uv](https://github.com/astral-sh/uv) package manager
-
-### Setup
+- [uv](https://github.com/astral-sh/uv)
+- R with access to the source ICU datasets for extraction
 
 ```bash
 git clone https://github.com/hannesill/SLICES.git
@@ -112,248 +88,178 @@ cd SLICES
 uv sync --dev
 ```
 
-Verify:
+Smoke test:
+
 ```bash
-uv run python -c "from slices.models.pretraining import JEPAObjective, ContrastiveObjective; print('OK')"
+uv run python -c "from slices.models.pretraining import MAEObjective, JEPAObjective, ContrastiveObjective; print('OK')"
 ```
 
 ## Quick Start
 
-### 1. Extract & Prepare
+### 1. Build Processed Data
+
+Run the RICU extraction once per credentialed source dataset:
 
 ```bash
-# R extraction (once per dataset)
 Rscript scripts/preprocessing/extract_with_ricu.R --dataset miiv
+Rscript scripts/preprocessing/extract_with_ricu.R --dataset eicu
+```
 
-# Python processing + splits/normalization
-uv run python scripts/preprocessing/build_processed_data.py --datasets miiv
+Convert RICU output into SLICES tensors:
 
-# Full benchmark rebuild from existing RICU outputs
+```bash
 uv run python scripts/preprocessing/build_processed_data.py --datasets miiv eicu --combined
 ```
 
-The wrapper calls the lower-level scripts below. Use them directly when you need
-to rerun only one stage:
+This creates `data/processed/{miiv,eicu,combined}` with:
+
+- `static.parquet`
+- `timeseries.parquet`
+- `labels.parquet`
+- `metadata.yaml`
+
+### 2. Pretrain an SSL Encoder
+
+Pick the objective with `ssl=`. Disable W&B for local smoke runs unless you have
+configured an entity.
 
 ```bash
-uv run python scripts/preprocessing/extract_ricu.py dataset=miiv
+# MAE
+uv run python scripts/training/pretrain.py dataset=miiv ssl=mae logging.use_wandb=false
 
-uv run python scripts/preprocessing/prepare_dataset.py dataset=miiv
+# JEPA
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa logging.use_wandb=false
+
+# Contrastive
+uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive logging.use_wandb=false
 ```
 
-### 2. Pretrain
-
-Pick SSL paradigm with `ssl=`. Training budget is matched across controlled
-paradigms:
+### 3. Fine-Tune
 
 ```bash
-# MAE (masked autoencoder — reconstruction baseline, default)
-uv run python scripts/training/pretrain.py dataset=miiv ssl=mae
+# Linear probe
+uv run python scripts/training/finetune.py \
+  dataset=miiv \
+  checkpoint=outputs/2026-07-01/12-00-00/encoder.pt \
+  protocol=linear_probe \
+  logging.use_wandb=false
 
-# JEPA (latent-space prediction with EMA target encoder)
-uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
-
-# Contrastive (SimCLR-style with two masked views)
-uv run python scripts/training/pretrain.py dataset=miiv ssl=contrastive
-
-# TS2Vec (temporal contrastive extension)
-uv run python scripts/training/pretrain.py dataset=miiv ssl=ts2vec
-
-# SMART (external reference with a different encoder/tokenization contract)
-uv run python scripts/training/pretrain.py dataset=miiv ssl=smart model=smart
+# Full fine-tuning
+uv run python scripts/training/finetune.py \
+  dataset=miiv \
+  checkpoint=outputs/2026-07-01/12-00-00/encoder.pt \
+  protocol=full_finetune \
+  logging.use_wandb=false
 ```
 
-### 3. Fine-tune
+Switch tasks with `tasks=mortality_hospital`, `tasks=aki_kdigo`, or
+`tasks=los_remaining`.
+
+### 4. Run Baselines
 
 ```bash
-uv run python scripts/training/finetune.py dataset=miiv checkpoint=outputs/.../encoder.pt
-```
-
-### 4. Supervised Baseline
-
-```bash
-uv run python scripts/training/supervised.py dataset=miiv
+uv run python scripts/training/supervised.py dataset=miiv logging.use_wandb=false
+uv run python scripts/training/xgboost_baseline.py dataset=miiv
 ```
 
 ### 5. Validate
 
 ```bash
-uv run pytest tests/ -q
-```
-
-## Benchmark Release Notes
-
-The public benchmark contract is the controlled comparison of MAE, JEPA, and
-contrastive SSL under the shared RICU pipeline, canonical obs-aware
-`TransformerEncoder`, fixed downstream tasks, and class-based experiment
-metadata. TS2Vec is a temporal-contrastive extension, and SMART is an external
-reference because it changes the encoder/tokenization contract.
-
-For thesis-scale reruns, use `scripts/internal/run_experiments.py` or
-`scripts/internal/launch_thesis_tmux.sh` with an explicit `--revision`,
-`--project`, and `--launch-commit`. Downstream SSL runs consume `encoder.pt`,
-the last encoder from the fixed pretraining schedule, not `encoder_best_val.pt`;
-downstream task evaluation still records the exact finetune checkpoint used for
-test metrics and post-hoc fairness.
-
-Run provenance in W&B may reference pre-release commit hashes from the private
-working history. The public history preserves equivalent code states while
-omitting internal planning documents:
-
-| W&B commit | Public provenance |
-|---|---|
-| `ffd6dc52c2ed224da5290cfb5d1a6634b5ba6ab6` | Patch-equivalent to `d1b86f6` (`Handle invalid W&B entity errors cleanly`) |
-| `1a01467d40c464415e021831f65f4bb8dd520430` | Equivalent public code state represented by `8014839` after removal of internal planning documents |
-
-Final publication export expects post-hoc fairness metrics to be written first
-with `scripts/eval/evaluate_fairness.py`. The export emits per-seed rows,
-aggregate mean/std/min/max/95% CI columns, derived comparison views, and
-pairwise statistical tests. Do not use export or fairness escape hatches for
-final benchmark tables.
-
-## Project Structure
-
-```
-SLICES/
-├── src/slices/                     # Main package (src layout)
-│   ├── data/
-│   │   ├── extractors/             # Dataset-specific extraction
-│   │   │   ├── base.py             # Abstract base extractor
-│   │   │   └── ricu.py             # RICU-based extractor
-│   │   ├── labels/                 # Task label builders (factory pattern)
-│   │   ├── dataset.py              # ICUDataset (PyTorch Dataset)
-│   │   ├── datamodule.py           # Lightning DataModule (patient-level splits)
-│   │   ├── transforms.py           # SSL augmentations
-│   │   └── sliding_window.py       # Sliding window utilities
-│   ├── models/
-│   │   ├── encoders/               # Backbone architectures (factory pattern)
-│   │   │   ├── transformer.py      # Canonical timestep-level obs-aware Transformer
-│   │   │   ├── observation.py      # Observation-level Transformer (legacy/alternate)
-│   │   │   ├── gru_d.py            # GRU-D baseline encoder
-│   │   │   └── smart.py            # SMART/MART encoder
-│   │   ├── pretraining/            # SSL objectives (factory pattern)
-│   │   │   ├── masking.py          # Shared observation masking
-│   │   │   ├── mae.py              # Masked Autoencoder
-│   │   │   ├── jepa.py             # Joint-Embedding Predictive Architecture
-│   │   │   ├── contrastive.py      # SimCLR-style contrastive
-│   │   │   ├── ts2vec.py           # Temporal contrastive extension
-│   │   │   └── smart.py            # SMART (appendix-only external reference)
-│   │   ├── heads/                  # Task heads (MLP, Linear)
-│   │   └── common.py               # Shared utilities
-│   ├── training/
-│   │   ├── pretrain_module.py      # SSLPretrainModule (Lightning)
-│   │   ├── finetune_module.py      # FineTuneModule (Lightning)
-│   │   └── utils.py                # Shared helpers (optimizer, scheduler, callbacks, logger, validation)
-│   └── eval/
-│       ├── metrics.py              # AUROC, AUPRC, Brier, ECE, MSE, MAE, etc.
-│       ├── fairness.py             # Fairness primitives (parity, odds, impact)
-│       ├── fairness_evaluator.py   # Patient-aware subgroup fairness reports
-│       ├── statistical.py          # Bootstrap, Wilcoxon, Bonferroni, Cohen's d
-│       └── imputation.py           # SSL reconstruction quality
-├── configs/                        # Hydra configs
-│   ├── pretrain.yaml               # Unified SSL pretraining (ssl=mae/jepa/contrastive/ts2vec/smart)
-│   ├── finetune.yaml
-│   ├── supervised.yaml
-│   ├── data/                       # Dataset configs
-│   ├── model/                      # Encoder configs
-│   ├── ssl/                        # SSL objective configs (mae, jepa, contrastive, ts2vec, smart)
-│   └── tasks/                      # Downstream task definitions
-├── scripts/                        # Entry point scripts
-│   ├── preprocessing/
-│   └── training/
-└── tests/                          # pytest test suite
+uv run pytest -q
+uv run ruff check src scripts tests
+uv run mypy src
 ```
 
 ## Configuration
 
-SLICES uses [Hydra](https://hydra.cc/) for configuration. Switch SSL paradigm with `ssl=`:
+SLICES uses Hydra. Main config groups:
+
+| Group | Options |
+|---|---|
+| `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` |
+| `model/` | `transformer`, `transformer_medium`, `transformer_large`, `gru_d`, `smart`, `linear` |
+| `tasks/` | `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining` |
+| `protocol/` | `linear_probe`, `full_finetune` |
+| `data/` | `ricu` |
+
+Examples:
 
 ```bash
-# Pick paradigm with ssl=
-uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa
+# Change objective
+uv run python scripts/training/pretrain.py dataset=eicu ssl=jepa
 
-# Override hyperparameters
+# Override objective hyperparameters
 uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa ssl.mask_ratio=0.75
 
-# Smoke test any config
-uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa training.overfit_batches=2 --cfg job
+# Inspect the resolved config
+uv run python scripts/training/pretrain.py dataset=miiv ssl=mae --cfg job
 ```
 
-### Config Groups
+## Benchmark Contract
 
-| Group | Options | Purpose |
-|---|---|---|
-| `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` | SSL objective hyperparameters |
-| `model/` | `transformer`, `transformer_medium`, `transformer_large`, `observation_transformer`, `smart`, `gru_d`, `linear` | Encoder architecture |
-| `data/` | `ricu` | Dataset and paths |
-| `tasks/` | `mortality`, `mortality_24h`, `mortality_hospital`, `los_remaining`, `aki_kdigo` | Downstream task definitions |
-| `protocol/` | `linear_probe`, `full_finetune` | Downstream evaluation protocol overrides |
-| `eval/` | `default` | Evaluation metric defaults |
+The controlled comparison fixes:
 
-## Data Format
+- RICU-derived preprocessing
+- 24h observation window
+- patient-level splits
+- train-only normalization
+- normalize-then-zero-fill imputation
+- separate observation masks
+- observation-aware Transformer encoder
+- downstream tasks and primary metrics
+- five-seed evaluation where present
 
-Extracted ICU stays are stored as Parquet files:
+MAE, JEPA, and contrastive learning share the encoder interface and masking
+budget. They do not use identical mask geometry: MAE uses random timestep masks,
+JEPA uses block timestep masks, and contrastive learning uses two masked views.
 
-- `static.parquet` — Stay-level demographics and admission info
-- `timeseries.parquet` — Dense hourly-binned time-series with observation masks (T x D)
-- `labels.parquet` — Configured task labels (for example `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining`, and optional `mortality`)
-- `metadata.yaml` — Feature names, sequence length, task definitions
+Full thesis reruns and export rules are documented in
+[docs/experiment_protocol.md](docs/experiment_protocol.md).
 
-For task-specific supervised evaluation, stays with missing task labels are
-excluded. This matters most for `aki_kdigo`, which requires creatinine in both
-the 0-24h baseline window and the 24-48h prediction window.
+## Repository Layout
 
-`ICUDataset` returns batches with:
-- `timeseries`: `FloatTensor (B, T, D)` — hourly-binned feature values
-- `mask`: `BoolTensor (B, T, D)` — True = observed, False = missing
-- `label`: `FloatTensor` — task label (when task specified)
-
-## Development
-
-```bash
-# Run all tests
-uv run pytest tests/ -v
-
-# Run tests with coverage
-uv run pytest tests/ --cov=slices --cov-report=html --cov-report=term
-
-# Format / lint / type check
-uv run black src/ scripts/ tests/
-uv run ruff check src/ scripts/ tests/
-uv run mypy src/
+```text
+SLICES/
++-- configs/                  # Hydra configs
++-- docs/                     # Public protocol and evaluation docs
++-- scripts/
+|   +-- preprocessing/        # RICU extraction and tensor preparation
+|   +-- training/             # SSL, supervised, GRU-D, XGBoost entry points
+|   +-- eval/                 # Fairness and imputation evaluation
+|   +-- internal/             # Thesis-scale launch helpers
++-- src/slices/
+|   +-- data/                 # datasets, labels, splits, transforms
+|   +-- models/               # encoders, heads, SSL objectives
+|   +-- training/             # Lightning modules and training utilities
+|   +-- eval/                 # metrics, fairness, statistical tests
++-- tests/                    # pytest suite
 ```
 
-## Key Design Decisions
+## Roadmap
 
-- **RICU-based extraction**: Data harmonization across datasets handled by RICU (R). Python reads the output.
-- **Normalize-then-zero-fill**: Single imputation strategy (z-normalize, fill missing with 0). Eliminates imputation as a confound.
-- **Observation masks**: Missingness tracked separately; SSL objectives use this for masking.
-- **Controlled masking budget**: MAE, JEPA, and Contrastive share the same default mask ratio through the common `masking.py` infrastructure; objective-specific masking strategies are reported explicitly.
-- **Reported HP sensitivity**: Contrastive robustness rows that disable complementary masks are labeled as view/mask sensitivity, not pure mask-ratio sensitivity.
-- **Patient-level splits**: No data leakage between train/val/test.
-- **Config-driven ablations**: Change one YAML default to switch paradigm, encoder, or task.
-
-## Extending SLICES
-
-The framework uses factory patterns throughout, making it straightforward to add new components. The concrete extension points live in:
-
-- `src/slices/models/encoders/factory.py` and `configs/model/`
-- `src/slices/models/pretraining/factory.py` and `configs/ssl/`
-- `src/slices/models/heads/factory.py`
-- `src/slices/data/tasks/` for package label semantics used during extraction
-- `configs/tasks/` for Hydra task configs used during training/evaluation
+- [x] Controlled MAE, JEPA, and contrastive SSL objectives.
+- [x] RICU-based MIMIC-IV/eICU preprocessing pipeline.
+- [x] Linear-probe and full-finetune downstream protocols.
+- [x] Supervised Transformer, GRU-D, XGBoost, TS2Vec, and SMART implementations.
+- [x] Fairness summaries and paired statistical export utilities.
+- [ ] Publish frozen thesis result bundle and provenance manifest.
+- [ ] Add `CITATION.cff` after thesis/paper citation details are stable.
+- [ ] Add a small public synthetic-data fixture for end-to-end smoke tests.
+- [ ] Add a notebook-style walkthrough for adding a new SSL objective.
+- [ ] Package thesis figures/tables as a lightweight result report.
+- [ ] Add Docker or Apptainer environment for cluster reproduction.
 
 ## References
 
-- **MIMIC-IV**: Johnson, A. E. W., et al. (2023). MIMIC-IV, a freely accessible electronic health record dataset. *Scientific Data*.
-- **eICU**: Pollard, T. J., et al. (2018). The eICU Collaborative Research Database. *Scientific Data*.
-- **ricu**: Gygax, D. M., et al. (2023). ricu: R's interface to intensive care data. *GigaScience*.
-- **MAE**: He, K., et al. (2022). Masked Autoencoders Are Scalable Vision Learners. *CVPR*.
-- **I-JEPA**: Assran, M., et al. (2023). Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture. *CVPR*.
-- **SimCLR**: Chen, T., et al. (2020). A Simple Framework for Contrastive Learning of Visual Representations. *ICML*.
-- **SMART**: Yu, Z., et al. (2024). SMART: Towards Pre-trained Missing-Aware Model for Patient Health Status Prediction. *NeurIPS*.
-- **YAIB**: Yèche, H., et al. (2024). YAIB: Yet Another ICU Benchmark. *ICLR*.
+- Johnson et al. (2023), MIMIC-IV, *Scientific Data*.
+- Pollard et al. (2018), eICU Collaborative Research Database, *Scientific Data*.
+- Gygax et al. (2023), ricu, *GigaScience*.
+- He et al. (2022), Masked Autoencoders, *CVPR*.
+- Assran et al. (2023), I-JEPA, *CVPR*.
+- Chen et al. (2020), SimCLR, *ICML*.
+- Yu et al. (2024), SMART, *NeurIPS*.
+- Yeche et al. (2024), YAIB, *ICLR*.
 
 ## License
 
-See [LICENSE](LICENSE) file for details.
+SLICES is released under the MIT License. See [LICENSE](LICENSE).
