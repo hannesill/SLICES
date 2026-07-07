@@ -61,8 +61,8 @@ Outputs:
 
 To compare against frozen SSL linear probes, export the diagnostic runs to a
 separate artifact such as `results/random-probe-diagnostic-v1/`. Do not merge
-with `results/slices-final_thesis-v1/`. Join diagnostic rows to frozen rows from
-`results/slices-final_thesis-v1/per_seed_results.parquet` on:
+with `results/slices-thesis-v1/`. Join diagnostic rows to frozen rows from
+`results/slices-thesis-v1/per_seed_results.parquet` on:
 
 - `dataset`
 - `task`

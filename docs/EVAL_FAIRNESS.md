@@ -109,8 +109,8 @@ For regression tasks it logs:
 
 `scripts/export_results.py` is the canonical reporting path. It exports:
 
-- `results/per_seed_results.parquet`
-- `results/aggregated_results.parquet`
+- `results/slices-thesis-v1/per_seed_results.parquet`
+- `results/slices-thesis-v1/aggregated_results.parquet`
 - `results/statistical_tests.parquet`
 
 Those exports include fairness columns when the runs already have `fairness/*`

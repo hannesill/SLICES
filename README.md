@@ -56,7 +56,7 @@ attribution for SSL in sparse clinical time series.
 ## Result Snapshot
 
 These claims are from the frozen thesis export
-`results/slices-final_thesis-v1`, which is currently local and not yet bundled:
+`results/slices-thesis-v1`, which is currently local and not yet bundled:
 
 - In the core SSL benchmark, MAE is the best or tied-best SSL method on most
   classification comparisons, especially under linear probing.
