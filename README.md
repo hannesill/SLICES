@@ -19,8 +19,8 @@
 learning objectives on sparse, irregular ICU time series.
 
 The core question is narrow by design: when the data pipeline, encoder,
-tokenization, training budget, and downstream protocols are held fixed, how do
-**MAE**, **JEPA**, and **contrastive learning** differ?
+tokenization, epoch/data-pass schedule, and downstream protocols are held fixed,
+how do **MAE**, **JEPA**, and **contrastive learning** differ?
 
 <p align="center">
   <img src="docs/assets/benchmark-overview.svg" alt="SLICES benchmark overview" width="860"/>
@@ -29,11 +29,14 @@ tokenization, training budget, and downstream protocols are held fixed, how do
 ## Status
 
 - Master's thesis benchmark code is public.
+- The frozen thesis metric export is bundled at
+  `results/slices-thesis-v1/`.
 - Patient data is not included. Reproduction requires credentialed MIMIC-IV and
   eICU access.
-- The frozen thesis result export is not bundled in this repository yet.
-- The public static result bundle, citation metadata, and paper-style summary are
-  planned after thesis finalization.
+- Historical export provenance: W&B `hannes-ill/slices-final`, revision
+  `thesis-v1`.
+- Citation metadata and a paper-style summary are planned after thesis
+  finalization.
 
 ## What Is Included
 
@@ -42,8 +45,8 @@ tokenization, training budget, and downstream protocols are held fixed, how do
 | Data pipeline | RICU extraction, hourly ICU tensors, observation masks, train-only normalization |
 | Core SSL objectives | MAE, JEPA, contrastive |
 | Extension objective | TS2Vec temporal contrastive learning |
-| External reference | SMART implementation, outside the controlled thesis comparison |
-| Encoders | Observation-aware Transformer, GRU-D, SMART/MART, linear |
+| External reference | SMART/MART implementation, optional and outside the controlled thesis corpus |
+| Encoders | Observation-aware Transformer, GRU-D, linear; SMART/MART as optional reference code |
 | Downstream tasks | 24h mortality, hospital mortality, AKI KDIGO, remaining LOS |
 | Protocols | Linear probing and full fine-tuning |
 | Baselines | Supervised Transformer, GRU-D, XGBoost |
@@ -51,20 +54,23 @@ tokenization, training budget, and downstream protocols are held fixed, how do
 
 SLICES is not a clinical deployment model, a public patient-data release, or a
 replacement for broad ICU benchmarks such as YAIB. It is focused on objective
-attribution for SSL in sparse clinical time series.
+comparison under a shared sparse-clinical-time-series interface.
 
 ## Result Snapshot
 
-These claims are from the frozen thesis export
-`results/slices-thesis-v1`, which is currently local and not yet bundled:
+These claims are from the bundled frozen thesis export
+`results/slices-thesis-v1/`. The historical source was W&B
+`hannes-ill/slices-final`, revision `thesis-v1`.
 
 - In the core SSL benchmark, MAE is the best or tied-best SSL method on most
   classification comparisons, especially under linear probing.
-- In pooled classification tests, MAE significantly exceeds JEPA and contrastive
-  under several core settings, but MAE is not significantly different from the
-  supervised Transformer under full fine-tuning.
-- No per-task core SSL comparison is statistically significant after the thesis
-  correction rules; task-level claims should be read descriptively.
+- MAE has the highest five-seed mean in all nine linear-probe classification
+  cells. Full fine-tuning compresses the observed differences and makes the
+  supervised Transformer a stronger comparator.
+- All method comparisons are descriptive. Five matched training seeds give an
+  exact two-sided paired-test floor of `p=0.0625`, and tasks sharing cohorts,
+  split assignments, and pretrained encoders are not pooled as independent
+  inferential units.
 - LOS behaves differently from classification: contrastive often has the best
   frozen linear-probe `test/mae`.
 - In the label-efficiency analysis, MAE has the best mean in `35/45`
@@ -215,6 +221,7 @@ JEPA uses block timestep masks, and contrastive learning uses two masked views.
 
 Full thesis reruns and export rules are documented in
 [docs/experiment_protocol.md](docs/experiment_protocol.md).
+Public audit paths are documented in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
 
 ## Repository Layout
 
@@ -222,6 +229,7 @@ Full thesis reruns and export rules are documented in
 SLICES/
 +-- configs/                  # Hydra configs
 +-- docs/                     # Public protocol and evaluation docs
++-- results/                  # Frozen public thesis metric and diagnostic exports
 +-- scripts/
 |   +-- preprocessing/        # RICU extraction and tensor preparation
 |   +-- training/             # SSL, supervised, GRU-D, XGBoost entry points
@@ -242,7 +250,7 @@ SLICES/
 - [x] Linear-probe and full-finetune downstream protocols.
 - [x] Supervised Transformer, GRU-D, XGBoost, TS2Vec, and SMART implementations.
 - [x] Fairness summaries and paired statistical export utilities.
-- [ ] Publish frozen thesis result bundle and provenance manifest.
+- [x] Bundle frozen thesis metric export and provenance manifest.
 - [ ] Add `CITATION.cff` after thesis/paper citation details are stable.
 - [ ] Add a small public synthetic-data fixture for end-to-end smoke tests.
 - [ ] Add a notebook-style walkthrough for adding a new SSL objective.

@@ -21,12 +21,13 @@ These objectives share:
 - the same canonical `TransformerEncoder`
 - the same obs-aware timestep tokenization
 - the same masking budget where configs intend parity
-- the same training budget unless the experiment class is an explicit ablation
+- the same configured epoch count, batch size, and optimizer schedule unless the
+  experiment class is an explicit ablation
 
 Masking strategy is reported per objective. MAE uses random timestep masking,
 JEPA uses block timestep masking, and Contrastive uses two masked views. The
 controlled invariant is the masking budget and encoder interface, not identical
-mask geometry.
+mask geometry, auxiliary capacity, encoder-pass count, or total computation.
 
 `ts2vec_extension` is a temporal-contrastive extension. It provides context for
 the contrastive result but is not one of the three core thesis vertices.
@@ -163,7 +164,7 @@ uv run python scripts/internal/run_experiments.py run \
     capacity_study \
     classical_baselines \
     ts2vec_extension \
-  --project slices-thesis \
+  --project slices-final \
   --revision thesis-v1 \
   --launch-commit <reviewed-git-commit> \
   --entity dummy \
@@ -190,7 +191,7 @@ Run fairness after training:
 
 ```bash
 uv run python scripts/eval/evaluate_fairness.py \
-  --project slices-thesis \
+  --project slices-final \
   --revision thesis-v1 \
   --entity <entity> \
   --force
@@ -206,7 +207,7 @@ Publication export:
 
 ```bash
 uv run python scripts/export_results.py \
-  --project slices-thesis \
+  --project slices-final \
   --revision thesis-v1 \
   --entity <entity> \
   --output-dir results/slices-thesis-v1
