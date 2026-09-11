@@ -6,8 +6,8 @@
       "bytes": 78
     },
     ".github/workflows/review.yml": {
-      "sha256": "da216dbcbc6e6fa48929bf95a8e2f5275108d755f719873e6f4a5342510291f5",
-      "bytes": 1106
+      "sha256": "ee1e3975f4cf50d434bb0a3c54c7f1de5b2cdbb323eb7d6bbaec12fc856cd484",
+      "bytes": 1100
     },
     ".gitignore": {
       "sha256": "787593dd26ec502cb1a75ff56c93af8c839e319789db623ea0f6f20a00e875df",

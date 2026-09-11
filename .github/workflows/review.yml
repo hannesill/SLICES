@@ -2,7 +2,7 @@ name: Reviewer artifact
 
 on:
   push:
-    branches: [codex/ml4h-submission]
+    branches: [ml4h-submission]
   workflow_dispatch:
 
 permissions:
