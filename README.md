@@ -1,132 +1,273 @@
-# SLICES code and reproducibility artifact
+# SLICES: Self-Supervised Learning for Intensive Care Embeddings
 
-This supplement contains runnable source and **run-level aggregate metrics** for
-the paper, plus separate post-hoc diagnostics. It contains no patient records,
-patient identifiers, trained patient-data weights, data-access tokens, or credentials.
+<p align="center">
+  <img src=".github/SLICES-logo.png" alt="SLICES logo" width="320"/>
+</p>
 
-Download the repository ZIP or check out the submission branch. Run commands from
-the directory containing this README. The artifact includes its own source,
-configs, results, renderer, and paper. No sibling repository is required.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12+-3776ab?style=flat-square&logo=python" alt="Python 3.12+"/>
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-e07c24?style=flat-square&logo=pytorch" alt="PyTorch 2.0+"/>
+  <img src="https://img.shields.io/badge/config-Hydra-89b4fa?style=flat-square" alt="Hydra"/>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license"/>
+</p>
 
-Shell commands require `uv` on PATH. Python 3.12+, a dependency cache or
-internet for installation, and a Unix-like environment are needed for the CPU
-examples. The audit also works with an existing Python 3.12+ interpreter without
-uv. PDF compilation additionally requires `latexmk`, PDFLaTeX and BibTeX.
+<p align="center">
+  <code>ICU time series</code> <code>self-supervised learning</code> <code>clinical AI</code> <code>PyTorch Lightning</code> <code>RICU</code> <code>Hydra</code>
+</p>
 
-Start with the aggregate audit, then install the environment and run the CPU
-smoke test. `RELEASE.json` identifies the packaged inputs. `MANIFEST.json` pins
-every supplied file. A downloaded mirror should pass the audit before any files
-are edited or regenerated.
+**SLICES** is a benchmark and PyTorch codebase for comparing self-supervised
+learning objectives on sparse, irregular ICU time series.
 
-| Path | Contents |
-| --- | --- |
-| `results/` | Run-level metrics, scientific configurations, and separate diagnostics |
-| `framework/` | Maintained encoder, objective, training, and preprocessing source |
-| `historical/` | Source and configs from the frozen experiment launch |
-| `benchmark.json` | Fixed feature order, preprocessing, tasks, budgets, and evaluation rules |
-| `paper/` | Matching manuscript source, figures, tables, and manual diagrams |
-| `TRAINING.md` | Explicit recipes for credentialed reproduction |
+The core question is narrow by design: when the data pipeline, encoder,
+tokenization, epoch/data-pass schedule, and downstream protocols are held fixed,
+how do **MAE**, **JEPA**, and **contrastive learning** differ?
 
-## Audit the reported results without data access
+<p align="center">
+  <img src="docs/assets/benchmark-overview.svg" alt="SLICES benchmark overview" width="860"/>
+</p>
 
-Python 3.12+ is sufficient. No Python packages, account, or network is needed:
+## Status
 
-```sh
+- This branch contains the ML4H submission code, frozen aggregate results, and
+  matching manuscript source.
+- The frozen `slices-thesis-v1` export is projected into [results/](results/), with
+  2,310 evaluated runs and a 420-run core comparison across 84 cells.
+- Patient data and trained patient-data weights are not included. Clinical
+  reproduction requires credentialed MIMIC-IV and eICU access.
+- The result audit and synthetic CPU examples run without patient data or accounts.
+- [RELEASE.json](RELEASE.json) identifies the packaged inputs;
+  [MANIFEST.json](MANIFEST.json) pins every supplied file.
+
+## What is included
+
+| Area | Scope |
+|---|---|
+| Data pipeline | RICU extraction, hourly ICU tensors, observation masks, train-only normalization |
+| Core SSL objectives | MAE, JEPA, contrastive |
+| Extension objective | TS2Vec temporal contrastive learning |
+| External reference | SMART/MART implementation, optional and outside the controlled thesis corpus |
+| Encoders | Observation-aware Transformer, GRU-D, linear; SMART/MART as optional reference code |
+| Downstream tasks | 24h mortality, hospital mortality, AKI KDIGO, remaining LOS |
+| Protocols | Linear probing and full fine-tuning |
+| Baselines | Supervised Transformer, GRU-D, XGBoost |
+| Evaluation | AUROC, AUPRC, calibration, regression metrics, fairness summaries, descriptive paired comparisons |
+
+SLICES is not a clinical deployment model, a public patient-data release, or a
+replacement for broad ICU benchmarks such as YAIB. It is focused on objective
+comparison under a shared sparse-clinical-time-series interface.
+
+## Result snapshot
+
+These results come from the frozen run-level aggregates in
+[results/per_seed.csv](results/per_seed.csv). The audit recomputes them in
+`audit-output/analysis.json`; [results/expected_analysis.json](results/expected_analysis.json)
+contains the reference calculations.
+
+- MAE has the highest five-seed mean AUPRC among the three core SSL methods in all
+  nine linear-probe classification cells. Full fine-tuning compresses the observed
+  differences and makes the supervised Transformer a stronger comparator.
+- All method comparisons are descriptive. Five matched training seeds give an
+  exact two-sided sign-flip paired-test floor of `p=0.0625`. Tasks sharing cohorts,
+  split assignments, and pretrained encoders are not pooled as independent
+  inferential units.
+- LOS behaves differently from classification: contrastive has the lowest mean
+  `test/mae` among the core SSL methods in all three frozen linear-probe LOS cells.
+- Across the label-fraction grid, including the full-label cells, MAE has the best
+  mean in `35/45` full-finetune cells against JEPA, contrastive, and supervised
+  training, and in `37/45` linear-probe cells against JEPA and contrastive.
+
+<p align="center">
+  <img src="docs/assets/label-efficiency-curves.png" alt="SLICES label-efficiency curves" width="860"/>
+</p>
+
+The figure shows hospital mortality. The label-fraction counts above cover the
+exported task grid; comparator sets differ between the two protocols.
+
+## Install
+
+Prerequisites:
+
+- Python 3.12+
+- [uv](https://github.com/astral-sh/uv)
+- A Unix-like environment and internet or a dependency cache for installation
+- R and authorized source ICU datasets only for clinical data extraction
+
+Download and extract the repository ZIP, or check out this submission branch.
+Run the following commands from the directory containing this README. The
+artifact is self-contained; no sibling repository is required.
+
+Audit the supplied files before changing or regenerating anything:
+
+```bash
 uv run --no-project python audit.py
 ```
 
-Alternatively use an existing Python 3.12+ interpreter directly. The command checks
-every packaged SHA256, the exact 420-row/84-cell core grid, each five-seed set,
-and primary metric ranges. It recomputes means, sample SDs, paired differences,
-label-fraction winner counts with explicit comparator sets, and the constant LOS
-baseline. Output is `audit-output/analysis.json`. The source projection includes
-all 2,310 frozen downstream/baseline runs. Each CSV row is one *training run*,
-never one patient. `results/source_provenance.json` records frozen source hashes
-and the separately sourced diagnostics. Anonymous projection strips accounts,
-run IDs/URLs, local paths, and free-text configuration blobs, not metric values.
+Then install the locked environment, including the plotting dependencies:
 
-## Reproduce tables and figures
-
-Install the locked source environment and the plotting extra, then render:
-
-```sh
+```bash
 uv sync --project framework --frozen --extra viz --python 3.12
-uv run --project framework python render.py --out paper/generated
 ```
 
-This regenerates the numerical table fragments and the three paper figures from
-the CSV. `paper/generated/report.json` records the computed values. No training or
-patient-data access occurs. From `paper/`, the included LaTeX paper source builds
-using `latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex`. Run the audit
-before regeneration; different plotting-library versions may change figure bytes.
+## Quick start
 
-Five manual method diagrams are also supplied as SVG and vector PDF in
-`paper/diagrams/`. Their source hashes and optional conversion instructions are
-in that directory. They are separate from the numerical renderer; compiling the
-paper uses the supplied PDFs and needs no diagram-conversion software.
+### 1. Check the reported results
 
-## Exercise the framework on a CPU
+```bash
+uv run --no-project python audit.py
+```
 
-```sh
+The audit needs only the Python standard library. It checks file hashes, the core
+comparison grid, five-seed sets, metric ranges, and the reported aggregate results.
+It writes `audit-output/analysis.json`. Each source CSV row is a training run,
+never a patient.
+
+### 2. Run a synthetic CPU example
+
+```bash
 uv run --project framework python smoke.py
 ```
 
-The synthetic test has a 120-second timeout and one CPU thread. It takes an
-optimization step through MAE, JEPA, contrastive, and the TS2Vec-style extension,
-round-trips the shared encoder checkpoint, checks frozen-head and fine-tuning
-gradient behavior, registers a toy objective, and rejects incompatible feature
-order, training duration, and checkpoint declarations. It is a software check,
-not a miniature reproduction of clinical performance.
+This exercises MAE, JEPA, contrastive, and the TS2Vec-style extension, checkpoint
+transfer, and both downstream protocols. It uses one CPU thread and a 120-second
+timeout. Synthetic metrics are software checks and do not enter the frozen results.
 
-See `EXTENDING.md` for the objective interface and `TRAINING.md` for credentialed
-reproduction. Package installation may need internet; the aggregate audit does not.
-The paper's ethics and data-access statements are in `paper/main.tex`.
+### 3. Add and evaluate an objective
 
-`CHECKPOINT_CASE.md` describes a separately authorized 60-probe checkpoint
-diagnostic. The same audit verifies its public aggregates and validation
-histories; the renderer also generates its table. Private input identity remains
-a producer receipt. `VALIDATION.md` records extension validation and assistance.
-
-## Run a complete extension workflow
-
-After the locked installation above:
-
-```sh
+```bash
 uv run --project framework python extension.py --out extension-output
 ```
 
-`TS2VEC_CASE.md` explains this shared-trainer case, its exact changed components,
-fixed scientific contract, and synthetic departures. It runs TS2Vec-style
-pretraining, v3 encoder export, both adaptation protocols for synthetic binary and
-regression tasks, validation-selected testing, and separate reporting of the
-existing 24 frozen extension cells. The process has a 120-second timeout and one
-CPU thread. Passing this test is agent software validation, not independent human
-reuse or clinical replication. Synthetic metrics never enter the frozen results.
+The complete TS2Vec-style example covers pretraining, shared encoder export,
+linear probing, full fine-tuning, and validation-selected testing on synthetic
+binary and regression tasks. See [EXTENDING.md](EXTENDING.md) for the interface and
+[TS2VEC_CASE.md](TS2VEC_CASE.md) for the worked example and frozen extension results.
 
-The raw/mask clinical-data diagnostic is described in `results/raw_mask.json`.
-Its exact executed source is `results/executed_raw_probe.py`, matched by SHA256.
-For a new authorized local run, use `uv run --project framework python raw_probe.py
---data /path/to/processed/miiv --out /path/to/new-analysis`. The runner enforces a
-900-second timeout, two CPU threads, and a fresh output directory; it saves only
-run-level metrics and input hashes. Its checkout-provenance handling also works
-outside Git. This rerunnable copy differs from the recorded source only in
-formatting and optional Git metadata handling, not the experiment computation.
+### 4. Reproduce the paper tables and figures
 
-## Reproduction scope
+```bash
+uv run --project framework python render.py --out paper/generated
+```
 
-The documented thesis matrix contains 2,455 launched runs, including TS2Vec as an
-extension and excluding SMART. The export contains 2,310 evaluated downstream or
-baseline runs; the other 145 runs are pretraining. The core comparison has 420
-evaluated runs across 84 cells. SMART source remains an optional external
-reference and is not part of those results. Use the explicit cell recipes in
-`TRAINING.md`; this artifact does not include the development tmux launcher.
+This renders the numerical paper assets from the supplied CSVs. The matching
+manuscript is in [paper/](paper/). To compile it, run the following from `paper/`
+with `latexmk`, PDFLaTeX, and BibTeX installed:
 
-All comparisons are descriptive. Passing an audit checks the exported evidence.
-Passing the synthetic workflows checks the software. Neither reproduces the
-clinical training runs or establishes numerical retraining equivalence.
+```bash
+latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex
+```
+
+### 5. Reproduce clinical training with authorized data
+
+[TRAINING.md](TRAINING.md) covers RICU extraction, processed tensors, historical
+training settings, downstream adaptation, and baseline entry points. Start by
+printing one explicit recipe from the repository root:
+
+```bash
+uv run --no-project python training_recipe.py --dataset miiv --objective mae --task mortality_hospital --seed 42 --protocol linear_probe
+```
+
+This prints commands without starting training. Follow the guide to run them from
+`historical/`, using your own authorized data. The maintained implementation is in
+`framework/`; the frozen launch source is in `historical/`.
+
+See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for the full audit, diagnostic, and
+reproduction guide. Clinical training has not been repeated for this package.
+
+## Configuration
+
+SLICES uses Hydra. Main config groups in [framework/configs/](framework/configs/):
+
+| Group | Options |
+|---|---|
+| `ssl/` | `mae`, `jepa`, `contrastive`, `ts2vec`, `smart` |
+| `model/` | `transformer`, `transformer_medium`, `transformer_large`, `gru_d`, `smart`, `linear` |
+| `tasks/` | `mortality_24h`, `mortality_hospital`, `aki_kdigo`, `los_remaining` |
+| `protocol/` | `linear_probe`, `full_finetune` |
+| `data/` | `ricu` |
+
+From `framework/`, inspect resolved configurations without starting training:
+
+```bash
+uv run python scripts/training/pretrain.py dataset=miiv ssl=mae --cfg job
+uv run python scripts/training/pretrain.py dataset=eicu ssl=jepa --cfg job
+uv run python scripts/training/pretrain.py dataset=miiv ssl=jepa ssl.mask_ratio=0.75 --cfg job
+```
+
+For historical result reproduction, use the explicit recipes in
+[TRAINING.md](TRAINING.md) and the settings in
+[results/scientific_configs.json](results/scientific_configs.json). Current
+configuration defaults alone do not identify a historical experiment.
+
+## Benchmark contract
+
+The controlled comparison fixes:
+
+- RICU-derived preprocessing
+- 24h observation window
+- patient-level splits
+- train-only normalization
+- normalize-then-zero-fill imputation
+- separate observation masks
+- observation-aware Transformer encoder
+- downstream tasks and primary metrics
+- five-seed evaluation where present
+
+MAE, JEPA, and contrastive learning share the encoder interface and masking
+budget. They do not use identical mask geometry: MAE uses random timestep masks,
+JEPA uses block timestep masks, and contrastive learning uses two masked views.
+
+The fixed scientific settings are recorded in [benchmark.json](benchmark.json).
+Clinical rerun instructions are in [TRAINING.md](TRAINING.md), and public audit
+paths are in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
+
+## Repository layout
+
+```text
+SLICES/
++-- framework/                # Maintained implementation and locked environment
+|   +-- configs/              # Hydra configs
+|   +-- scripts/              # Preprocessing and training entry points
+|   +-- src/slices/           # Data pipeline, models, training, evaluation
++-- historical/               # Source and configs from the frozen experiment launch
++-- results/                  # Frozen run-level metrics, configs, and diagnostics
++-- paper/                    # Matching manuscript, tables, figures, and diagrams
++-- docs/assets/              # README figures
++-- benchmark.json            # Fixed scientific contract
++-- audit.py                  # Standard-library result and file-integrity audit
++-- smoke.py                  # Synthetic objective and checkpoint checks
++-- extension.py              # Complete synthetic extension workflow
++-- render.py                 # Numerical paper asset renderer
++-- training_recipe.py        # Explicit credentialed training recipes
++-- REPRODUCIBILITY.md         # Detailed audit and reproduction guide
+```
+
+## Roadmap
+
+- [x] Controlled MAE, JEPA, and contrastive SSL objectives.
+- [x] RICU-based MIMIC-IV/eICU preprocessing pipeline.
+- [x] Linear-probe and full-finetune downstream protocols.
+- [x] Supervised Transformer, GRU-D, XGBoost, TS2Vec, and SMART implementations.
+- [x] Fairness summaries and paired statistical export utilities.
+- [x] Bundle frozen thesis metric export and provenance manifest.
+- [ ] Add `CITATION.cff` after thesis/paper citation details are stable.
+- [x] Add synthetic CPU examples for objective and checkpoint smoke tests.
+- [x] Add a worked example for adding and evaluating a new SSL objective.
+- [x] Package the paper tables and figures with a numerical result renderer.
+- [ ] Add Docker or Apptainer environment for cluster reproduction.
+
+## References
+
+- Johnson et al. (2023), MIMIC-IV, *Scientific Data*.
+- Pollard et al. (2018), eICU Collaborative Research Database, *Scientific Data*.
+- Gygax et al. (2023), ricu, *GigaScience*.
+- He et al. (2022), Masked Autoencoders, *CVPR*.
+- Assran et al. (2023), I-JEPA, *CVPR*.
+- Chen et al. (2020), SimCLR, *ICML*.
+- Yu et al. (2024), SMART, *NeurIPS*.
+- Yeche et al. (2024), YAIB, *ICLR*.
 
 ## License
 
-Code uses the MIT license in `LICENSE`. The historical and framework copies also
-retain their license. Bundled fonts retain their separate license in
-`paper/diagrams/figma-conversion/`. Author identity is withheld for double-blind review.
+SLICES is released under the MIT License. See [LICENSE](LICENSE). Bundled fonts
+retain their separate license in [paper/diagrams/figma-conversion/](paper/diagrams/figma-conversion/).
+Author identity is withheld for double-blind review.

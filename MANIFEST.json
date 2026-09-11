@@ -5,6 +5,10 @@
       "sha256": "5780227780fad3e30398d363b701fc50d085e62bcaf6eec694d5e662985991d1",
       "bytes": 78
     },
+    ".github/SLICES-logo.png": {
+      "sha256": "0b3f2ca665bd83de4f9c7978892210cd2370d2e37d9e28f56cf482f28bc4081e",
+      "bytes": 172160
+    },
     ".github/workflows/review.yml": {
       "sha256": "ee1e3975f4cf50d434bb0a3c54c7f1de5b2cdbb323eb7d6bbaec12fc856cd484",
       "bytes": 1100
@@ -26,12 +30,16 @@
       "bytes": 1074
     },
     "README.md": {
-      "sha256": "b33f9aae8e58cebdefcca06870254df7a7d6a7a065e32e47bb1c46ec3ddcc036",
-      "bytes": 6913
+      "sha256": "1d823ba9d33424b63b0a2cd64e885ba9fc3219e50ca88457e16e23aedef64908",
+      "bytes": 11785
     },
     "RELEASE.json": {
       "sha256": "d98073a4cc0f1bce77462f4a4a6872f8c7490f964abef8bc5c86048cac1234e3",
       "bytes": 981
+    },
+    "REPRODUCIBILITY.md": {
+      "sha256": "13d324fd0afac2a1ac7c0722fe3df76437006629267202a7d2941c6b93dea9fe",
+      "bytes": 6894
     },
     "TRAINING.md": {
       "sha256": "af7dba0c90b030f53e007d6acc94328c4828edffa05564f26c5b88e31f2041d3",
@@ -56,6 +64,14 @@
     "checkpoint_report.py": {
       "sha256": "e9e2aa1104980c835d26e865aebd9681e003ef3503347d00bf0b78161e6f3a42",
       "bytes": 8052
+    },
+    "docs/assets/benchmark-overview.svg": {
+      "sha256": "ec080ca86d36c939383e34e8afe351a1a676bc339273c838dbb19c4ecbaf0340",
+      "bytes": 21980
+    },
+    "docs/assets/label-efficiency-curves.png": {
+      "sha256": "6a7d05dde1cb74db4aeaf0436c18f368a39b9cc2b8db6d250f5165402fdcf9a1",
+      "bytes": 348213
     },
     "export_thesis_coverage.py": {
       "sha256": "eb6fdd10596176454ea6fce559815ee61bee4a02545ebb5ccf077e5203b47c56",
