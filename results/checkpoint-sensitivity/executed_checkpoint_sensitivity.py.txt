@@ -1,0 +1,910 @@
+#!/usr/bin/env python3
+"""Bounded CPU final-versus-best SSL checkpoint diagnostic. Never writes patient data.
+
+Commands: audit, run, worker, summarize. Run uses serial, timed child processes;
+the first complete checkpoint pair is the runtime preflight. Frozen evidence is
+read-only. Embeddings, labels, normalized tensors and head weights stay in memory.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import csv
+import hashlib
+import importlib.metadata
+import json
+import os
+import platform
+import signal
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SEEDS = (42, 123, 456, 789, 1011)
+PARADIGMS = ("mae", "jepa", "contrastive")
+TASKS = ("mortality_hospital", "los_remaining")
+VARIANTS = {"final": "encoder.pt", "best_val": "encoder_best_val.pt"}
+BUDGET = 105 * 60
+JOB_TIMEOUT = 600
+PROBE_TIMEOUT = 180
+ENCODE_TIMEOUT = 120
+PROTOCOL = {
+    "name": "linear_probe_cached_embeddings",
+    "dataset": "miiv",
+    "device": "cpu",
+    "epochs": 50,
+    "batch_size": 64,
+    "drop_last": True,
+    "lr": 1e-4,
+    "weight_decay": 0.05,
+    "optimizer": "adamw",
+    "scheduler": "cosine",
+    "eta_min": 1e-6,
+    "gradient_clip": 1.0,
+    "patience": 10,
+    "label_smoothing": 0.1,
+    "class_weight": "sqrt(n / (2*n_class))",
+    "regression_train": "mean_squared_error",
+    "regression_select": "mean_absolute_error",
+    "regression_report": "mean_absolute_error_days",
+    "classification_select": "average_precision",
+    "head": "linear",
+    "hidden_dims": [],
+    "dropout": 0.0,
+    "freeze_encoder": True,
+    "pooling": "mean over observed timesteps",
+    "label_fraction": 1.0,
+    "head_seed": "training seed, reset before each task/version",
+    "batch_order": "dedicated torch.Generator(training seed), reset for every probe",
+    "selection": "strict validation improvement, earliest epoch on ties; test once afterward",
+    "embedding_batch_size": 256,
+    "encoding_threads": 2,
+    "probe_threads": 1,
+    "normalization": "full unfiltered training cohort; observed mean/sample std; then zero-fill",
+    "split": "canonical sorted patient shuffle, 70/15/15; filter labels after assignment",
+    "test_used_for_selection": False,
+}
+
+
+def utc():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        while block := f.read(8 * 1024 * 1024):
+            h.update(block)
+    return h.hexdigest()
+
+
+def write_json(path, obj):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2, sort_keys=True, allow_nan=False) + "\n")
+    tmp.replace(path)
+
+
+def write_csv(path, rows):
+    if not rows:
+        Path(path).write_text("")
+        return
+    with Path(path).open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def verified_hash(path, expected):
+    actual = sha(path)
+    if actual != expected:
+        raise ValueError(f"SHA256 mismatch: {Path(path).name}")
+    return actual
+
+
+def audit(args):
+    """Verify every frozen artifact and all 30 requested encoder files before execution."""
+    import pandas as pd
+
+    receipts = {}
+    for folder, manifest_name in [
+        ("slices-thesis-v1", "evidence_manifest.json"),
+        ("slices-thesis-encoder-audit-v1", "checksum_manifest.json"),
+    ]:
+        directory = ROOT / "results" / folder
+        manifest = json.loads((directory / manifest_name).read_text())
+        for name, record in manifest["files"].items():
+            path = directory / name
+            receipts[str(path.relative_to(ROOT))] = verified_hash(path, record["sha256"])
+    for name in ("review/benchmark.json", "AGENTS.md", "pyproject.toml", "uv.lock"):
+        receipts[name] = sha(ROOT / name)
+    claims = args.thesis / "CLAIMS.md"
+    thesis_commit = subprocess.check_output(
+        ["git", "-C", str(args.thesis), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if thesis_commit != "fde76bd1f85b87759287fcb3178d62f36c17219f":
+        raise ValueError("Thesis base differs from authorized fde76bd")
+    rows = list(
+        csv.DictReader(
+            (ROOT / "results/slices-thesis-encoder-audit-v1/encoder_epoch_audit.csv").open()
+        )
+    )
+    checkpoints = []
+    for seed in SEEDS:
+        for paradigm in PARADIGMS:
+            matches = [
+                r
+                for r in rows
+                if r["dataset"] == "miiv" and r["paradigm"] == paradigm and int(r["seed"]) == seed
+            ]
+            if len(matches) != 1 or matches[0]["status"] != "ok":
+                raise ValueError("Missing or ambiguous checkpoint audit row")
+            row = matches[0]
+            for variant, filename in VARIANTS.items():
+                expected = row[
+                    "final_encoder_sha256" if variant == "final" else "best_encoder_sha256"
+                ]
+                relative = f"{row['run']}/{filename}"
+                checkpoints.append(
+                    {
+                        "seed": seed,
+                        "paradigm": paradigm,
+                        "variant": variant,
+                        "archive_relative_path": relative,
+                        "sha256": verified_hash(args.weights / relative, expected),
+                        "best_ssl_epoch_zero_based": int(row["best_epoch"]),
+                        "best_ssl_monitor": row["monitor"],
+                        "best_ssl_loss": float(row["best_model_score"]),
+                        "final_epoch_note": (
+                            "100-epoch policy from frozen contract; "
+                            "encoder.pt has no epoch metadata"
+                        ),
+                    }
+                )
+    frozen = pd.read_parquet(ROOT / "results/slices-thesis-v1/per_seed_results.parquet")
+    subset = frozen[
+        (frozen.dataset == "miiv")
+        & frozen.paradigm.isin(PARADIGMS)
+        & frozen.task.isin(TASKS)
+        & frozen.seed.isin(SEEDS)
+        & (frozen.protocol == "linear_probe")
+        & (frozen.experiment_class == "core_ssl_benchmark")
+        & (frozen.label_fraction == 1.0)
+        & (frozen.model_size == "default")
+        & (frozen.revision == "thesis-v1")
+    ]
+    if len(subset) != 30 or subset.duplicated(["paradigm", "task", "seed"]).any():
+        raise ValueError("Expected exactly 30 frozen reference probes")
+    reference = []
+    for _, r in subset.iterrows():
+        metric = "test/mae" if r.task == "los_remaining" else "test/auprc"
+        reference.append(
+            {
+                "dataset": "miiv",
+                "paradigm": r.paradigm,
+                "task": r.task,
+                "seed": int(r.seed),
+                "metric": metric,
+                "frozen_final_metric": float(r[metric]),
+            }
+        )
+    write_csv(args.out / "frozen_reference.csv", reference)
+    configs = pd.read_parquet(ROOT / "results/slices-thesis-v1/run_configs.parquet")
+    selected_configs = []
+    for _, r in configs.iterrows():
+        if r.wandb_run_id not in set(subset.wandb_run_id):
+            continue
+        c = json.loads(r.config_json)
+        # model_size is derived in per_seed_results, absent in these raw configs.
+        assert c.get("protocol") == "linear_probe" and c.get("label_fraction") == 1.0
+        t, o, s = c["training"], c["optimizer"], c["scheduler"]
+        assert (
+            t["max_epochs"],
+            t["batch_size"],
+            t["early_stopping_patience"],
+            t["freeze_encoder"],
+        ) == (50, 64, 10, True)
+        assert (o["name"], o["lr"], o["weight_decay"], s["name"], s["T_max"], s["eta_min"]) == (
+            "adamw",
+            1e-4,
+            0.05,
+            "cosine",
+            50,
+            1e-6,
+        )
+        assert (t["gradient_clip_val"], t["label_smoothing"]) == (1, 0.1)
+        assert c["task"]["head_type"] == "linear" and c["task"]["dropout"] == 0
+        assert c["task"]["primary_metric"] == ("mae" if r.task == "los_remaining" else "auprc")
+        selected_configs.append(
+            {
+                "paradigm": r.paradigm,
+                "task": r.task,
+                "seed": int(r.seed),
+                "wandb_run_id": r.wandb_run_id,
+                "launch_commit": r.launch_commit,
+                "training": t,
+                "optimizer": o,
+                "scheduler": s,
+                "task_config": c["task"],
+                "encoder": c["encoder"],
+            }
+        )
+    if len(selected_configs) != 30:
+        raise ValueError("Expected exactly 30 frozen probe configurations")
+    write_json(args.out / "frozen_probe_configs.json", selected_configs)
+    source_paths = list((ROOT / "src/slices").rglob("*.py"))
+    receipts.update({str(p.relative_to(ROOT)): sha(p) for p in source_paths})
+    payload = {
+        "created_utc": utc(),
+        "slices_base_commit": "23f472b623b5ae74f8aa8738cd6d0463d4b3a9cc",
+        "thesis_base_commit": thesis_commit,
+        "claims_sha256": sha(claims),
+        "thesis_agents_sha256": sha(args.thesis / "AGENTS.md"),
+        "source_sha256": receipts,
+        "data_sha256": {p.name: sha(p) for p in sorted(args.data.iterdir()) if p.is_file()},
+        "checkpoints": checkpoints,
+        "protocol": PROTOCOL,
+        "runtime": {
+            "python": sys.version,
+            "platform": platform.platform(),
+            "packages": {
+                n: importlib.metadata.version(n)
+                for n in [
+                    "torch",
+                    "numpy",
+                    "polars",
+                    "pandas",
+                    "scikit-learn",
+                    "lightning",
+                    "torchmetrics",
+                ]
+            },
+        },
+        "limits": {
+            "cumulative_experiment_seconds": BUDGET,
+            "worker_seconds": JOB_TIMEOUT,
+            "probe_seconds": PROBE_TIMEOUT,
+            "encoding_seconds": ENCODE_TIMEOUT,
+        },
+        "patient_records_saved": False,
+        "weights_saved": False,
+        "differences_from_frozen_execution": [
+            "CPU cached eval-mode embeddings, not GPU Lightning execution",
+            "Reset head RNG and dedicated batch RNG within every checkpoint pair",
+            "Recompute canonical train-only normalization read-only; no processed-cache writes",
+            "Report sklearn average precision and absolute error from selected probe",
+            "Diagnostic does not claim bitwise reproduction of frozen final metrics",
+        ],
+    }
+    write_json(args.out / "provenance.json", payload)
+    print(
+        json.dumps(
+            {
+                "audit": "passed",
+                "checkpoints_verified": len(checkpoints),
+                "frozen_probes": len(reference),
+            }
+        ),
+        flush=True,
+    )
+
+
+@contextmanager
+def deadline(seconds):
+    def expired(signum, frame):
+        raise TimeoutError(f"Stage exceeded {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def array_digest(value):
+    import numpy as np
+
+    a = np.ascontiguousarray(value)
+    return hashlib.sha256(str((a.shape, a.dtype.str)).encode() + a.tobytes()).hexdigest()
+
+
+def state_digest(state):
+    return hashlib.sha256(
+        json.dumps(
+            {k: array_digest(v.detach().cpu().numpy()) for k, v in sorted(state.items())},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
+def prepare_data(data_dir, seed):
+    import numpy as np
+    import polars as pl
+    import yaml
+
+    from slices.data.splits import _indices_from_patient_sets, _split_patient_sets
+    from slices.data.tensor_preprocessing import (
+        apply_normalization_and_imputation,
+        compute_normalization_stats,
+        extract_tensors_from_dataframe,
+    )
+
+    metadata = yaml.safe_load((data_dir / "metadata.yaml").read_text())
+    contract = json.loads((ROOT / "review/benchmark.json").read_text())
+    if metadata["feature_names"] != contract["feature_names"]:
+        raise ValueError("Feature names/order differ from benchmark.json")
+    # Preserve parquet row order, as the canonical Dataset does.
+    frame = pl.read_parquet(data_dir / "timeseries.parquet")
+    stays = frame["stay_id"].to_list()
+    if len(set(stays)) != len(stays):
+        raise ValueError("Duplicate stay rows")
+    static = pl.read_parquet(data_dir / "static.parquet", columns=["stay_id", "patient_id"])
+    mapping = dict(zip(static["stay_id"].to_list(), static["patient_id"].to_list()))
+    patient_sets = _split_patient_sets({mapping[s] for s in stays}, seed, 0.7, 0.15)
+    assert all(patient_sets[i].isdisjoint(patient_sets[j]) for i in range(3) for j in range(i))
+    split = [
+        np.asarray(a, dtype=np.int64)
+        for a in _indices_from_patient_sets(stays, mapping, *patient_sets)
+    ]
+    x, mask = extract_tensors_from_dataframe(frame, 24, 84)
+    del frame
+    if not bool(mask.flatten(1).any(1).all()):
+        raise ValueError("Cohort includes fully unobserved stays")
+    means, stds = compute_normalization_stats(x, mask, split[0].tolist(), 84, True)
+    x = apply_normalization_and_imputation(x, means, stds, True, 84)
+    labels = pl.read_parquet(data_dir / "labels.parquet")
+    targets, indices = {}, {}
+    for task in TASKS:
+        selected = (
+            labels.filter(pl.col("task_name") == task) if "task_name" in labels.columns else labels
+        )
+        column = "label" if "task_name" in labels.columns else task
+        if selected["stay_id"].n_unique() != len(selected):
+            raise ValueError("Duplicate labels")
+        lookup = dict(zip(selected["stay_id"].to_list(), selected[column].to_list()))
+        targets[task] = np.asarray(
+            [np.nan if lookup.get(s) is None else lookup[s] for s in stays], dtype=np.float32
+        )
+        valid = np.isfinite(targets[task])
+        indices[task] = [a[valid[a]] for a in split]
+    receipt = {
+        "seed": seed,
+        "full_cohort_stays": len(stays),
+        "patient_split_counts": [len(s) for s in patient_sets],
+        "full_split_counts": [len(s) for s in split],
+        "patient_split_sha256": [
+            array_digest(np.asarray(sorted(s), dtype=np.int64)) for s in patient_sets
+        ],
+        "ordered_stay_split_sha256": [
+            array_digest(np.asarray(stays, dtype=np.int64)[s]) for s in split
+        ],
+        "normalization_sha256": array_digest(np.stack([means.numpy(), stds.numpy()])),
+        "tasks": {
+            t: {
+                "counts": [len(s) for s in indices[t]],
+                "ordered_stay_split_sha256": [
+                    array_digest(np.asarray(stays, dtype=np.int64)[s]) for s in indices[t]
+                ],
+                "target_sha256": [array_digest(targets[t][s]) for s in indices[t]],
+            }
+            for t in TASKS
+        },
+    }
+    return x, mask, targets, indices, receipt
+
+
+def encode(path, x, mask):
+    import torch
+
+    from slices.models.encoders.factory import build_encoder
+
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if checkpoint.get("version") != 3:
+        raise ValueError("Expected audited v3 encoder")
+    config = dict(checkpoint["encoder_config"])
+    if (
+        config.pop("name") != "transformer"
+        or not config["obs_aware"]
+        or config["pooling"] != "none"
+    ):
+        raise ValueError("Unexpected encoder architecture or pooling")
+    config["pooling"] = "mean"
+    encoder = build_encoder("transformer", config)
+    encoder.load_state_dict(checkpoint["encoder_state_dict"], strict=True)
+    encoder.requires_grad_(False).eval()
+    if sum(p.numel() for p in encoder.parameters()) != 159808:
+        raise ValueError("Unexpected encoder parameter count")
+    torch.set_num_threads(PROTOCOL["encoding_threads"])
+    batches = []
+    with torch.inference_mode():
+        for start in range(0, len(x), PROTOCOL["embedding_batch_size"]):
+            end = start + PROTOCOL["embedding_batch_size"]
+            m = mask[start:end]
+            batches.append(encoder(x[start:end], mask=m, padding_mask=m.any(dim=-1)).clone())
+    # Make a normal tensor outside inference mode so head autograd can save it.
+    embeddings = torch.cat(batches).clone()
+    if embeddings.shape != (len(x), 64) or not torch.isfinite(embeddings).all():
+        raise ValueError("Invalid embedding shape or values")
+    return embeddings
+
+
+def criterion_for(task, labels):
+    import torch
+
+    if task == "los_remaining":
+        return torch.nn.MSELoss(), None
+    if not torch.isin(labels, torch.tensor([0, 1])).all():
+        raise ValueError("Non-binary classification labels")
+    counts = torch.bincount(labels.long(), minlength=2)
+    if counts.min() < 3:
+        raise ValueError("Insufficient class support")
+    weight = (len(labels) / (2 * counts.double())).sqrt().float()
+    return torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=0.1), weight.tolist()
+
+
+def score_head(head, features, labels, task):
+    import torch
+    from sklearn.metrics import average_precision_score, mean_absolute_error
+
+    with torch.inference_mode():
+        output = head(features)
+        prediction = (
+            output["logits"].squeeze(-1) if task == "los_remaining" else output["probs"][:, 1]
+        )
+    score = mean_absolute_error if task == "los_remaining" else average_precision_score
+    return float(score(labels.numpy(), prediction.numpy()))
+
+
+def fit_probe(train_x, train_y, val_x, val_y, task, seed, protocol=None):
+    """No test arguments: validation alone selects the head returned to the caller."""
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from slices.models.heads import TaskHeadConfig, build_task_head
+
+    p = PROTOCOL if protocol is None else protocol
+    torch.set_num_threads(p["probe_threads"])
+    torch.manual_seed(seed)
+    head = build_task_head(
+        TaskHeadConfig(
+            name="linear",
+            task_name=task,
+            task_type="regression" if task == "los_remaining" else "binary",
+            input_dim=train_x.shape[1],
+            hidden_dims=[],
+            dropout=0.0,
+        )
+    )
+    initial = state_digest(head.state_dict())
+    criterion, weights = criterion_for(task, train_y)
+    opt = torch.optim.AdamW(head.parameters(), lr=p["lr"], weight_decay=p["weight_decay"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=p["epochs"], eta_min=p["eta_min"]
+    )
+    generator = torch.Generator().manual_seed(seed)
+    loader = DataLoader(
+        TensorDataset(train_x, train_y),
+        batch_size=p["batch_size"],
+        shuffle=True,
+        drop_last=True,
+        num_workers=0,
+        generator=generator,
+    )
+    if len(loader) == 0:
+        raise ValueError("Training set has no full batch")
+    best, selected, stale, best_epoch, history = None, None, 0, None, []
+    for epoch in range(p["epochs"]):
+        start = time.monotonic()
+        head.train()
+        total_loss = 0.0
+        for features, target in loader:
+            opt.zero_grad(set_to_none=True)
+            logits = head(features)["logits"]
+            loss = (
+                criterion(logits.squeeze(-1), target.float())
+                if task == "los_remaining"
+                else criterion(logits, target.long())
+            )
+            if not torch.isfinite(loss):
+                raise ValueError("Nonfinite training loss")
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(head.parameters(), p["gradient_clip"])
+            opt.step()
+            total_loss += float(loss.detach())
+        head.eval()
+        value = score_head(head, val_x, val_y, task)
+        improved = best is None or (value < best if task == "los_remaining" else value > best)
+        if improved:
+            best, selected, stale, best_epoch = (
+                value,
+                copy.deepcopy(head.state_dict()),
+                0,
+                epoch + 1,
+            )
+        else:
+            stale += 1
+        history.append(
+            {
+                "epoch_one_based": epoch + 1,
+                "val_primary": value,
+                "mean_batch_train_loss": total_loss / len(loader),
+                "lr": opt.param_groups[0]["lr"],
+                "seconds": time.monotonic() - start,
+            }
+        )
+        scheduler.step()
+        if stale >= p["patience"]:
+            break
+    head.load_state_dict(selected)
+    return head.eval(), {
+        "selected_epoch_one_based": best_epoch,
+        "epochs_run": len(history),
+        "validation_primary": best,
+        "head_initialization_sha256": initial,
+        "selected_head_sha256": state_digest(selected),
+        "batch_generator_seed": seed,
+        "batch_generator_final_sha256": array_digest(generator.get_state().numpy()),
+        "class_weights": weights,
+        "history": history,
+    }
+
+
+def worker(args):
+    import numpy as np
+    import torch
+
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(1)
+    torch.use_deterministic_algorithms(True)
+    torch.set_default_device("cpu")
+    start = time.monotonic()
+    provenance = json.loads((args.out / "provenance.json").read_text())
+    for name, expected in provenance["data_sha256"].items():
+        verified_hash(args.data / name, expected)
+    records = [
+        r
+        for r in provenance["checkpoints"]
+        if r["seed"] == args.seed and r["paradigm"] == args.paradigm
+    ]
+    job = {
+        "seed": args.seed,
+        "paradigm": args.paradigm,
+        "started_utc": utc(),
+        "status": "running",
+        "probes": [],
+    }
+    job_path = args.out / "jobs" / f"{args.seed}_{args.paradigm}.json"
+
+    def save():
+        job["elapsed_seconds"] = time.monotonic() - start
+        write_json(job_path, job)
+
+    save()
+    x, mask, labels, indices, receipt = prepare_data(args.data, args.seed)
+    job["data_receipt"] = receipt
+    job["preparation_seconds"] = time.monotonic() - start
+    save()
+    frozen = json.loads((args.out / "frozen_probe_configs.json").read_text())
+    for variant in VARIANTS:
+        record = next(r for r in records if r["variant"] == variant)
+        path = args.weights / record["archive_relative_path"]
+        verified_hash(path, record["sha256"])
+        encode_start = time.monotonic()
+        with deadline(ENCODE_TIMEOUT):
+            embeddings = encode(path, x, mask)
+        encoding_seconds = time.monotonic() - encode_start
+        for task in TASKS:
+            probe_start = time.monotonic()
+            train, val, test = indices[task]
+            y = torch.from_numpy(labels[task])
+            row = {
+                "dataset": "miiv",
+                "paradigm": args.paradigm,
+                "seed": args.seed,
+                "task": task,
+                "variant": variant,
+                "checkpoint_sha256": record["sha256"],
+                "best_ssl_epoch_zero_based": record["best_ssl_epoch_zero_based"],
+                "metric": "test/mae" if task == "los_remaining" else "test/auprc",
+                "encoding_seconds_shared_between_tasks": encoding_seconds,
+                "n_train": len(train),
+                "n_val": len(val),
+                "n_test": len(test),
+            }
+            job["active_probe"] = {"task": task, "variant": variant}
+            save()
+            with deadline(PROBE_TIMEOUT):
+                head, training = fit_probe(
+                    embeddings[train], y[train], embeddings[val], y[val], task, args.seed
+                )
+                reference = next(
+                    r
+                    for r in frozen
+                    if r["seed"] == args.seed
+                    and r["paradigm"] == args.paradigm
+                    and r["task"] == task
+                )
+                if task == "mortality_hospital" and not np.allclose(
+                    training["class_weights"], reference["training"]["class_weight"], rtol=1e-6
+                ):
+                    raise ValueError(
+                        "Training class weights differ from frozen config; split/label mismatch"
+                    )
+                # Test labels first enter evaluation after all selection has finished.
+                row["test_primary"] = score_head(head, embeddings[test], y[test], task)
+            row.update(training)
+            row["probe_seconds"] = time.monotonic() - probe_start
+            row["status"] = "complete"
+            job["probes"].append(row)
+            save()
+            print(
+                json.dumps(
+                    {
+                        k: row[k]
+                        for k in [
+                            "seed",
+                            "paradigm",
+                            "task",
+                            "variant",
+                            "test_primary",
+                            "epochs_run",
+                            "probe_seconds",
+                        ]
+                    }
+                ),
+                flush=True,
+            )
+        del embeddings
+    job.pop("active_probe", None)
+    job["status"] = "complete"
+    save()
+
+
+def timed_process(command, log_path, seconds, env):
+    """Kill the process group on timeout or caller interruption; never leave an experiment."""
+    start = time.monotonic()
+    with Path(log_path).open("w") as log:
+        child = subprocess.Popen(
+            command, stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True
+        )
+        try:
+            code = child.wait(timeout=seconds)
+            status = "complete" if code == 0 else "failed"
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            code, status = child.returncode, "timeout"
+        finally:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+    return {
+        "status": status,
+        "returncode": code,
+        "seconds": time.monotonic() - start,
+        "timeout_seconds": seconds,
+    }
+
+
+def run(args):
+    if (args.out / "runtime_ledger.json").exists():
+        raise ValueError("Refusing to reset an existing cumulative runtime ledger")
+    audit(args)
+    ledger = {
+        "started_utc": utc(),
+        "budget_seconds": BUDGET,
+        "jobs": [],
+        "charged_seconds": 0.0,
+        "script_sha256": sha(__file__),
+        "schedule": [{"seed": s, "paradigm": p} for s in SEEDS for p in PARADIGMS],
+    }
+    args.out.joinpath("logs").mkdir(exist_ok=True)
+    for i, item in enumerate(ledger["schedule"]):
+        remaining = BUDGET - ledger["charged_seconds"]
+        if remaining < 1:
+            break
+        timeout = min(JOB_TIMEOUT, remaining)
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "worker",
+            "--data",
+            str(args.data),
+            "--weights",
+            str(args.weights),
+            "--out",
+            str(args.out),
+            "--seed",
+            str(item["seed"]),
+            "--paradigm",
+            item["paradigm"],
+        ]
+        # Reserve before launch. A controller crash cannot reset the budget.
+        entry = {**item, "status": "reserved", "reserved_seconds": timeout, "started_utc": utc()}
+        ledger["jobs"].append(entry)
+        ledger["charged_seconds"] += timeout
+        write_json(args.out / "runtime_ledger.json", ledger)
+        env = dict(
+            os.environ,
+            CUDA_VISIBLE_DEVICES="",
+            WANDB_MODE="disabled",
+            OMP_NUM_THREADS="2",
+            OPENBLAS_NUM_THREADS="2",
+            MKL_NUM_THREADS="2",
+            POLARS_MAX_THREADS="2",
+            PYTHONHASHSEED="0",
+        )
+        result = timed_process(
+            command, args.out / "logs" / f"{item['seed']}_{item['paradigm']}.log", timeout, env
+        )
+        entry.update(result)
+        ledger["charged_seconds"] += result["seconds"] - timeout
+        if i == 0:
+            ledger["preflight"] = {
+                "first_pair": item,
+                "elapsed_seconds": result["seconds"],
+                "projected_15_jobs_seconds": result["seconds"] * 15,
+                "decision": "expand_fixed_schedule"
+                if result["status"] == "complete"
+                else "stop_failed_preflight",
+                "decision_inputs": "completion and runtime only; no test metric selection",
+            }
+        write_json(args.out / "runtime_ledger.json", ledger)
+        print(json.dumps(entry), flush=True)
+        if i == 0 and result["status"] != "complete":
+            break
+    ledger["finished_utc"] = utc()
+    ledger["coverage_complete"] = len(ledger["jobs"]) == 15 and all(
+        j["status"] == "complete" for j in ledger["jobs"]
+    )
+    write_json(args.out / "runtime_ledger.json", ledger)
+    summarize(args)
+
+
+def paired_rows(rows):
+    grouped = {}
+    for row in rows:
+        key = (row["paradigm"], row["task"], row["seed"])
+        if row["variant"] in grouped.setdefault(key, {}):
+            raise ValueError("Duplicate probe variant")
+        grouped[key][row["variant"]] = row
+    result = []
+    for (paradigm, task, seed), variants in grouped.items():
+        if set(variants) != set(VARIANTS):
+            continue
+        final, best = variants["final"], variants["best_val"]
+        for field in [
+            "n_train",
+            "n_val",
+            "n_test",
+            "head_initialization_sha256",
+            "batch_generator_seed",
+        ]:
+            if final[field] != best[field]:
+                raise ValueError(f"Unmatched paired field: {field}")
+        delta = best["test_primary"] - final["test_primary"]
+        result.append(
+            {
+                "dataset": "miiv",
+                "paradigm": paradigm,
+                "task": task,
+                "seed": seed,
+                "metric": final["metric"],
+                "final": final["test_primary"],
+                "best_val": best["test_primary"],
+                "best_minus_final": delta,
+                "improvement": -delta if task == "los_remaining" else delta,
+                "final_selected_epoch": final["selected_epoch_one_based"],
+                "best_selected_epoch": best["selected_epoch_one_based"],
+            }
+        )
+    return result
+
+
+def summarize(args):
+    import pandas as pd
+
+    jobs = [json.loads(p.read_text()) for p in sorted((args.out / "jobs").glob("*.json"))]
+    rows = [r for j in jobs for r in j["probes"] if r["status"] == "complete"]
+    write_csv(
+        args.out / "per_probe.csv", [{k: v for k, v in r.items() if k != "history"} for r in rows]
+    )
+    pairs = paired_rows(rows)
+    write_csv(args.out / "paired_differences.csv", pairs)
+    summaries = []
+    frame = pd.DataFrame(pairs)
+    if len(frame):
+        for (paradigm, task), group in frame.groupby(["paradigm", "task"]):
+            summary = {
+                "dataset": "miiv",
+                "paradigm": paradigm,
+                "task": task,
+                "metric": group.metric.iloc[0],
+                "n_pairs": len(group),
+                "seeds": ";".join(map(str, sorted(group.seed))),
+                "best_improved_count": int((group.improvement > 0).sum()),
+            }
+            for field in ["final", "best_val", "best_minus_final"]:
+                for suffix, value in [
+                    ("mean", group[field].mean()),
+                    ("sd", group[field].std(ddof=1)),
+                    ("min", group[field].min()),
+                    ("max", group[field].max()),
+                ]:
+                    summary[f"{field}_{suffix}"] = None if pd.isna(value) else float(value)
+            summaries.append(summary)
+    write_csv(args.out / "aggregate.csv", summaries)
+    observed = {(r["paradigm"], r["task"], r["seed"], r["variant"]) for r in rows}
+    missing = [
+        {"paradigm": p, "task": t, "seed": s, "variant": v}
+        for s in SEEDS
+        for p in PARADIGMS
+        for t in TASKS
+        for v in VARIANTS
+        if (p, t, s, v) not in observed
+    ]
+    write_json(
+        args.out / "coverage.json",
+        {
+            "planned_probes": 60,
+            "completed_probes": len(rows),
+            "planned_pairs": 30,
+            "completed_pairs": len(pairs),
+            "missing": missing,
+            "other_datasets": "not evaluated",
+            "full_finetuning": "not evaluated",
+        },
+    )
+    if rows:
+        reference = pd.read_csv(args.out / "frozen_reference.csv")
+        current = pd.DataFrame(rows)
+        comparison = current[current.variant == "final"][
+            ["dataset", "paradigm", "task", "seed", "test_primary"]
+        ].merge(reference, on=["dataset", "paradigm", "task", "seed"], validate="one_to_one")
+        comparison["diagnostic_minus_frozen_final"] = (
+            comparison.test_primary - comparison.frozen_final_metric
+        )
+        comparison.to_csv(args.out / "frozen_final_comparison.csv", index=False)
+    print(
+        json.dumps(
+            {
+                "completed_probes": len(rows),
+                "completed_pairs": len(pairs),
+                "missing_probes": len(missing),
+            }
+        ),
+        flush=True,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["audit", "run", "worker", "summarize"])
+    parser.add_argument("--data", type=Path)
+    parser.add_argument("--weights", type=Path)
+    parser.add_argument("--thesis", type=Path)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--seed", type=int, choices=SEEDS)
+    parser.add_argument("--paradigm", choices=PARADIGMS)
+    args = parser.parse_args()
+    args.out = args.out.resolve()
+    if ROOT / "results" in args.out.parents or args.out == ROOT / "results":
+        parser.error("Diagnostic outputs cannot enter results/")
+    if args.command in ["audit", "run", "worker"] and (args.data is None or args.weights is None):
+        parser.error("--data and --weights required")
+    if args.command in ["audit", "run"] and args.thesis is None:
+        parser.error("--thesis required")
+    args.out.mkdir(parents=True, exist_ok=True)
+    {"audit": audit, "run": run, "worker": worker, "summarize": summarize}[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

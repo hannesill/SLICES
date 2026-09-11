@@ -1,0 +1,7 @@
+#let stem = sys.inputs.at("stem")
+#let height = float(sys.inputs.at("height"))
+#let width = float(sys.inputs.at("width"))
+#set document(date: none)
+#set page(width: 6.5in, height: 6.5in * height / width, margin: 0pt)
+#set text(font: "Inter")
+#image(sys.inputs.at("svg", default: "../" + stem + ".svg"), width: 6.5in)

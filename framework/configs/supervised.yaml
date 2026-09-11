@@ -1,0 +1,152 @@
+# Full Supervised Training Configuration
+#
+# This config is for training a model from scratch (no SSL pretraining) to establish
+# a baseline for comparing SSL methods. It uses the same architecture and training
+# infrastructure as finetuning but trains all parameters from random initialization.
+#
+# Example usage:
+#   # Train supervised baseline
+#   uv run python scripts/training/supervised.py dataset=miiv
+#
+#   # Different task
+#   uv run python scripts/training/supervised.py dataset=miiv tasks=mortality_hospital
+#
+#   # Different dataset
+#   uv run python scripts/training/supervised.py dataset=eicu
+#
+#   # Resume from checkpoint
+#   uv run python scripts/training/supervised.py dataset=miiv ckpt_path=outputs/supervised/.../checkpoints/last.ckpt
+
+defaults:
+  - data: ricu
+  - model: transformer
+  - tasks: mortality_24h
+  - _self_
+
+# Project info
+project_name: slices
+experiment_name: supervised
+
+# Dataset identifier — drives data paths via ricu.yaml interpolation
+dataset: miiv  # miiv | eicu | combined
+
+# Paradigm — always "supervised" for this config
+paradigm: supervised
+protocol: full_finetune
+
+# Final rerun corpus metadata
+experiment_class: null
+experiment_subtype: null
+revision: null
+rerun_reason: null
+
+# Random seed for reproducibility
+seed: 42
+
+# Resume from checkpoint (for interrupted training)
+ckpt_path: null
+
+# Output directory (Hydra will create timestamped subdirs)
+output_dir: ${hydra:runtime.output_dir}
+checkpoint_dir: ${output_dir}/checkpoints
+
+# Encoder configuration inherited from configs/model/transformer.yaml
+# Same architecture as SSL paradigms (d=64, L=2, H=4, obs_aware=True) for fair comparison
+
+# Task configuration inherited from configs/tasks/*.yaml
+# Override with: tasks=mortality_hospital, tasks=los_remaining, etc.
+
+# Label fraction for label-efficiency ablations
+# 1.0 = use all training data (default)
+label_fraction: 1.0
+
+# Training configuration
+training:
+  max_epochs: 100  # More epochs for training from scratch
+  batch_size: 64
+
+  # IMPORTANT: Always train all parameters from scratch
+  freeze_encoder: false
+
+  # No missing token for supervised baseline (no pretrained token to use,
+  # and a random one would confound SSL vs supervised comparison)
+  use_missing_token: false
+
+  # If best-checkpoint reload fails before test-time evaluation, optionally
+  # fall back to the final in-memory model instead of failing closed.
+  allow_best_ckpt_fallback: false
+
+  # Compute settings
+  accelerator: auto  # auto | cpu | gpu | mps
+  devices: auto
+  precision: 32
+
+  # Class weighting for imbalanced tasks
+  # null: no weighting (default)
+  # "balanced": auto-compute inverse frequency weights from training labels
+  # [w0, w1, ...]: explicit per-class weights
+  class_weight: balanced
+
+  # Regularization
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+
+  # Early stopping
+  # Monitor/mode default to task.primary_metric when provided.
+  # Otherwise setup_callbacks() falls back to:
+  #   classification -> val/auprc (max), regression -> val/mse (min)
+  # Override here only if you need a non-default metric.
+  early_stopping_patience: 10
+
+  # Label smoothing for classification tasks
+  label_smoothing: 0.1
+
+  # Debug: overfit on N batches (0 = disabled)
+  overfit_batches: 0
+
+# Optimizer configuration
+# Higher learning rate than finetuning since we're training from scratch
+optimizer:
+  name: adamw
+  lr: 3.0e-4
+  weight_decay: 0.05
+
+# Learning rate scheduler
+scheduler:
+  name: cosine
+  T_max: ${training.max_epochs}
+  eta_min: 1.0e-6
+
+# Evaluation configuration
+eval:
+  fairness:
+    enabled: false
+    protected_attributes: [gender, age_group, race]
+    min_subgroup_size: 50
+
+# Logging configuration
+logging:
+  use_wandb: true
+  wandb_project: ${project_name}
+  wandb_entity: null
+  run_name: ${experiment_class}_supervised_${dataset}_${task.task_name}_seed${seed}
+  wandb_group: supervised_${dataset}_${task.task_name}
+  wandb_tags:
+    - "phase:supervised"
+    - "dataset:${dataset}"
+    - "paradigm:supervised"
+    - "task:${task.task_name}"
+    - "seed:${seed}"
+    - "lr:${optimizer.lr}"
+  log_every_n_steps: 10
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/supervised/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/supervised/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Deterministic mode (slower but reproducible)
+deterministic: false

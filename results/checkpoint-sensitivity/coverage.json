@@ -1,0 +1,9 @@
+{
+  "completed_pairs": 30,
+  "completed_probes": 60,
+  "full_finetuning": "not evaluated",
+  "missing": [],
+  "other_datasets": "not evaluated",
+  "planned_pairs": 30,
+  "planned_probes": 60
+}

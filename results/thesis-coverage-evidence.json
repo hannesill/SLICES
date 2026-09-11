@@ -1,0 +1,1656 @@
+{
+  "source_files": {
+    "aggregated_results.parquet": "d7ff615a2a6eb12e73bca63bc4c48b6490742405eaa6ff85ca3d6874393ff4ad",
+    "per_seed_results.parquet": "9f9f060c194f82ff06200dcf737818e030eb12c3703fa5ef61ec9d6e15dbdc7a"
+  },
+  "evidence_policy": "Descriptive cell means and paired seed differences. No confirmatory inference.",
+  "evaluation_rows": 2310,
+  "evaluation_rows_by_class": {
+    "capacity_study": 90,
+    "classical_baselines": 330,
+    "core_ssl_benchmark": 420,
+    "cross_dataset_transfer": 120,
+    "hp_robustness": 75,
+    "label_efficiency": 1155,
+    "ts2vec_extension": 120
+  },
+  "launch_matrix": {
+    "total": 2455,
+    "pretraining_budget": 145,
+    "source": "experiment_protocol.md, final launch matrix; not a completion audit of all pretraining runs"
+  },
+  "core_filter": {
+    "experiment_class": "core_ssl_benchmark",
+    "model_size": "default",
+    "label_fraction": 1
+  },
+  "subgroup_classification": {
+    "gender": {
+      "metric": "fairness/gender/auprc_gap/mean",
+      "rows": 63,
+      "min": 0.003957974910736084,
+      "max": 0.09542983770370483,
+      "cells": [
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04173562526702881
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.045293128490448
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.030956751108169554
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.029698505997657776
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.00966489315032959
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.008450770378112793
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.05999345779418945
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04013009667396546
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.03103591799736023
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04685928225517273
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.01768859028816223
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.011910182237625123
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.02226974964141846
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.032750499248504636
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0850788712501526
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.09542983770370483
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.036552488803863525
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04804317951202393
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0402915358543396
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.02917766571044922
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.030679553747177124
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.025170090794563293
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.009643876552581787
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0051904797554016115
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.07044103741645813
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.03160733282566071
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.043584442138671874
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.031012800335884095
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.015248924493789673
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.01196737289428711
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.03091531991958618
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.032493424415588376
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.06376746892929078
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.08979920148849488
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.02708451747894287
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.03689512610435486
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.042373502254486085
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.035670459270477295
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04957098364830017
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.024298033118247984
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.003957974910736084
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0046402812004089355
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.07011865377426148
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.041147428750991824
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.038650798797607425
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04921068251132965
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.01120743751525879
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.014134424924850463
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.023710143566131592
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.038958299160003665
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0774808645248413
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.08076466917991638
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0365411639213562
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.03507851362228394
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04184346199035645
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04078201651573181
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.007364881038665771
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.05875109434127808
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04411012530326843
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.017935699224472045
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.022783553600311278
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.0832172989845276
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/gender/auprc_gap/mean": 0.04195929765701294
+        }
+      ]
+    },
+    "age_group": {
+      "metric": "fairness/age_group/auprc_gap/mean",
+      "rows": 63,
+      "min": 0.03338140249252319,
+      "max": 0.17240208387374878,
+      "cells": [
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.062121999263763425
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.062209731340408324
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.11475483179092408
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10491590201854706
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.049825257062911986
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07784724235534668
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07172936201095581
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.05825447142124176
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.15727406442165376
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.1464436322450638
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06254304647445678
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10882269740104675
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.0475482702255249
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08125378489494324
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.12183678150177002
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.17240208387374878
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08250899910926819
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10816737413406372
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.066963791847229
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08046283423900605
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08028642535209655
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.11289116442203521
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.050417089462280275
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08734971880912781
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.0659146785736084
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07789959609508515
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.14111924767494202
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.12404819428920746
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.05580742359161377
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08343817591667176
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.053371620178222653
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.0964485228061676
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.13333348035812378
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.1483944445848465
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.08164724707603455
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.11510310173034669
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06573210954666138
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.03578939437866211
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10072449445724488
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10515201985836028
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06109343767166138
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.04687955379486084
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.059651559591293334
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.04154506325721741
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.15711001455783843
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10969502627849578
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.054410350322723386
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.056188416481018064
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.03338140249252319
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07961509227752686
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.15036042928695678
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.15724480152130127
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07970278263092041
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10574142336845398
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06096752882003784
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.10575236082077026
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06278669238090515
+        },
+        {
+          "dataset": "eicu",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.07579820156097412
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.14687678813934327
+        },
+        {
+          "dataset": "eicu",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.06686468124389648
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.04437819719314575
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.14064961671829224
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/age_group/auprc_gap/mean": 0.0838575005531311
+        }
+      ]
+    },
+    "race": {
+      "metric": "fairness/race/auprc_gap/mean",
+      "rows": 42,
+      "min": 0.08011142015457154,
+      "max": 0.5128218293190002,
+      "cells": [
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.09948738813400268
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.11493010520935058
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.44580295085906985
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.40586656108498576
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.19904372096061707
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.2242063820362091
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10051084756851196
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10512344241142273
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.4629013895988464
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.4390141099691391
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.1335134744644165
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "contrastive",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.14224740862846375
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.09779640436172485
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.11079155206680298
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.39199229180812833
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.35380493476986885
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.17575440406799317
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.19630323350429535
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.09465012550354004
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10295085906982422
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.454573418200016
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.3030955642461777
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.1516543745994568
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "jepa",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.12004019021987915
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.08126482963562012
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10778633356094361
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.4138556897640228
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.5128218293190002
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.17409077286720276
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.2111193358898163
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.08722424507141113
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.08011142015457154
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.4334361761808395
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.35340431407094003
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.14594852924346924
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "linear_probe",
+          "paradigm": "mae",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.12971583604812623
+        },
+        {
+          "dataset": "combined",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10320781469345093
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.44533291459083557
+        },
+        {
+          "dataset": "combined",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.20102956891059875
+        },
+        {
+          "dataset": "miiv",
+          "task": "aki_kdigo",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.10171144008636475
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_24h",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.4384651526808739
+        },
+        {
+          "dataset": "miiv",
+          "task": "mortality_hospital",
+          "protocol": "full_finetune",
+          "paradigm": "supervised",
+          "model_size": "default",
+          "label_fraction": 1.0,
+          "fairness/race/auprc_gap/mean": 0.14588072299957275
+        }
+      ]
+    }
+  },
+  "capacity": {
+    "dataset": "miiv",
+    "task": "mortality_24h",
+    "protocol": "full_finetune",
+    "metric": "test/auprc",
+    "pairs": [
+      {
+        "model_size": "large",
+        "label_fraction": 0.05,
+        "n_pairs": 5,
+        "mae_mean": 0.30198832750320437,
+        "supervised_mean": 0.2843188762664795,
+        "paired_delta_mean": 0.017669451236724854,
+        "paired_delta_sample_sd": 0.027070880873102828
+      },
+      {
+        "model_size": "large",
+        "label_fraction": 0.1,
+        "n_pairs": 5,
+        "mae_mean": 0.3331911742687225,
+        "supervised_mean": 0.31807047724723814,
+        "paired_delta_mean": 0.015120697021484376,
+        "paired_delta_sample_sd": 0.02936783631392894
+      },
+      {
+        "model_size": "large",
+        "label_fraction": 0.5,
+        "n_pairs": 5,
+        "mae_mean": 0.4270500421524048,
+        "supervised_mean": 0.413619327545166,
+        "paired_delta_mean": 0.013430714607238759,
+        "paired_delta_sample_sd": 0.03440037255651974
+      },
+      {
+        "model_size": "medium",
+        "label_fraction": 0.05,
+        "n_pairs": 5,
+        "mae_mean": 0.3050898790359497,
+        "supervised_mean": 0.27667664289474486,
+        "paired_delta_mean": 0.028413236141204827,
+        "paired_delta_sample_sd": 0.03804145491899641
+      },
+      {
+        "model_size": "medium",
+        "label_fraction": 0.1,
+        "n_pairs": 5,
+        "mae_mean": 0.33437260389328005,
+        "supervised_mean": 0.318516743183136,
+        "paired_delta_mean": 0.015855860710144044,
+        "paired_delta_sample_sd": 0.03040795003309294
+      },
+      {
+        "model_size": "medium",
+        "label_fraction": 0.5,
+        "n_pairs": 5,
+        "mae_mean": 0.4334790587425232,
+        "supervised_mean": 0.41513109803199766,
+        "paired_delta_mean": 0.018347960710525513,
+        "paired_delta_sample_sd": 0.060654158497338274
+      }
+    ]
+  },
+  "contrastive_probe_los_r2": [
+    {
+      "dataset": "combined",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "paradigm": "contrastive",
+      "model_size": "default",
+      "label_fraction": 1.0,
+      "test/r2/mean": -0.010599303245544433
+    },
+    {
+      "dataset": "eicu",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "paradigm": "contrastive",
+      "model_size": "default",
+      "label_fraction": 1.0,
+      "test/r2/mean": -0.03376641273498535
+    },
+    {
+      "dataset": "miiv",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "paradigm": "contrastive",
+      "model_size": "default",
+      "label_fraction": 1.0,
+      "test/r2/mean": 0.014473116397857666
+    }
+  ]
+}

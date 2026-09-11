@@ -1,0 +1,18 @@
+\begin{tabular}{llrrrrl}
+\toprule
+Data & Endpoint & GRU-D & XGBoost & Supervised & Best SSL & SSL method \\
+\midrule
+Combined & 24h mortality & \textbf{0.422} & 0.374 & 0.389 & 0.409 & MAE \\
+Combined & Hospital mortality & 0.527 & 0.525 & 0.518 & \textbf{0.531} & MAE \\
+Combined & AKI & 0.630 & \textbf{0.668} & 0.652 & 0.626 & JEPA \\
+Combined & Remaining LOS & 2.174 & 2.340 & 2.190 & \textbf{2.118} & MAE \\
+eICU-CRD & 24h mortality & \textbf{0.397} & 0.315 & 0.351 & 0.377 & MAE \\
+eICU-CRD & Hospital mortality & 0.484 & 0.482 & 0.474 & \textbf{0.495} & MAE \\
+eICU-CRD & AKI & 0.510 & \textbf{0.569} & 0.554 & 0.519 & MAE \\
+eICU-CRD & Remaining LOS & 2.003 & 2.163 & 1.997 & \textbf{1.964} & MAE \\
+MIMIC-IV & 24h mortality & \textbf{0.480} & 0.402 & 0.449 & 0.456 & Contrastive \\
+MIMIC-IV & Hospital mortality & 0.577 & 0.577 & 0.565 & \textbf{0.579} & MAE \\
+MIMIC-IV & AKI & 0.661 & \textbf{0.729} & 0.693 & 0.667 & MAE \\
+MIMIC-IV & Remaining LOS & 2.394 & 2.613 & 2.397 & \textbf{2.359} & Contrastive \\
+\bottomrule
+\end{tabular}

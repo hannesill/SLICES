@@ -1,0 +1,2 @@
+# Preserve the exact bytes pinned by MANIFEST.json on every checkout.
+* -text

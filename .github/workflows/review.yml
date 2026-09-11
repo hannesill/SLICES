@@ -1,0 +1,34 @@
+name: Reviewer artifact
+
+on:
+  push:
+    branches: [codex/ml4h-submission]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WANDB_MODE: disabled
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Audit the exact supplied files and results
+        run: uv run --no-project python audit.py
+      - name: Install locked dependencies
+        run: uv sync --project framework --frozen --extra viz --python 3.12
+      - name: Exercise objectives and encoder transfer on synthetic inputs
+        run: uv run --project framework python smoke.py
+      - name: Exercise both adaptation protocols on synthetic inputs
+        run: uv run --project framework python extension.py --out extension-output
+      - name: Regenerate the numerical report
+        run: uv run --project framework python render.py --out "$RUNNER_TEMP/slices-generated"

@@ -1,0 +1,19 @@
+{
+  "artifact": "SLICES ML4H review artifact",
+  "version": 1,
+  "date": "2026-09-11",
+  "source_archive_sha256": "c0854207188c228046e617a32d819d327a4cf01fd5d23c8c35d869e7d1342e80",
+  "frozen_evidence": "slices-thesis-v1",
+  "analysis_revision": "thesis-v1",
+  "paper_source_sha256": "9c97a5c22e08fef14a0cab73bcb3aa3a2ad7a6400b4e41220607b18eeb5cde27",
+  "benchmark_contract_sha256": "aa4836c18609ee63bc305896a96645029750545214a53871ed37254446ffe8c3",
+  "scope": {
+    "launched_runs_excluding_smart": 2455,
+    "pretraining_runs": 145,
+    "evaluated_runs": 2310,
+    "core_evaluated_runs": 420,
+    "core_cells": 84
+  },
+  "source_policy": "Scientific results, diagnostics, framework, historical source, and manuscript are unchanged from the source archive. Root documentation and repository packaging were updated.",
+  "verification": "Run audit.py before changing any supplied file. Synthetic workflows are software checks; credentialed clinical retraining was not repeated."
+}

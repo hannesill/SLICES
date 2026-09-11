@@ -1,0 +1,288 @@
+{
+  "benchmark": "slices-thesis-v1",
+  "contract_version": 1,
+  "objective": "mae",
+  "objective_config": {},
+  "feature_names": [
+    "abx",
+    "adh_rate",
+    "alb",
+    "alp",
+    "alt",
+    "ast",
+    "avpu",
+    "basos",
+    "be",
+    "bicar",
+    "bili",
+    "bili_dir",
+    "bnd",
+    "bun",
+    "ca",
+    "cai",
+    "ck",
+    "ckmb",
+    "cl",
+    "cort",
+    "crea",
+    "crp",
+    "dbp",
+    "dex",
+    "dobu_rate",
+    "dopa_rate",
+    "egcs",
+    "eos",
+    "epi_rate",
+    "esr",
+    "etco2",
+    "ett_gcs",
+    "fgn",
+    "fio2",
+    "glu",
+    "hba1c",
+    "hbco",
+    "hct",
+    "hgb",
+    "hr",
+    "inr_pt",
+    "ins",
+    "k",
+    "lact",
+    "lymph",
+    "map",
+    "mch",
+    "mchc",
+    "mcv",
+    "mech_vent",
+    "methb",
+    "mg",
+    "mgcs",
+    "na",
+    "neut",
+    "norepi_rate",
+    "o2sat",
+    "pco2",
+    "ph",
+    "phn_rate",
+    "phos",
+    "plt",
+    "po2",
+    "pt",
+    "ptt",
+    "rass",
+    "rbc",
+    "rdw",
+    "resp",
+    "samp",
+    "sao2",
+    "sbp",
+    "spo2",
+    "supp_o2",
+    "tco2",
+    "temp",
+    "tgcs",
+    "tnt",
+    "tri",
+    "urine",
+    "vent_end",
+    "vent_start",
+    "vgcs",
+    "wbc"
+  ],
+  "input_shape": [
+    24,
+    84
+  ],
+  "cohort": {
+    "minimum_stay_hours": 24,
+    "require_observed_value": true,
+    "splits": [
+      0.7,
+      0.15,
+      0.15
+    ],
+    "unit": "patient",
+    "normalization": "train-only observed mean and sample std; zero-fill after normalization"
+  },
+  "datasets": [
+    "miiv",
+    "eicu",
+    "combined"
+  ],
+  "tasks": [
+    "mortality_24h",
+    "mortality_hospital",
+    "aki_kdigo",
+    "los_remaining"
+  ],
+  "seeds": [
+    42,
+    123,
+    456,
+    789,
+    1011
+  ],
+  "encoder": {
+    "name": "transformer",
+    "obs_aware": true,
+    "d_model": 64,
+    "n_layers": 2,
+    "n_heads": 4,
+    "d_ff": 256,
+    "dropout": 0.1,
+    "transferred_parameters": 159808
+  },
+  "pretraining_epochs": 100,
+  "checkpoint_policy": "final encoder.pt; downstream best validation primary metric",
+  "pretraining": {
+    "batch_size": 256,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "warmup_epochs": 10,
+    "scheduler": "cosine",
+    "eta_min": 1e-06,
+    "optimizer": "adamw",
+    "gradient_clip": 1.0,
+    "early_stopping": null
+  },
+  "adaptation": {
+    "linear_probe": {
+      "epochs": 50,
+      "lr": 0.0001,
+      "head": "linear",
+      "freeze": true,
+      "hidden_dims": [],
+      "dropout": 0.0
+    },
+    "full_finetune": {
+      "epochs": 100,
+      "lr": 0.0003,
+      "head": "mlp64",
+      "freeze": false,
+      "hidden_dims": [
+        64
+      ],
+      "dropout": 0.3,
+      "activation": "relu"
+    },
+    "batch_size": 64,
+    "weight_decay": 0.05,
+    "patience": 10,
+    "optimizer": "adamw",
+    "scheduler": "cosine",
+    "eta_min": 1e-06,
+    "gradient_clip": 1.0
+  },
+  "primary_metrics": {
+    "classification": "average_precision",
+    "regression": "mean_absolute_error_days"
+  },
+  "regression_training_loss": "mean_squared_error",
+  "classification_training_loss": "sqrt-balanced smoothed cross entropy",
+  "evidence_policy": "five matched seeds; descriptive means, sample SD and paired ranges",
+  "task_definitions": {
+    "mortality_24h": {
+      "type": "binary",
+      "input_hours": [
+        0,
+        24
+      ],
+      "prediction_hours": [
+        24,
+        48
+      ],
+      "null": "death within input window"
+    },
+    "mortality_hospital": {
+      "type": "binary",
+      "input_hours": [
+        0,
+        24
+      ],
+      "prediction": "hospital death after input",
+      "null": "death within input window"
+    },
+    "aki_kdigo": {
+      "type": "binary",
+      "input_hours": [
+        0,
+        24
+      ],
+      "prediction_hours": [
+        24,
+        48
+      ],
+      "baseline": "minimum creatinine in hours 0-24",
+      "ratio_threshold": 1.5,
+      "absolute_rise_mg_dl": 0.3,
+      "absolute_rise_max_interval_hours": 48,
+      "urine_output": false,
+      "null": "no baseline or forward creatinine"
+    },
+    "los_remaining": {
+      "type": "regression",
+      "target": "max(icu_duration_days - 1, 0)",
+      "units": "days"
+    }
+  },
+  "preprocessing": {
+    "ricu_version": "0.6.3",
+    "source_versions": {
+      "miiv": "2.2",
+      "eicu": "2.0"
+    },
+    "normalization_ddof": 1,
+    "min_std": 1e-06,
+    "missing_fill": "zero after normalization",
+    "feature_blocklist": [
+      "dobu60",
+      "dobu_dur",
+      "dopa60",
+      "dopa_dur",
+      "dur_var",
+      "epi60",
+      "epi_dur",
+      "gcs",
+      "los_hosp",
+      "los_icu",
+      "mews",
+      "news",
+      "norepi60",
+      "norepi_dur",
+      "norepi_equiv",
+      "pafi",
+      "qsofa",
+      "safi",
+      "sep3",
+      "sirs",
+      "sofa",
+      "sofa_cardio",
+      "sofa_cns",
+      "sofa_coag",
+      "sofa_liver",
+      "sofa_renal",
+      "sofa_resp",
+      "susp_inf",
+      "urine24",
+      "vaso_ind",
+      "vent_ind"
+    ],
+    "source_sha256": {
+      "src/slices/data/tensor_preprocessing.py": "6119a13e8d66283057fc736c3599e3e82ed69e4070f6daa669eda6d020d6b4ab",
+      "src/slices/data/splits.py": "8597fb04bba122595f316aaa1346821a439c5ccbc7cedf18ef2705c1ac39801e",
+      "scripts/preprocessing/extract_with_ricu.R": "09c3266cc943e86396f5b25f54e984470324f8929704cbb9763152b7af7bd2b3"
+    }
+  },
+  "losses": {
+    "classification": {
+      "type": "two_logit_cross_entropy",
+      "class_weight": "sqrt(n / (2*n_class))",
+      "label_smoothing": 0.1
+    },
+    "regression": {
+      "train": "mean_squared_error",
+      "selection": "mean_absolute_error",
+      "report": "mean_absolute_error_days"
+    }
+  }
+}

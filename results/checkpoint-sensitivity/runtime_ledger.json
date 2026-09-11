@@ -1,0 +1,232 @@
+{
+  "budget_seconds": 6300,
+  "charged_seconds": 1175.7516566258855,
+  "coverage_complete": true,
+  "finished_utc": "2026-09-05T16:27:15.624145+00:00",
+  "jobs": [
+    {
+      "paradigm": "mae",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 101.08193270815536,
+      "seed": 42,
+      "started_utc": "2026-09-05T16:07:39.840166+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "jepa",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 85.93135941703804,
+      "seed": 42,
+      "started_utc": "2026-09-05T16:09:20.924187+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "contrastive",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 73.62231262517162,
+      "seed": 42,
+      "started_utc": "2026-09-05T16:10:46.857391+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "mae",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 73.82101187482476,
+      "seed": 123,
+      "started_utc": "2026-09-05T16:12:00.481600+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "jepa",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 74.34139962494373,
+      "seed": 123,
+      "started_utc": "2026-09-05T16:13:14.304462+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "contrastive",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 71.98525620787404,
+      "seed": 123,
+      "started_utc": "2026-09-05T16:14:28.648134+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "mae",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 70.30440687504597,
+      "seed": 456,
+      "started_utc": "2026-09-05T16:15:40.635519+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "jepa",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 71.94964700005949,
+      "seed": 456,
+      "started_utc": "2026-09-05T16:16:50.942030+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "contrastive",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 71.97348370891996,
+      "seed": 456,
+      "started_utc": "2026-09-05T16:18:02.893924+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "mae",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 95.0945446670521,
+      "seed": 789,
+      "started_utc": "2026-09-05T16:19:14.869445+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "jepa",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 95.45249291695654,
+      "seed": 789,
+      "started_utc": "2026-09-05T16:20:49.966301+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "contrastive",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 74.07902104198001,
+      "seed": 789,
+      "started_utc": "2026-09-05T16:22:25.421463+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "mae",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 73.93313629203476,
+      "seed": 1011,
+      "started_utc": "2026-09-05T16:23:39.502966+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "jepa",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 81.08139870781451,
+      "seed": 1011,
+      "started_utc": "2026-09-05T16:24:53.438554+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    },
+    {
+      "paradigm": "contrastive",
+      "reserved_seconds": 600,
+      "returncode": 0,
+      "seconds": 61.10025295801461,
+      "seed": 1011,
+      "started_utc": "2026-09-05T16:26:14.522019+00:00",
+      "status": "complete",
+      "timeout_seconds": 600
+    }
+  ],
+  "preflight": {
+    "decision": "expand_fixed_schedule",
+    "decision_inputs": "completion and runtime only; no test metric selection",
+    "elapsed_seconds": 101.08193270815536,
+    "first_pair": {
+      "paradigm": "mae",
+      "seed": 42
+    },
+    "projected_15_jobs_seconds": 1516.2289906223305
+  },
+  "schedule": [
+    {
+      "paradigm": "mae",
+      "seed": 42
+    },
+    {
+      "paradigm": "jepa",
+      "seed": 42
+    },
+    {
+      "paradigm": "contrastive",
+      "seed": 42
+    },
+    {
+      "paradigm": "mae",
+      "seed": 123
+    },
+    {
+      "paradigm": "jepa",
+      "seed": 123
+    },
+    {
+      "paradigm": "contrastive",
+      "seed": 123
+    },
+    {
+      "paradigm": "mae",
+      "seed": 456
+    },
+    {
+      "paradigm": "jepa",
+      "seed": 456
+    },
+    {
+      "paradigm": "contrastive",
+      "seed": 456
+    },
+    {
+      "paradigm": "mae",
+      "seed": 789
+    },
+    {
+      "paradigm": "jepa",
+      "seed": 789
+    },
+    {
+      "paradigm": "contrastive",
+      "seed": 789
+    },
+    {
+      "paradigm": "mae",
+      "seed": 1011
+    },
+    {
+      "paradigm": "jepa",
+      "seed": 1011
+    },
+    {
+      "paradigm": "contrastive",
+      "seed": 1011
+    }
+  ],
+  "script_sha256": "4e136e5a62975552b467663dc75a07fbba8984b7e44b06e70aa206663d6488ae",
+  "started_utc": "2026-09-05T16:07:39.839677+00:00"
+}

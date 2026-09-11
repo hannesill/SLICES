@@ -1,0 +1,7 @@
+{
+  "n_runs": 15,
+  "n_runs_with_history": 15,
+  "std_min_over_all_runs": 0.366404265165329,
+  "std_last_mean": 1.169491712252299,
+  "mean_cos_max_over_all_runs": 0.8208761215209961
+}

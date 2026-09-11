@@ -1,0 +1,14 @@
+\begin{tabular}{llllrrr}
+\toprule
+Pretrain & Target & Task & Metric & MAE & JEPA & Contrastive \\
+\midrule
+eICU-CRD & MIMIC-IV & 24h mortality & AUPRC & 0.447 & 0.453 & \textbf{0.454} \\
+eICU-CRD & MIMIC-IV & Hospital mortality & AUPRC & \textbf{0.572} & 0.559 & 0.564 \\
+eICU-CRD & MIMIC-IV & AKI & AUPRC & \textbf{0.646} & 0.643 & 0.627 \\
+eICU-CRD & MIMIC-IV & Remaining LOS & Abs. error & \textbf{2.389} & 2.390 & 2.403 \\
+MIMIC-IV & eICU-CRD & 24h mortality & AUPRC & \textbf{0.372} & 0.367 & 0.354 \\
+MIMIC-IV & eICU-CRD & Hospital mortality & AUPRC & \textbf{0.485} & 0.477 & 0.476 \\
+MIMIC-IV & eICU-CRD & AKI & AUPRC & \textbf{0.5323} & 0.5205 & 0.5322 \\
+MIMIC-IV & eICU-CRD & Remaining LOS & Abs. error & \textbf{1.966} & 1.987 & 1.998 \\
+\bottomrule
+\end{tabular}

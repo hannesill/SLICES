@@ -1,0 +1,763 @@
+{
+  "source": "frozen slices-thesis-v1; existing scientific results only",
+  "evidence_policy": "descriptive; sample SD across five seeds; no significance claims",
+  "checks": [
+    "exact grid",
+    "matched seeds",
+    "reject differing test support when both counts exist; missing stays unknown",
+    "configuration join",
+    "successful best downstream checkpoint loading"
+  ],
+  "not_verified": [
+    "private split identity",
+    "test support for rows without exported counts",
+    "normalization identity",
+    "retraining equivalence"
+  ],
+  "cells": [
+    {
+      "dataset": "combined",
+      "task": "mortality_24h",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.1991587370634079,
+        "sd": 0.010863394295909426,
+        "minimum": 0.1875472366809845,
+        "maximum": 0.21591755747795105,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.20495033860206605,
+        "sd": 0.01622074362561529,
+        "minimum": 0.19488652050495148,
+        "maximum": 0.2337104380130768,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.005791601538658153,
+        "sd": 0.01896026026754053,
+        "minimum": -0.03365591168403628,
+        "maximum": 0.0180656760931015,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "combined",
+      "task": "mortality_24h",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.39771425127983095,
+        "sd": 0.034709122360152445,
+        "minimum": 0.37418776750564575,
+        "maximum": 0.4558603763580322,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.39889987707138064,
+        "sd": 0.029483578277941,
+        "minimum": 0.36809834837913513,
+        "maximum": 0.446108877658844,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.0011856257915496826,
+        "sd": 0.011712342350689556,
+        "minimum": -0.014722883701324407,
+        "maximum": 0.010993033647537176,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "combined",
+      "task": "mortality_hospital",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.3485007047653198,
+        "sd": 0.009830882267944605,
+        "minimum": 0.3352736830711365,
+        "maximum": 0.3588336110115051,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.3916236937046051,
+        "sd": 0.010447011177799712,
+        "minimum": 0.3776625990867615,
+        "maximum": 0.40184515714645386,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.04312298893928529,
+        "sd": 0.01002931648491893,
+        "minimum": -0.059765189886093195,
+        "maximum": -0.035041630268096924,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "combined",
+      "task": "mortality_hospital",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.5184260487556458,
+        "sd": 0.011238502408899226,
+        "minimum": 0.5053305625915527,
+        "maximum": 0.5338414907455444,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.5144444644451142,
+        "sd": 0.015938455234603303,
+        "minimum": 0.4985661208629608,
+        "maximum": 0.5351055264472961,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.003981584310531616,
+        "sd": 0.009513987489085315,
+        "minimum": -0.009689509868621826,
+        "maximum": 0.016599804162979126,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "combined",
+      "task": "aki_kdigo",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.3608125507831573,
+        "sd": 0.013989998333712141,
+        "minimum": 0.3429037928581238,
+        "maximum": 0.38193145394325256,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.3961306571960449,
+        "sd": 0.005384869988786614,
+        "minimum": 0.39050236344337463,
+        "maximum": 0.4038562774658203,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.03531810641288759,
+        "sd": 0.011760518595791414,
+        "minimum": -0.053996771574020386,
+        "maximum": -0.02192482352256775,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "combined",
+      "task": "aki_kdigo",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.6220084667205811,
+        "sd": 0.004634217702219001,
+        "minimum": 0.6159372329711914,
+        "maximum": 0.6280593872070312,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.6141712546348572,
+        "sd": 0.0037770510315439823,
+        "minimum": 0.6085612773895264,
+        "maximum": 0.6186622381210327,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.007837212085723877,
+        "sd": 0.006153145190918087,
+        "minimum": 0.0004991888999938965,
+        "maximum": 0.014553844928741455,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "combined",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 2.36385235786438,
+        "sd": 0.03507370222907907,
+        "minimum": 2.324831008911133,
+        "maximum": 2.417566299438477,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.3094066619873046,
+        "sd": 0.029006195018053894,
+        "minimum": 2.26094913482666,
+        "maximum": 2.333405017852783,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.05444569587707528,
+        "sd": 0.034522424158846786,
+        "minimum": 0.02609395980834961,
+        "maximum": 0.11065411567688033,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "combined",
+      "task": "los_remaining",
+      "protocol": "full_finetune",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 2.134607934951782,
+        "sd": 0.04162729169298968,
+        "minimum": 2.081216812133789,
+        "maximum": 2.190559148788452,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.15222430229187,
+        "sd": 0.024278760786051765,
+        "minimum": 2.1264636516571045,
+        "maximum": 2.190850734710694,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.01761636734008798,
+        "sd": 0.026847521513809217,
+        "minimum": -0.04524683952331543,
+        "maximum": 0.016274213790893555,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "eicu",
+      "task": "mortality_24h",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.17903744876384736,
+        "sd": 0.019106398825294177,
+        "minimum": 0.1574694812297821,
+        "maximum": 0.20141029357910156,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.19521813988685607,
+        "sd": 0.008947116688468138,
+        "minimum": 0.18172872066497803,
+        "maximum": 0.2050360143184662,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.016180691123008722,
+        "sd": 0.016824811227732626,
+        "minimum": -0.03916822373867035,
+        "maximum": 0.00619933009147644,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "eicu",
+      "task": "mortality_24h",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.34983744025230407,
+        "sd": 0.031536100177982335,
+        "minimum": 0.3036752939224243,
+        "maximum": 0.3782978951931,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.35997446775436404,
+        "sd": 0.01606671345486027,
+        "minimum": 0.33421534299850464,
+        "maximum": 0.3763582706451416,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.010137027502059937,
+        "sd": 0.03863956474532074,
+        "minimum": -0.06630045175552368,
+        "maximum": 0.03509241342544556,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "eicu",
+      "task": "mortality_hospital",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.318703818321228,
+        "sd": 0.008462885525057291,
+        "minimum": 0.31117939949035645,
+        "maximum": 0.3328979015350342,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.3501812040805817,
+        "sd": 0.01005420767877653,
+        "minimum": 0.3406788110733032,
+        "maximum": 0.36482709646224976,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.03147738575935364,
+        "sd": 0.013015981750437751,
+        "minimum": -0.04583066701889038,
+        "maximum": -0.014026522636413574,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "eicu",
+      "task": "mortality_hospital",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.4707682967185974,
+        "sd": 0.007187778318609423,
+        "minimum": 0.4617903530597687,
+        "maximum": 0.48154640197753906,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.47075785994529723,
+        "sd": 0.0032743447364101228,
+        "minimum": 0.4656419456005096,
+        "maximum": 0.4745755791664123,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 1.0436773300182001e-05,
+        "sd": 0.006813247352625012,
+        "minimum": -0.010404199361801147,
+        "maximum": 0.0069708228111267645,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "eicu",
+      "task": "aki_kdigo",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.26573585271835326,
+        "sd": 0.0033210515236216116,
+        "minimum": 0.2601897716522217,
+        "maximum": 0.2684404253959656,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.2860300004482269,
+        "sd": 0.0038835969601407087,
+        "minimum": 0.2816373407840729,
+        "maximum": 0.29099875688552856,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.020294147729873657,
+        "sd": 0.0037062071751103915,
+        "minimum": -0.023178696632385254,
+        "maximum": -0.014682263135910034,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "eicu",
+      "task": "aki_kdigo",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.5070085465908051,
+        "sd": 0.015466255464408362,
+        "minimum": 0.4942675828933716,
+        "maximum": 0.5261844992637634,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.49361432194709776,
+        "sd": 0.011636577178536637,
+        "minimum": 0.4734950661659241,
+        "maximum": 0.502860426902771,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.013394224643707287,
+        "sd": 0.01606998914467407,
+        "minimum": -0.004199892282485962,
+        "maximum": 0.026872694492340088,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "eicu",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 2.1608135223388674,
+        "sd": 0.020058325417568384,
+        "minimum": 2.132579803466797,
+        "maximum": 2.1794943809509277,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.1394729137420656,
+        "sd": 0.011355067922983051,
+        "minimum": 2.124345541000366,
+        "maximum": 2.1550846099853516,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.021340608596801758,
+        "sd": 0.02214509450737609,
+        "minimum": -0.0062808990478515625,
+        "maximum": 0.05514883995056152,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "eicu",
+      "task": "los_remaining",
+      "protocol": "full_finetune",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 1.9873389720916748,
+        "sd": 0.026514238785416703,
+        "minimum": 1.954831600189209,
+        "maximum": 2.0211973190307617,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.0080188751220702,
+        "sd": 0.031216431129186664,
+        "minimum": 1.96187686920166,
+        "maximum": 2.041959285736084,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.020679903030395554,
+        "sd": 0.019807045423432323,
+        "minimum": -0.04051661491394065,
+        "maximum": 0.006154894828796387,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "miiv",
+      "task": "mortality_24h",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.20649028420448304,
+        "sd": 0.06641892751469555,
+        "minimum": 0.13097929954528809,
+        "maximum": 0.3127119839191437,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.2539080739021301,
+        "sd": 0.03527306782272463,
+        "minimum": 0.2172531485557556,
+        "maximum": 0.2969084084033966,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.047417789697647095,
+        "sd": 0.044790713777003305,
+        "minimum": -0.09276118874549866,
+        "maximum": 0.01580357551574707,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "miiv",
+      "task": "mortality_24h",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.465065324306488,
+        "sd": 0.045986202057774234,
+        "minimum": 0.3973581492900848,
+        "maximum": 0.5078107118606567,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.455596262216568,
+        "sd": 0.042022463439857626,
+        "minimum": 0.4053005576133728,
+        "maximum": 0.5007858276367188,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.009469062089920021,
+        "sd": 0.011112863262769213,
+        "minimum": -0.00794240832328802,
+        "maximum": 0.021737247705459595,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "miiv",
+      "task": "mortality_hospital",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.3986557424068451,
+        "sd": 0.03158773084963775,
+        "minimum": 0.3686907887458801,
+        "maximum": 0.4348085522651672,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.45750725269317627,
+        "sd": 0.0225344771402317,
+        "minimum": 0.435880184173584,
+        "maximum": 0.4877672791481018,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.05885151028633119,
+        "sd": 0.015047144294622531,
+        "minimum": -0.08098185062408447,
+        "maximum": -0.03941839933395391,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "miiv",
+      "task": "mortality_hospital",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.5663731694221497,
+        "sd": 0.005988170481304519,
+        "minimum": 0.561145007610321,
+        "maximum": 0.5762715935707092,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.5678992390632629,
+        "sd": 0.011384617180949257,
+        "minimum": 0.5588549375534058,
+        "maximum": 0.5852645635604858,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.0015260696411132813,
+        "sd": 0.005719624704725825,
+        "minimum": -0.008992969989776611,
+        "maximum": 0.0032449960708618164,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "miiv",
+      "task": "aki_kdigo",
+      "protocol": "linear_probe",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.44147316217422483,
+        "sd": 0.015954773175656467,
+        "minimum": 0.4267699718475342,
+        "maximum": 0.4667488932609558,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.47768189907073977,
+        "sd": 0.008968087388377127,
+        "minimum": 0.4703019261360169,
+        "maximum": 0.4931449294090271,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": -0.0362087368965149,
+        "sd": 0.009844806011463623,
+        "minimum": -0.050260841846466064,
+        "maximum": -0.02639603614807129,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "miiv",
+      "task": "aki_kdigo",
+      "protocol": "full_finetune",
+      "metric": "test/auprc",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 0.6486141562461853,
+        "sd": 0.006973180622127137,
+        "minimum": 0.6378667950630188,
+        "maximum": 0.6564997434616089,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 0.6446220993995666,
+        "sd": 0.008681087732125529,
+        "minimum": 0.6322422623634338,
+        "maximum": 0.6558328866958618,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.003992056846618653,
+        "sd": 0.00730776653045713,
+        "minimum": -0.008528590202331543,
+        "maximum": 0.01031637191772461,
+        "n": 5
+      },
+      "winner": "ts2vec"
+    },
+    {
+      "dataset": "miiv",
+      "task": "los_remaining",
+      "protocol": "linear_probe",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 2.7221164226531984,
+        "sd": 0.06449800121580343,
+        "minimum": 2.642961263656616,
+        "maximum": 2.8019723892211914,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.5923992156982423,
+        "sd": 0.07563629081446187,
+        "minimum": 2.4999406337738037,
+        "maximum": 2.6862738132476807,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.12971720695495606,
+        "sd": 0.04830938131625918,
+        "minimum": 0.07268357276916504,
+        "maximum": 0.1859455108642578,
+        "n": 5
+      },
+      "winner": "contrastive"
+    },
+    {
+      "dataset": "miiv",
+      "task": "los_remaining",
+      "protocol": "full_finetune",
+      "metric": "test/mae",
+      "n_pairs": 5,
+      "test_support_pairs_verified": 0,
+      "test_support_pairs_unknown": 5,
+      "ts2vec": {
+        "mean": 2.3699957370758056,
+        "sd": 0.05482585385387147,
+        "minimum": 2.3021135330200195,
+        "maximum": 2.436886787414551,
+        "n": 5
+      },
+      "contrastive": {
+        "mean": 2.359023857116699,
+        "sd": 0.0694154966881107,
+        "minimum": 2.2816402912139893,
+        "maximum": 2.447875499725342,
+        "n": 5
+      },
+      "paired_difference": {
+        "mean": 0.010971879959106446,
+        "sd": 0.0165681463827462,
+        "minimum": -0.010988712310791016,
+        "maximum": 0.03274989128112793,
+        "n": 5
+      },
+      "winner": "contrastive"
+    }
+  ]
+}
