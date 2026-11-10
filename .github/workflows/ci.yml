@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, sprints]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -34,3 +34,6 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+      - name: Audit committed result packages
+        run: uv run python scripts/audit_results.py
