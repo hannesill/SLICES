@@ -6,7 +6,10 @@ SSL linear-probe rows from the thesis export. It writes a separate diagnostic
 artifact; it does not modify the frozen thesis result export.
 
 Usage:
-    uv run python scripts/diagnostics/export_random_probe_diagnostic.py
+    uv run python scripts/diagnostics/export_random_probe_diagnostic.py \
+        --out results/<new-diagnostic-dir>
+
+The committed package is results/slices-thesis-random-probe-diagnostic-v1.
 
 Outputs (under --out):
     random_probe_per_seed.parquet
@@ -47,8 +50,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--out",
-        default="results/slices-thesis-random-probe-diagnostic-v1",
-        help="Diagnostic artifact output directory.",
+        required=True,
+        help="Diagnostic artifact output directory. Use a new directory.",
     )
     p.add_argument("--revision", default="random-probe-cached-v1")
     p.add_argument("--thesis-revision", default="thesis-v1")
@@ -82,7 +85,7 @@ def tabular_shape(path: Path) -> tuple[int | None, int | None]:
 def write_checksum_manifest(out_dir: Path, files: list[Path], args: argparse.Namespace) -> None:
     manifest = {
         "package": out_dir.name,
-        "source_cached_probe_dir": args.input,
+        "source_cached_probe_dir": repo_relative(args.input),
         "source_thesis_per_seed": args.thesis_per_seed,
         "revision": args.revision,
         "thesis_revision": args.thesis_revision,
@@ -100,6 +103,19 @@ def write_checksum_manifest(out_dir: Path, files: list[Path], args: argparse.Nam
             entry["columns"] = columns
         manifest["files"][path.name] = entry
     (out_dir / "checksum_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def repo_relative(value: Any) -> Any:
+    """Strip local host prefixes so public packages hold repo-relative paths."""
+    if not isinstance(value, str) or not value.startswith("/"):
+        return value
+    marker = value.find("/outputs/")
+    if marker >= 0:
+        return value[marker + 1 :]
+    try:
+        return str(Path(value).resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return Path(value).name
 
 
 def load_random_probe_rows(root: Path) -> pd.DataFrame:
@@ -126,10 +142,10 @@ def load_random_probe_rows(root: Path) -> pd.DataFrame:
             "revision": payload.get("revision"),
             "metric_name": metric_name,
             "metric_value": float(metrics[metric_name]),
-            "output_dir": payload.get("output_dir"),
-            "embedding_cache": payload.get("embedding_cache"),
+            "output_dir": repo_relative(payload.get("output_dir")),
+            "embedding_cache": repo_relative(payload.get("embedding_cache")),
             "embedding_cache_hit": payload.get("embedding_cache_hit"),
-            "best_checkpoint": payload.get("best_checkpoint"),
+            "best_checkpoint": repo_relative(payload.get("best_checkpoint")),
             "best_monitor": payload.get("best_monitor"),
             "best_model_score": payload.get("best_model_score"),
             "train_patients": split_info.get("train_patients"),

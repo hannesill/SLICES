@@ -1,0 +1,34 @@
+{
+  "n_random_probe_rows": 40,
+  "n_ssl_comparison_rows": 120,
+  "n_task_summaries": 8,
+  "datasets": [
+    "eicu",
+    "miiv"
+  ],
+  "tasks": [
+    "aki_kdigo",
+    "los_remaining",
+    "mortality_24h",
+    "mortality_hospital"
+  ],
+  "seeds": [
+    42,
+    123,
+    456,
+    789,
+    1011
+  ],
+  "ssl_paradigms": [
+    "mae",
+    "jepa",
+    "contrastive"
+  ],
+  "random_worse_pairwise_count": 118,
+  "pairwise_count": 120,
+  "mean_bad_delta_by_metric": {
+    "test/auprc": 0.08176065584023794,
+    "test/mae": 0.2960421323776245
+  },
+  "interpretation": "Positive bad_delta means the random Transformer probe is worse: lower AUPRC for classification tasks or higher MAE for LOS. This is a diagnostic sanity check, not part of the frozen thesis benchmark evidence."
+}

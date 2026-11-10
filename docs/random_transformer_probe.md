@@ -60,8 +60,9 @@ Outputs:
 - Completion markers for `--skip-existing`: `diagnostic_complete.json`
 
 To compare against frozen SSL linear probes, export the diagnostic runs to a
-separate artifact such as `results/random-probe-diagnostic-v1/`. Do not merge
-with `results/slices-thesis-v1/`. Join diagnostic rows to frozen rows from
+separate artifact with `scripts/diagnostics/export_random_probe_diagnostic.py`.
+The committed export is `results/slices-thesis-random-probe-diagnostic-v1/`
+(MIMIC-IV and eICU only). Do not merge it with `results/slices-thesis-v1/`. Join diagnostic rows to frozen rows from
 `results/slices-thesis-v1/per_seed_results.parquet` on:
 
 - `dataset`
