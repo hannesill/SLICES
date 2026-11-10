@@ -1,0 +1,28 @@
+{
+  "package": "slices-thesis-random-probe-diagnostic-v1",
+  "source_cached_probe_dir": "outputs/diagnostics/random_transformer_probe_cached",
+  "source_thesis_per_seed": "results/slices-thesis-v1/per_seed_results.parquet",
+  "revision": "random-probe-cached-v1",
+  "thesis_revision": "thesis-v1",
+  "generation_note": "Local cached random-Transformer linear-probe diagnostic. Separate from the frozen thesis export; no model weights are included.",
+  "files": {
+    "random_probe_overall.json": {
+      "sha256": "4ace7f26c383ece8d743e66c6f02247e256e0cd877e89948cc814f20acc812d6"
+    },
+    "random_probe_per_seed.parquet": {
+      "sha256": "653788f1723efec6dd9994ead5e4f115d917e83ab772c9313924e0da5b12d725",
+      "rows": 40,
+      "columns": 43
+    },
+    "random_probe_ssl_comparison_per_seed.parquet": {
+      "sha256": "f7fb2e44dff9deeb43f173c2c7a3a6a81f43b2154f5391b649f46f7378b2eaad",
+      "rows": 120,
+      "columns": 16
+    },
+    "random_probe_task_summary.parquet": {
+      "sha256": "687e3fa1250107ab7603fdf15fe87a8accd1507df8d36a80144c165c8dfa30c8",
+      "rows": 8,
+      "columns": 15
+    }
+  }
+}
