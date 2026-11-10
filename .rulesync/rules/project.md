@@ -84,7 +84,7 @@ Work split:
 - Mac/local: RICU extraction + Python preprocessing; `data/processed/` parquet is deliverable
 - GCP VM `slices-perm`: training experiments
 - W&B: source of truth for experiment status/results
-- Frozen thesis result corpus: `results/slices-final_thesis-v1/`; W&B project `slices-final`. Do not overwrite or mutate frozen result artifacts unless explicitly asked.
+- Frozen thesis result corpus: `results/slices-thesis-v1/` (diagnostic packages beside it under `results/slices-thesis-*-v1/`); W&B project `slices-final`, revision `thesis-v1`; launch code tag `thesis-v1-launch`. Do not overwrite or mutate frozen result artifacts unless explicitly asked. Verify with `uv run python scripts/audit_results.py`.
 
 Local `outputs/` doesn't prove which experiments ran on VM. For run status, check W&B or ask user.
 

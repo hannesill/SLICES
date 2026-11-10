@@ -201,8 +201,6 @@ cython_debug/
 .cursorindexingignore
 .cursorrules
 .claude/
-.cursor/
-.rulesync/
 
 # Marimo
 marimo/_static/
@@ -224,6 +222,8 @@ outputs/
 !/results/slices-thesis-encoder-audit-v1/**
 !/results/slices-thesis-jepa-collapse-diagnostic-v1/
 !/results/slices-thesis-jepa-collapse-diagnostic-v1/**
+!/results/slices-thesis-random-probe-diagnostic-v1/
+!/results/slices-thesis-random-probe-diagnostic-v1/**
 wandb/
 .tensor_cache/
 logs/
