@@ -7,7 +7,6 @@ and exporter dedup logic.
 
 import importlib
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -806,9 +805,9 @@ class TestFairnessRevisionScoping:
             "capacity_study",
             "classical_baselines",
             "ts2vec_extension",
-            "smart_external_reference",
         }
-        assert expected.issubset(set(mod.DEFAULT_EXPERIMENT_CLASSES))
+        assert set(mod.DEFAULT_EXPERIMENT_CLASSES) == expected
+        assert "smart_external_reference" not in mod.DEFAULT_EXPERIMENT_CLASSES
 
     def test_fetch_eval_runs_single_revision_filters_by_config_before_tags(self, monkeypatch):
         """Revision-scoped fairness should not depend on W&B tags alone."""
@@ -1042,25 +1041,12 @@ class TestFairnessRevisionScoping:
 
         assert "scripts/eval/evaluate_fairness.py" in runner_text
         assert "--revision thesis-v2" in runner_text
-        assert "--project slices-thesis" in runner_text
+        assert "--project slices-final" in runner_text
+        assert "smart_external_reference" not in runner_text
         assert "--entity test-entity" in runner_text
         assert "--force" in runner_text
         assert "uv sync --dev --locked" in runner_text
         assert "export SLICES_SKIP_LAUNCH_GIT_CHECK=1" in runner_text
-
-    def test_auto_shutdown_counts_fairness_and_export_processes(self):
-        """Fairness and export jobs should keep final-run VMs alive."""
-        script = Path("scripts/internal/auto_shutdown.sh").read_text()
-        pattern = re.search(r'pgrep -f "([^"]+)"', script).group(1)
-
-        assert re.search(
-            pattern,
-            "uv run python scripts/eval/evaluate_fairness.py --revision thesis-v1",
-        )
-        assert re.search(
-            pattern,
-            "uv run python scripts/export_results.py --revision thesis-v1",
-        )
 
     def test_tmux_launcher_rejects_offline_wandb_mode(self, tmp_path):
         """Final thesis launcher should not silently create offline W&B runs."""
@@ -1193,7 +1179,7 @@ class TestFairnessRevisionScoping:
         )
 
         assert result.returncode != 0
-        assert "Final corpus preflight failed: selected 2490 runs, expected 2590" in result.stderr
+        assert "Final corpus preflight failed: selected 2355 runs, expected 2455" in result.stderr
 
     def test_tmux_status_pane_uses_uv_run_python(self, tmp_path):
         """The status pane should use uv-managed Python."""

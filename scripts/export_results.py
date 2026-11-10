@@ -2,17 +2,23 @@
 """Canonical class-based results export pipeline for SLICES.
 
 Pulls final rerun-corpus W&B runs, extracts config plus test metrics, and writes
-publication-oriented parquet files:
+publication-oriented parquet files into ``--output-dir`` (default:
+``results/export-<project>-<revision>``):
 
-  - results/slices-thesis-v1/per_seed_results.parquet
-  - results/slices-thesis-v1/aggregated_results.parquet
-  - results/slices-thesis-v1/run_configs.parquet
-  - results/slices-thesis-v1/metrics_long.parquet
-  - results/slices-thesis-v1/statistical_tests.parquet
-  - results/slices-thesis-v1/label_efficiency_curves.parquet
-  - results/slices-thesis-v1/capacity_study_comparison.parquet
-  - results/slices-thesis-v1/classical_context.parquet
-  - results/slices-thesis-v1/ts2vec_vs_core_contrastive.parquet
+  - per_seed_results.parquet
+  - aggregated_results.parquet
+  - run_configs.parquet
+  - metrics_long.parquet
+  - statistical_tests.parquet
+  - label_efficiency_curves.parquet
+  - capacity_study_comparison.parquet
+  - classical_context.parquet
+  - ts2vec_vs_core_contrastive.parquet
+  - evidence_manifest.json
+
+The frozen thesis package ``results/slices-thesis-v1`` was produced by this
+script. The export refuses to write into any directory that already holds an
+``evidence_manifest.json`` unless ``--overwrite`` is passed.
 
 Aggregated metric columns include mean, standard deviation, min/max, and 95%
 confidence intervals across finite seed values.
@@ -2167,8 +2173,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state", default="finished", help="Run state filter (default: finished)")
     parser.add_argument(
         "--output-dir",
-        default="results/slices-thesis-v1",
-        help="Output directory",
+        default=None,
+        help="Output directory (default: results/export-<project>-<revision>)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Allow writing into a directory that already holds an evidence_manifest.json. "
+            "Never needed for new exports; the frozen thesis package must not be overwritten."
+        ),
     )
     parser.add_argument(
         "--expected-seeds",
@@ -2224,6 +2238,14 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "Multiple --revision values are disabled for publication exports. "
             "Run one revision at a time, or pass --allow-multiple-revisions for exploratory export."
+        )
+
+    if args.output_dir is None:
+        args.output_dir = f"results/export-{args.project}-{'+'.join(args.revision)}"
+    if (Path(args.output_dir) / "evidence_manifest.json").exists() and not args.overwrite:
+        parser.error(
+            f"{args.output_dir} already holds an evidence_manifest.json. Choose a new "
+            "--output-dir, or pass --overwrite to replace that package deliberately."
         )
 
     return args

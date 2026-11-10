@@ -107,7 +107,7 @@ def test_parse_args_exposes_allow_incomplete_escape_hatch(monkeypatch):
     args = mod.parse_args()
 
     assert args.allow_incomplete is True
-    assert args.project == "slices-thesis"
+    assert args.project == "slices-final"
 
 
 def test_main_exits_nonzero_when_no_runs_match(monkeypatch):

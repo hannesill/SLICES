@@ -9,17 +9,17 @@ Usage:
         --experiment-class core_ssl_benchmark label_efficiency
     uv run python scripts/internal/run_experiments.py run \
         --experiment-class core_ssl_benchmark label_efficiency \
-        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --project slices-final --revision thesis-v1 --entity <entity> \
         --launch-commit <commit>
     uv run python scripts/internal/run_experiments.py run \
         --experiment-class core_ssl_benchmark --dry-run \
-        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --project slices-final --revision thesis-v1 --entity <entity> \
         --launch-commit <commit>
     uv run python scripts/internal/run_experiments.py status \
         --experiment-class core_ssl_benchmark --revision thesis-v1
     uv run python scripts/internal/run_experiments.py retry --failed --skipped \
         --experiment-class core_ssl_benchmark --revision thesis-v1 \
-        --project slices-thesis --entity <entity> --launch-commit <commit>
+        --project slices-final --entity <entity> --launch-commit <commit>
 """
 from __future__ import annotations
 
@@ -57,8 +57,6 @@ EXPERIMENT_CLASSES = [
     "ts2vec_extension",
     "smart_external_reference",
 ]
-
-DEFAULT_EXPERIMENT_CLASSES = list(EXPERIMENT_CLASSES)
 
 DOWNSTREAM_EXPERIMENT_CLASSES = [
     "core_ssl_benchmark",
@@ -2141,7 +2139,10 @@ def main() -> None:
         "--parallel",
         type=int,
         default=4,
-        help="Max scheduler slots (default: 4). Pretrains consume 4 slots, other runs 1.",
+        help=(
+            "Max scheduler slots (default: 4). Pretrain, finetune and supervised runs "
+            "consume 4 slots, GRU-D 2, XGBoost 1."
+        ),
     )
     p_run.add_argument("--dry-run", action="store_true", help="Print runs without executing")
     p_run.add_argument("--revision", type=str, default=None, help="Revision name")
@@ -2180,7 +2181,10 @@ def main() -> None:
         "--parallel",
         type=int,
         default=4,
-        help="Max scheduler slots (default: 4). Pretrains consume 4 slots, other runs 1.",
+        help=(
+            "Max scheduler slots (default: 4). Pretrain, finetune and supervised runs "
+            "consume 4 slots, GRU-D 2, XGBoost 1."
+        ),
     )
     p_retry.add_argument("--experiment-class", nargs="+", choices=EXPERIMENT_CLASSES, default=None)
     p_retry.add_argument("--revision", type=str, default=None, help="Revision name to retry")

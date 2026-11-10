@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Launch the full SLICES thesis matrix in tmux: warmup, training, fairness, export.
+#
+# Defaults cover the public corpus: seven experiment classes, 2455 runs. The
+# thesis-v1 launch (W&B project slices-final) also ran the SMART external
+# reference; set INCLUDE_SMART_REFERENCE=1 to add those 135 runs (2590 total).
+# Use a new REVISION for any rerun so it cannot mix with thesis-v1.
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SESSION_NAME="${SESSION_NAME:-slices-thesis}"
-WANDB_PROJECT="${WANDB_PROJECT:-slices-thesis}"
+WANDB_PROJECT="${WANDB_PROJECT:-slices-final}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 REVISION="${REVISION:-thesis-v1}"
 REASON="${REASON:-thesis-final class-based rerun corpus}"
@@ -17,14 +24,19 @@ PARALLEL_MAIN="${PARALLEL_MAIN:-16}"
 PARALLEL_APPENDIX="${PARALLEL_APPENDIX:-16}"
 BATCH_SIZE_FAIRNESS="${BATCH_SIZE_FAIRNESS:-64}"
 DEVICE_FAIRNESS="${DEVICE_FAIRNESS:-auto}"
-INCLUDE_SMART_REFERENCE="${INCLUDE_SMART_REFERENCE:-1}"
+INCLUDE_SMART_REFERENCE="${INCLUDE_SMART_REFERENCE:-0}"
 INCLUDE_TS2VEC_EXTENSION="${INCLUDE_TS2VEC_EXTENSION:-1}"
 INCLUDE_CAPACITY_STUDY="${INCLUDE_CAPACITY_STUDY:-1}"
 VALIDATE_FINAL_CORPUS="${VALIDATE_FINAL_CORPUS:-1}"
-EXPECTED_TOTAL_RUNS="${EXPECTED_TOTAL_RUNS:-2590}"
+if [[ "$INCLUDE_SMART_REFERENCE" == "1" ]]; then
+  EXPECTED_TOTAL_RUNS="${EXPECTED_TOTAL_RUNS:-2590}"
+else
+  EXPECTED_TOTAL_RUNS="${EXPECTED_TOTAL_RUNS:-2455}"
+fi
 RUN_EXPORT="${RUN_EXPORT:-1}"
 STATUS_INTERVAL="${STATUS_INTERVAL:-60}"
-RESULTS_DIR="${RESULTS_DIR:-results/${WANDB_PROJECT}_${REVISION}}"
+# Never default to the frozen package directory results/slices-thesis-v1.
+RESULTS_DIR="${RESULTS_DIR:-results/export-${WANDB_PROJECT}-${REVISION}}"
 LOG_DIR="${LOG_DIR:-logs/runner}"
 
 if ! command -v tmux >/dev/null 2>&1; then
@@ -210,7 +222,7 @@ validate_final_corpus() {
     return 0
   fi
 
-  local selected=("${main_classes[@]}" "${appendix_classes[@]}")
+  local selected=("${main_classes[@]}" ${appendix_classes[@]+"${appendix_classes[@]}"})
   local seen=" "
   local total=0
   local class count

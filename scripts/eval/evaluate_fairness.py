@@ -13,29 +13,29 @@ supervised, and classical baseline runs. Supports resumability via
 Usage:
     # Evaluate the benchmark fairness corpus for one explicit revision
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity>
+        --project slices-final --revision thesis-v1 --entity <entity>
 
     # Scope to specific experiment class/dataset
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --project slices-final --revision thesis-v1 --entity <entity> \
         --experiment-class core_ssl_benchmark --dataset miiv
 
     # Preview which runs would be evaluated
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> --dry-run
+        --project slices-final --revision thesis-v1 --entity <entity> --dry-run
 
     # Override paths (e.g., different machine than training)
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> \
+        --project slices-final --revision thesis-v1 --entity <entity> \
         --outputs-root /mnt/data/outputs --data-root /mnt/data
 
     # Recompute fairness for runs that already have metrics
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> --force
+        --project slices-final --revision thesis-v1 --entity <entity> --force
 
     # Debug with a single run
     uv run python scripts/eval/evaluate_fairness.py \
-        --project slices-thesis --revision thesis-v1 --entity <entity> --max-runs 1
+        --project slices-final --revision thesis-v1 --entity <entity> --max-runs 1
 """
 from __future__ import annotations
 
@@ -96,7 +96,6 @@ DEFAULT_EXPERIMENT_CLASSES = [
     "capacity_study",
     "classical_baselines",
     "ts2vec_extension",
-    "smart_external_reference",
 ]
 DEFAULT_PHASES = ["finetune", "supervised", "baseline"]
 DEFAULT_PROTECTED_ATTRIBUTES = FAIRNESS_DEFAULT_PROTECTED_ATTRIBUTES
@@ -988,8 +987,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--project",
-        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
-        help="W&B project name (default: $WANDB_PROJECT or 'slices-thesis')",
+        default=os.environ.get("WANDB_PROJECT", "slices-final"),
+        help="W&B project name (default: $WANDB_PROJECT or 'slices-final')",
     )
     parser.add_argument(
         "--entity",
