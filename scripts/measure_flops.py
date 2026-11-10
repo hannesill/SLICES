@@ -183,7 +183,7 @@ def main():
     parser.add_argument(
         "--wandb-project",
         type=str,
-        default=os.environ.get("WANDB_PROJECT", "slices-thesis"),
+        default=os.environ.get("WANDB_PROJECT", "slices-final"),
         help="W&B project",
     )
     parser.add_argument(

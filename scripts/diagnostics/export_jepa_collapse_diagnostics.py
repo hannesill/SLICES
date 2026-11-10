@@ -13,8 +13,11 @@ touch the frozen thesis export.
 
 Usage:
     uv run python scripts/diagnostics/export_jepa_collapse_diagnostics.py \
-        --entity hannes-ill --project slices-final --revision thesis-v1 \
-        --out results/slices-thesis-jepa-collapse-diagnostic-v1
+        --entity <entity> --project slices-final --revision thesis-v1 \
+        --out results/<new-diagnostic-dir>
+
+The committed package results/slices-thesis-jepa-collapse-diagnostic-v1 was
+exported from entity hannes-ill (a private W&B project).
 
 Outputs (under --out):
     jepa_collapse_history.parquet   per-run, per-logged-step std + mean_cos
@@ -27,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -43,7 +47,11 @@ PACKAGE_NOTE = (
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--entity", default="hannes-ill")
+    p.add_argument(
+        "--entity",
+        default=os.environ.get("WANDB_ENTITY"),
+        help="W&B entity (default: $WANDB_ENTITY).",
+    )
     p.add_argument("--project", default="slices-final")
     p.add_argument("--revision", default="thesis-v1")
     p.add_argument(
@@ -51,10 +59,17 @@ def parse_args() -> argparse.Namespace:
         default="core_ssl_benchmark",
         help="config.experiment_class filter for the core pretraining runs.",
     )
-    p.add_argument("--out", default="results/slices-thesis-jepa-collapse-diagnostic-v1")
+    p.add_argument(
+        "--out",
+        required=True,
+        help="Output directory. Use a new directory; do not overwrite a committed package.",
+    )
     p.add_argument("--history-samples", type=int, default=1000)
     p.add_argument("--timeout", type=int, default=60)
-    return p.parse_args()
+    args = p.parse_args()
+    if not args.entity:
+        p.error("--entity is required (or set WANDB_ENTITY).")
+    return args
 
 
 def sha256_file(path: Path) -> str:

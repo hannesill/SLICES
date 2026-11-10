@@ -277,6 +277,30 @@ def test_fetch_all_runs_default_scope_excludes_smart(monkeypatch):
     assert "smart_external_reference" not in mod.EXPERIMENT_CLASSES
 
 
+def test_parse_args_defaults_output_dir_outside_frozen_package(monkeypatch):
+    mod = importlib.import_module("scripts.export_results")
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
+    monkeypatch.setattr(sys, "argv", ["export_results.py", "--revision", "rerun-v1"])
+
+    args = mod.parse_args()
+
+    assert args.output_dir == "results/export-slices-final-rerun-v1"
+
+
+def test_parse_args_refuses_existing_evidence_package(monkeypatch, tmp_path):
+    mod = importlib.import_module("scripts.export_results")
+    (tmp_path / "evidence_manifest.json").write_text("{}")
+    argv = ["export_results.py", "--revision", "thesis-v1", "--output-dir", str(tmp_path)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.parse_args()
+    assert excinfo.value.code == 2
+
+    monkeypatch.setattr(sys, "argv", [*argv, "--overwrite"])
+    assert mod.parse_args().overwrite is True
+
+
 def test_build_per_seed_df_keeps_hp_robustness_rows_out_of_derived_views():
     mod = importlib.import_module("scripts.export_results")
 
