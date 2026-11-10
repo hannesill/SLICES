@@ -10,8 +10,11 @@ research artifact. Keep future scientific extensions out of this file.
   - Keep raw ICU data private. Include prediction-level metric inputs only if privacy/legal review allows it; otherwise document the limitation.
 
 - [ ] Add release metadata.
-  - Add `CITATION.cff`, changelog entries, and a public tag or documented public-equivalent commit for `ffd6dc52c2ed224da5290cfb5d1a6634b5ba6ab6`.
-  - Replace mutable thesis, README, and reproducibility links with the immutable release URL or DOI once published.
+  - [x] Add `CITATION.cff`.
+  - [x] Document the public equivalent of launch commit `ffd6dc52c2ed224da5290cfb5d1a6634b5ba6ab6` (tag `thesis-v1-launch` on `d1b86f6`; README and REPRODUCIBILITY).
+  - [ ] Push tag `thesis-v1-launch`; add a changelog entry.
+  - [ ] Replace mutable thesis, README, and reproducibility links with the immutable release URL or DOI once published.
+  - [ ] Fill in the PMLR volume in `CITATION.cff` and the README BibTeX.
 
 - [ ] Publish a cleaned evidence ledger after thesis finalization.
   - Add `CLAIMS.md` or `EVIDENCE.md` only after claims are final.
@@ -19,33 +22,35 @@ research artifact. Keep future scientific extensions out of this file.
 
 ## P0 - Scope Hygiene
 
-- [ ] Remove SMART from public defaults.
+- [x] Remove SMART from public defaults.
   - Default launcher/export/fairness scope excludes `smart_external_reference`.
   - Default corpus count is `2455`, not `2590`.
   - README/docs state SMART is optional external reference code, not part of the controlled thesis corpus.
 
 - [ ] Reconcile launch, export, and evidence counts.
-  - Document launched runs vs evaluated rows vs aggregate rows.
-  - Validate expected seeds, revisions, launch commit, and package row counts.
+  - [x] Document launched runs vs evaluated rows (REPRODUCIBILITY: 2455 = 145 pretraining + 2310 downstream).
+  - [ ] Validate expected seeds, revisions, launch commit, and package row counts in `scripts/audit_results.py`.
 
 ## P0 - Reproducibility Surface
 
-- [ ] Add `uv run slices reproduce audit`.
-  - Validate path-leak scan, manifest hashes, diagnostic checksums, table/figure render into `/tmp`, and source checks without W&B, raw ICU data, or encoder weights.
+- [x] Add a public results audit: `uv run python scripts/audit_results.py`.
+  - Validates manifest hashes, row/column counts, unlisted files, and path leaks in text and parquet strings without W&B, raw ICU data, or encoder weights.
+  - [ ] Table/figure rendering still lives in the private thesis repository.
 
 - [ ] Add public CPU smoke path.
   - Provide a tiny synthetic RICU-shaped fixture and one command that runs preprocessing, one-epoch MAE pretraining, one-epoch finetuning, export, and validation.
   - Mark synthetic metrics as functional checks only.
 
-- [ ] Add `uv run slices reproduce final`.
-  - Make this the documented credentialed path for full ICU extraction, W&B/local registry export, and thesis-scale reruns.
+- [x] Document the credentialed full rerun path (REPRODUCIBILITY section 3).
+  - [ ] Add a rerun-vs-frozen comparison tool with documented tolerances.
+  - [ ] Export the 145 pretraining run configs and link each downstream row to its pretraining run ID and encoder SHA256.
 
 - [ ] Add `repro.lock`.
   - Record public commit, launch commit/public-equivalent mapping, `uv.lock` hash, Python/R/RICU versions, result hashes, row counts, schema versions, and expected seeds.
 
 ## P0 - Automated Guards
 
-- [ ] Validate public result manifests in CI when large files are present.
+- [x] Validate public result manifests in CI.
 
 - [ ] Add schema-versioned result contracts.
   - Fail when public parquet schemas, row counts, or required provenance fields drift without migration notes.

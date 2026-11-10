@@ -13,12 +13,13 @@ metric export in `results/slices-thesis-v1/`.
 - `jepa_collapse_overall.json` - compact corpus-level summary.
 - `checksum_manifest.json` - row counts where applicable and SHA256 checksums for diagnostic artifacts.
 
-Regenerate with:
+Regenerate with (needs read access to the private W&B project; write to a new
+directory):
 
 ```bash
 uv run python scripts/diagnostics/export_jepa_collapse_diagnostics.py \
   --entity hannes-ill \
   --project slices-final \
   --revision thesis-v1 \
-  --out results/slices-thesis-jepa-collapse-diagnostic-v1
+  --out results/<new-diagnostic-dir>
 ```

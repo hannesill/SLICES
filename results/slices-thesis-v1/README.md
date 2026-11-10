@@ -21,3 +21,15 @@ and statistical comparisons.
 - `evidence_manifest.json` - row counts, column counts, SHA256 checksums, source W&B project, revision, and generation note.
 
 Do not mix exploratory diagnostics into this package.
+
+## Notes
+
+- Every run records launch commit `ffd6dc52c2ed224da5290cfb5d1a6634b5ba6ab6`;
+  its public equivalent is tag `thesis-v1-launch`. W&B run URLs point to a
+  private project.
+- `statistical_tests.parquet` has two scopes. `per_task` rows compare five
+  matched seeds (exact paired-test floor `p=0.0625`). `omnibus_primary_metric`
+  rows pool tasks that share cohorts, splits, and encoders; treat them as
+  descriptive, not as independent inferential evidence.
+- Known deviations (one stitched run, 84 late classical-baseline runs) are
+  listed in `REPRODUCIBILITY.md`.

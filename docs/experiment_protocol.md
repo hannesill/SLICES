@@ -48,7 +48,8 @@ invariants belong in `src/slices/constants.py`; experiment knobs remain in Hydra
 configs.
 
 - 24 hour observation window and minimum stay
-- patient-level splits, 70/15/15
+- patient-level splits, 70/15/15, drawn per seed: each training seed has its
+  own patient split and train-split normalization statistics
 - normalization statistics from the train split only
 - normalize then zero-fill
 - preserve the observation mask separately from values
@@ -96,13 +97,13 @@ defensible.
 
 | Experiment class | Scope | Launched runs |
 |---|---:|---:|
-| `core_ssl_benchmark` | MAE, JEPA, contrastive, supervised Transformer; 3 datasets; 4 tasks; 5 seeds; Protocol A/B for SSL | 465 |
-| `label_efficiency` | SSL Protocol A/B plus supervised Transformer at low-label fractions; 5 seeds | 1155 |
-| `cross_dataset_transfer` | MIMIC-IV to eICU and eICU to MIMIC-IV; SSL Protocol B; 5 seeds | 120 |
+| `core_ssl_benchmark` | MAE, JEPA, contrastive, supervised Transformer; 3 datasets; 4 tasks; 5 seeds; linear probe and full finetune for SSL | 465 |
+| `label_efficiency` | SSL linear probe and full finetune plus supervised Transformer at low-label fractions; 5 seeds | 1155 |
+| `cross_dataset_transfer` | MIMIC-IV to eICU and eICU to MIMIC-IV; SSL full finetune; 5 seeds | 120 |
 | `hp_robustness` | LR robustness plus MAE/JEPA mask-ratio and contrastive view/mask sensitivity on MIMIC-IV `mortality_24h`; 5 seeds | 150 |
 | `capacity_study` | Larger MAE and supervised Transformer encoders on MIIV `mortality_24h`; 5 seeds | 100 |
 | `classical_baselines` | XGBoost and GRU-D full-label plus label-efficiency context; 5 seeds | 330 |
-| `ts2vec_extension` | TS2Vec temporal contrastive extension; 3 datasets; 4 tasks; 5 seeds; Protocol A/B | 135 |
+| `ts2vec_extension` | TS2Vec temporal contrastive extension; 3 datasets; 4 tasks; 5 seeds; linear probe and full finetune | 135 |
 | **Total** | Thesis corpus excluding SMART | **2455** |
 
 Low-label policy:
@@ -128,6 +129,10 @@ class. These are explicit export-time views, not launch-time tags:
 The canonical per-seed export keeps each run in its true `experiment_class`.
 
 ## Launching
+
+The commands below document the `thesis-v1` launch in W&B project
+`slices-final`. For a new rerun, use your own project and a new revision name
+so runs never mix with `thesis-v1`; see `REPRODUCIBILITY.md`.
 
 Main final rerun:
 
@@ -203,7 +208,7 @@ current artifact/source and evaluation-setting metadata.
 
 ## Export
 
-Publication export:
+The frozen package `results/slices-thesis-v1/` was exported with:
 
 ```bash
 uv run python scripts/export_results.py \
@@ -212,6 +217,11 @@ uv run python scripts/export_results.py \
   --entity <entity> \
   --output-dir results/slices-thesis-v1
 ```
+
+That command now fails, because the directory already holds an
+`evidence_manifest.json`. New exports default to
+`results/export-<project>-<revision>`; pass `--overwrite` only to replace a
+package deliberately.
 
 The export writes canonical per-run and aggregated tables plus derived
 comparison views for label efficiency, capacity, classical context, and TS2Vec
