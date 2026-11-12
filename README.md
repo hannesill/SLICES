@@ -29,7 +29,9 @@ how do **MAE**, **JEPA**, and **contrastive learning** differ?
 ## Status
 
 - Master's thesis benchmark code is public. The benchmark is also described in
-  an ML4H 2026 proceedings paper; see [Citation](#citation).
+  an ML4H 2026 proceedings paper; see [Citation](#citation). The exact code,
+  results, and paper source for that paper are on the tag
+  [`ml4h-2026`](https://github.com/hannesill/SLICES/tree/ml4h-2026).
 - The frozen thesis metric export is bundled at
   `results/slices-thesis-v1/`, with three diagnostic packages next to it.
   `uv run python scripts/audit_results.py` verifies all of them.
@@ -350,6 +352,8 @@ If you use SLICES, please cite the ML4H 2026 paper (metadata in
                Sch{\"u}ffler, Peter J.},
   booktitle = {Proceedings of the Machine Learning for Health (ML4H) Symposium},
   series    = {Proceedings of Machine Learning Research},
+  volume    = {346},
+  publisher = {PMLR},
   year      = {2026}
 }
 ```
