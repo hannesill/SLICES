@@ -28,6 +28,7 @@ preferred-citation:
   conference:
     name: "Machine Learning for Health (ML4H) 2026"
   collection-title: "Proceedings of Machine Learning Research"
+  volume: 346
   publisher:
     name: PMLR
   year: 2026
