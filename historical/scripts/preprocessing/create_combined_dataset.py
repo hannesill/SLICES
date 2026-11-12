@@ -1,0 +1,513 @@
+"""Create a combined dataset by merging two processed datasets.
+
+Merges MIMIC-IV and eICU (or any two datasets) into a single processed
+directory for combined pretraining. Handles stay_id collision by adding
+a dataset-specific offset to ensure globally unique IDs, then prepares
+the merged dataset for training by default.
+
+Usage:
+    uv run python scripts/preprocessing/create_combined_dataset.py \
+        --source data/processed/miiv data/processed/eicu \
+        --output data/processed/combined
+
+    # With custom dataset names (for metadata)
+    uv run python scripts/preprocessing/create_combined_dataset.py \
+        --source data/processed/miiv data/processed/eicu \
+        --names miiv eicu \
+        --output data/processed/combined
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+import polars as pl
+import yaml
+from slices.constants import MIN_STAY_HOURS, SEQ_LENGTH_HOURS, THESIS_TASKS
+from slices.data.preparation import prepare_processed_dataset
+
+# Offset applied to stay_id for the second dataset when needed to avoid
+# collisions. Large enough to exceed any real ID range.
+DATASET_ID_OFFSET = 100_000_000
+
+
+def load_dataset(processed_dir: Path) -> dict:
+    """Load all parquet files and metadata from a processed directory."""
+    static = pl.read_parquet(processed_dir / "static.parquet")
+    timeseries = pl.read_parquet(processed_dir / "timeseries.parquet")
+    labels = pl.read_parquet(processed_dir / "labels.parquet")
+
+    metadata_path = processed_dir / "metadata.yaml"
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+    else:
+        metadata = {}
+
+    return {
+        "static": static,
+        "timeseries": timeseries,
+        "labels": labels,
+        "metadata": metadata,
+    }
+
+
+def offset_ids(df: pl.DataFrame, offset: int) -> pl.DataFrame:
+    """Add an offset to the stay_id column when collision resolution is needed."""
+    exprs = []
+    if "stay_id" in df.columns:
+        exprs.append((pl.col("stay_id") + offset).alias("stay_id"))
+    if exprs:
+        return df.with_columns(exprs)
+    return df
+
+
+def namespace_patient_ids(df: pl.DataFrame, dataset_name: str) -> pl.DataFrame:
+    """Namespace patient_id by source dataset to preserve combined split integrity."""
+    if "patient_id" not in df.columns:
+        return df
+
+    patient_expr = (
+        pl.when(pl.col("patient_id").is_null())
+        .then(None)
+        .otherwise(pl.format("{}:{}", pl.lit(dataset_name), pl.col("patient_id").cast(pl.Utf8)))
+        .alias("patient_id")
+    )
+    return df.with_columns(patient_expr)
+
+
+def validate_no_id_collision(static_a: pl.DataFrame, static_b: pl.DataFrame) -> None:
+    """Verify no stay_id or patient_id overlap between two datasets."""
+    ids_a = set(static_a["stay_id"].to_list())
+    ids_b = set(static_b["stay_id"].to_list())
+    overlap = ids_a & ids_b
+    if overlap:
+        raise ValueError(
+            f"stay_id collision detected: {len(overlap)} overlapping IDs "
+            f"(e.g., {list(overlap)[:5]}). This should not happen after "
+            "applying the dataset offset."
+        )
+
+    if "patient_id" in static_a.columns and "patient_id" in static_b.columns:
+        patients_a = {str(value) for value in static_a["patient_id"].drop_nulls().to_list()}
+        patients_b = {str(value) for value in static_b["patient_id"].drop_nulls().to_list()}
+        patient_overlap = patients_a & patients_b
+        if patient_overlap:
+            raise ValueError(
+                f"patient_id collision detected after namespacing: {len(patient_overlap)} "
+                f"overlapping IDs (e.g., {list(patient_overlap)[:5]})."
+            )
+
+
+def validate_feature_compatibility(meta_a: dict, meta_b: dict) -> None:
+    """Verify both datasets share the same preprocessing contract."""
+    features_a = list(meta_a.get("feature_names", []))
+    features_b = list(meta_b.get("feature_names", []))
+
+    if features_a != features_b:
+        set_a = set(features_a)
+        set_b = set(features_b)
+        if set_a == set_b:
+            raise ValueError(
+                "Feature order mismatch between datasets. "
+                "The same features appear in a different order, which would silently "
+                "corrupt combined tensors."
+            )
+
+        only_a = set_a - set_b
+        only_b = set_b - set_a
+        raise ValueError(
+            f"Feature mismatch between datasets.\n"
+            f"  Only in dataset A: {only_a}\n"
+            f"  Only in dataset B: {only_b}\n"
+            "Both datasets must have the same features for combined training."
+        )
+
+    invariant_fields = (
+        "feature_set",
+        "seq_length_hours",
+        "min_stay_hours",
+        "label_horizon_hours",
+    )
+    mismatches = []
+    for field in invariant_fields:
+        value_a = meta_a.get(field)
+        value_b = meta_b.get(field)
+        if value_a != value_b:
+            mismatches.append((field, value_a, value_b))
+
+    if mismatches:
+        details = "\n".join(
+            f"  {field}: dataset A={value_a}, dataset B={value_b}"
+            for field, value_a, value_b in mismatches
+        )
+        raise ValueError(
+            "Dataset preprocessing invariants do not match.\n"
+            f"{details}\n"
+            "Re-extract both datasets with the same preprocessing settings before combining."
+        )
+
+
+def validate_frame_schema(name: str, df_a: pl.DataFrame, df_b: pl.DataFrame) -> None:
+    """Verify matching column order and dtypes for a dataframe pair."""
+    if df_a.columns != df_b.columns:
+        raise ValueError(
+            f"{name} schema mismatch between datasets.\n"
+            f"  Dataset A columns: {df_a.columns}\n"
+            f"  Dataset B columns: {df_b.columns}\n"
+            "Column order must match exactly before concatenation."
+        )
+
+    dtype_mismatches = [
+        (col, df_a[col].dtype, df_b[col].dtype)
+        for col in df_a.columns
+        if df_a[col].dtype != df_b[col].dtype
+    ]
+    if dtype_mismatches:
+        details = "\n".join(
+            f"  {col}: dataset A={dtype_a}, dataset B={dtype_b}"
+            for col, dtype_a, dtype_b in dtype_mismatches
+        )
+        raise ValueError(
+            f"{name} dtype mismatch between datasets.\n{details}\n"
+            "Re-extract both datasets with matching schemas before combining."
+        )
+
+
+def validate_required_task_coverage(
+    meta_a: dict,
+    meta_b: dict,
+    labels_a: pl.DataFrame,
+    labels_b: pl.DataFrame,
+    names: tuple[str, str],
+    required_tasks: tuple[str, ...] = THESIS_TASKS,
+) -> None:
+    """Fail closed if either source dataset lacks a thesis task or manifest entry."""
+    required = set(required_tasks)
+    task_sets = [set(meta_a.get("task_names", [])), set(meta_b.get("task_names", []))]
+    manifests = [meta_a.get("label_manifest", {}) or {}, meta_b.get("label_manifest", {}) or {}]
+    label_columns = [set(labels_a.columns), set(labels_b.columns)]
+
+    messages = []
+    for name, tasks, manifest, columns in zip(names, task_sets, manifests, label_columns):
+        missing_tasks = sorted(required - tasks)
+        missing_manifest = sorted(required - set(manifest))
+        missing_columns = sorted(required - columns)
+        if missing_tasks:
+            messages.append(f"{name} metadata task_names missing {missing_tasks}")
+        if missing_manifest:
+            messages.append(f"{name} label_manifest missing {missing_manifest}")
+        if missing_columns:
+            messages.append(f"{name} labels.parquet missing columns {missing_columns}")
+
+    if messages:
+        raise ValueError(
+            "Combined dataset creation requires both source datasets to contain all "
+            "thesis tasks before merge:\n  " + "\n  ".join(messages)
+        )
+
+
+def merge_labels(labels_a: pl.DataFrame, labels_b: pl.DataFrame) -> pl.DataFrame:
+    """Merge label DataFrames, handling column mismatches."""
+    cols_a = set(labels_a.columns)
+    cols_b = set(labels_b.columns)
+
+    # Add missing columns as null
+    for col in cols_b - cols_a:
+        dtype = labels_b[col].dtype
+        labels_a = labels_a.with_columns(pl.lit(None).cast(dtype).alias(col))
+    for col in cols_a - cols_b:
+        dtype = labels_a[col].dtype
+        labels_b = labels_b.with_columns(pl.lit(None).cast(dtype).alias(col))
+
+    # Ensure same column order
+    col_order = sorted(labels_a.columns)
+    labels_a = labels_a.select(col_order)
+    labels_b = labels_b.select(col_order)
+
+    return pl.concat([labels_a, labels_b])
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Merge two processed datasets into a combined dataset."
+    )
+    parser.add_argument(
+        "--source",
+        nargs=2,
+        required=True,
+        help="Paths to two processed dataset directories",
+    )
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Output path for combined dataset",
+    )
+    parser.add_argument(
+        "--names",
+        nargs=2,
+        default=None,
+        help="Dataset names (for metadata). Defaults to directory names.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Split seed to use when preparing the combined dataset (default: 42).",
+    )
+    parser.add_argument(
+        "--skip-prepare",
+        action="store_true",
+        help="Only write merged parquet/metadata files and skip splits/normalization prep.",
+    )
+    args = parser.parse_args()
+
+    source_a = Path(args.source[0])
+    source_b = Path(args.source[1])
+    output_dir = Path(args.output)
+
+    if not source_a.exists():
+        print(f"Error: source directory not found: {source_a}")
+        sys.exit(1)
+    if not source_b.exists():
+        print(f"Error: source directory not found: {source_b}")
+        sys.exit(1)
+
+    names = args.names or [source_a.name, source_b.name]
+
+    print("Merging datasets:")
+    print(f"  A: {source_a} ({names[0]})")
+    print(f"  B: {source_b} ({names[1]})")
+    print(f"  Output: {output_dir}")
+
+    # Load datasets
+    print("\nLoading dataset A...")
+    data_a = load_dataset(source_a)
+    print(f"  {len(data_a['static'])} stays, {len(data_a['timeseries'])} timeseries rows")
+
+    print("Loading dataset B...")
+    data_b = load_dataset(source_b)
+    print(f"  {len(data_b['static'])} stays, {len(data_b['timeseries'])} timeseries rows")
+
+    # Namespace patient_id for both datasets up front so patient-level split
+    # generation cannot merge unrelated cross-dataset patients with the same
+    # raw identifier.
+    data_a["static"] = namespace_patient_ids(data_a["static"], names[0])
+    data_b["static"] = namespace_patient_ids(data_b["static"], names[1])
+    print("  Patient IDs namespaced by source dataset.")
+
+    # Validate feature compatibility
+    print("\nValidating feature compatibility...")
+    validate_feature_compatibility(data_a["metadata"], data_b["metadata"])
+    validate_frame_schema("timeseries", data_a["timeseries"], data_b["timeseries"])
+    print("  Features match.")
+
+    # Check for natural ID collisions
+    ids_a = set(data_a["static"]["stay_id"].to_list())
+    ids_b = set(data_b["static"]["stay_id"].to_list())
+    natural_overlap = ids_a & ids_b
+
+    if natural_overlap:
+        print(
+            f"\n  {len(natural_overlap)} stay_id collisions detected. "
+            f"Applying offset of {DATASET_ID_OFFSET:,} to dataset B."
+        )
+        data_b["static"] = offset_ids(data_b["static"], DATASET_ID_OFFSET)
+        data_b["timeseries"] = offset_ids(data_b["timeseries"], DATASET_ID_OFFSET)
+        data_b["labels"] = offset_ids(data_b["labels"], DATASET_ID_OFFSET)
+    else:
+        print("  No stay_id collisions. No offset needed.")
+
+    # Validate no collisions after offset
+    validate_no_id_collision(data_a["static"], data_b["static"])
+
+    # Add source_dataset column to static for tracking
+    data_a["static"] = data_a["static"].with_columns(pl.lit(names[0]).alias("source_dataset"))
+    data_b["static"] = data_b["static"].with_columns(pl.lit(names[1]).alias("source_dataset"))
+
+    # Harmonize column dtypes across datasets (e.g. patient_id: Int32 vs String)
+    for col in set(data_a["static"].columns) & set(data_b["static"].columns):
+        dt_a = data_a["static"][col].dtype
+        dt_b = data_b["static"][col].dtype
+        if dt_a != dt_b:
+            print(f"  Harmonizing column '{col}': {dt_a} vs {dt_b} → String")
+            data_a["static"] = data_a["static"].with_columns(pl.col(col).cast(pl.Utf8))
+            data_b["static"] = data_b["static"].with_columns(pl.col(col).cast(pl.Utf8))
+
+    # Merge
+    print("\nMerging...")
+    static_combined = pl.concat([data_a["static"], data_b["static"]])
+    timeseries_combined = pl.concat([data_a["timeseries"], data_b["timeseries"]])
+    labels_combined = merge_labels(data_a["labels"], data_b["labels"])
+
+    print(
+        f"  Combined: {len(static_combined)} stays, " f"{len(timeseries_combined)} timeseries rows"
+    )
+
+    # Create combined metadata
+    meta_a = data_a["metadata"]
+    meta_b = data_b["metadata"]
+
+    # Use common task names
+    tasks_a = set(meta_a.get("task_names", []))
+    tasks_b = set(meta_b.get("task_names", []))
+    common_tasks = sorted(tasks_a & tasks_b)
+    validate_required_task_coverage(
+        meta_a,
+        meta_b,
+        data_a["labels"],
+        data_b["labels"],
+        names,
+    )
+
+    # Merge label manifests from source datasets for freshness checking.
+    # Both source datasets must have manifests, and for each common task
+    # the builder_version and config_hash must agree — otherwise the
+    # combined labels would mix stale and fresh data.
+    manifest_a = meta_a.get("label_manifest", {})
+    manifest_b = meta_b.get("label_manifest", {})
+
+    if not manifest_a:
+        print(
+            f"\n  ERROR: {names[0]} has no label_manifest in metadata.yaml.\n"
+            f"  Re-run extraction for {names[0]} before combining.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not manifest_b:
+        print(
+            f"\n  ERROR: {names[1]} has no label_manifest in metadata.yaml.\n"
+            f"  Re-run extraction for {names[1]} before combining.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    combined_manifest = {}
+    for task in common_tasks:
+        entry_a = manifest_a.get(task)
+        entry_b = manifest_b.get(task)
+
+        if entry_a is None and entry_b is None:
+            continue
+        if entry_a is None or entry_b is None:
+            present = names[0] if entry_a else names[1]
+            missing = names[1] if entry_a else names[0]
+            print(
+                f"\n  ERROR: Task '{task}' has a manifest entry in {present} "
+                f"but not in {missing}.\n"
+                f"  Re-run extraction for {missing} with task '{task}'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if entry_a.get("builder_version") != entry_b.get("builder_version"):
+            print(
+                f"\n  ERROR: builder_version mismatch for task '{task}':\n"
+                f"    {names[0]}: {entry_a.get('builder_version')}\n"
+                f"    {names[1]}: {entry_b.get('builder_version')}\n"
+                f"  Re-run extraction for both datasets.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if entry_a.get("config_hash") != entry_b.get("config_hash"):
+            print(
+                f"\n  ERROR: config_hash mismatch for task '{task}':\n"
+                f"    {names[0]}: {entry_a.get('config_hash')}\n"
+                f"    {names[1]}: {entry_b.get('config_hash')}\n"
+                f"  Both datasets must be extracted with the same task config.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        combined_manifest[task] = entry_a
+
+    combined_metadata = {
+        "dataset": "combined",
+        "source_datasets": names,
+        "source_dirs": [str(source_a), str(source_b)],
+        "feature_set": meta_a.get("feature_set", "core"),
+        "feature_names": meta_a.get("feature_names", []),
+        "n_features": meta_a.get("n_features", 0),
+        "seq_length_hours": meta_a.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        "input_seq_length_hours": meta_a.get(
+            "input_seq_length_hours",
+            meta_a.get("seq_length_hours", SEQ_LENGTH_HOURS),
+        ),
+        "label_horizon_hours": meta_a.get("label_horizon_hours"),
+        "raw_export_horizon_hours_by_dataset": {
+            names[0]: meta_a.get("raw_export_horizon_hours"),
+            names[1]: meta_b.get("raw_export_horizon_hours"),
+        },
+        "required_raw_export_horizon_hours_by_dataset": {
+            names[0]: meta_a.get("required_raw_export_horizon_hours"),
+            names[1]: meta_b.get("required_raw_export_horizon_hours"),
+        },
+        "label_quality_stats_by_dataset": {
+            names[0]: meta_a.get("label_quality_stats", {}),
+            names[1]: meta_b.get("label_quality_stats", {}),
+        },
+        "min_stay_hours": meta_a.get("min_stay_hours", MIN_STAY_HOURS),
+        "task_names": common_tasks,
+        "label_manifest": combined_manifest,
+        "n_stays": len(static_combined),
+        "stays_per_dataset": {
+            names[0]: len(data_a["static"]),
+            names[1]: len(data_b["static"]),
+        },
+        "id_offset_applied": DATASET_ID_OFFSET if natural_overlap else 0,
+        "patient_id_namespaced": True,
+        "patient_id_namespace_by_dataset": {
+            names[0]: names[0],
+            names[1]: names[1],
+        },
+    }
+
+    # Save
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\nSaving...")
+    static_combined.write_parquet(output_dir / "static.parquet")
+    print(f"  static.parquet ({len(static_combined)} rows)")
+
+    timeseries_combined.write_parquet(output_dir / "timeseries.parquet")
+    print(f"  timeseries.parquet ({len(timeseries_combined)} rows)")
+
+    labels_combined.write_parquet(output_dir / "labels.parquet")
+    print(f"  labels.parquet ({len(labels_combined)} rows)")
+
+    with open(output_dir / "metadata.yaml", "w") as f:
+        yaml.dump(combined_metadata, f, default_flow_style=False)
+    print("  metadata.yaml")
+
+    if args.skip_prepare:
+        print("\nSkipping combined dataset preparation (--skip-prepare).")
+    else:
+        print("\nPreparing combined dataset artifacts...")
+        prepare_processed_dataset(
+            processed_dir=output_dir,
+            seed=args.seed,
+            dataset_name="combined",
+        )
+
+    print(f"\nCombined dataset created at {output_dir}")
+    print(f"  Total stays: {len(static_combined):,}")
+    print(f"  Common tasks: {common_tasks}")
+
+    if tasks_a != tasks_b:
+        only_a = tasks_a - tasks_b
+        only_b = tasks_b - tasks_a
+        if only_a:
+            print(
+                f"  Tasks only in {names[0]}: {sorted(only_a)} "
+                f"(labels will be null for {names[1]} stays)"
+            )
+        if only_b:
+            print(
+                f"  Tasks only in {names[1]}: {sorted(only_b)} "
+                f"(labels will be null for {names[0]} stays)"
+            )
+
+
+if __name__ == "__main__":
+    main()

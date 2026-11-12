@@ -1,0 +1,18 @@
+{
+  "checkpoint_files_verified_before_execution": 30,
+  "executed_script_sha256": "4e136e5a62975552b467663dc75a07fbba8984b7e44b06e70aa206663d6488ae",
+  "executed_source_preserved_and_ast_matches": true,
+  "maintained_script_sha256": "60c02d63b73ddaac05edfbc79d5aa33045708b626f4d01a3c4dccf75adf2a264",
+  "paired_differences_recomputed": 30,
+  "result": "passed",
+  "seed_receipts_matched_across_paradigms": [
+    42,
+    123,
+    456,
+    789,
+    1011
+  ],
+  "source_and_frozen_files_verified": 83,
+  "validation_selection_checked": 60,
+  "worker_seconds_reconciled": 1175.7516566258855
+}

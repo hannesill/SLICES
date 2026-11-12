@@ -1,0 +1,32 @@
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Using and Extending the Benchmark}
+\label{sec:resource}
+
+The code repository supports auditing the archived results (the aggregates of all 2,455 runs), regenerating tables and figures without retraining, reproducing the comparison with credentialed data access, and evaluating additional SSL objectives (Appendix Figure~\ref{fig:benchmark}). A machine-readable specification records clinical inputs, splits, tasks, encoder, training and checkpoint policies, and metrics. Comparability checks flag changed settings.
+
+New objectives use the shared value--mask input and export an encoder for both frozen probing and fine-tuning. Pretraining retains hourly representations. Downstream evaluation averages valid hours into one stay-level vector because each endpoint assigns one target to a stay. Auxiliary pretraining networks are discarded. The TS2Vec-style extension demonstrates this path. A short run on artificial data checks the workflow without patient-data access. Its scores are not clinical evidence. Appendix~\ref{app:extension-workflow} gives implementation and validation details.
+
+Historical source, current framework, archived results, and later diagnostics remain separately traceable. The framework comprises the specification, interface, validators, and extension workflow. The reference evaluation below is one study run through it.
+
+\subsection{Reference Evaluation}
+
+The study comprises 2,455 training runs: 145 pretraining and 2,310 downstream or baseline runs. It tests objective and protocol choice, reduced-label performance, cross-database adaptation, hyperparameter and encoder-capacity sensitivity, classical baselines, and the TS2Vec-style extension. The core comparison accounts for 45 pretraining runs and 420 evaluations.
+
+\paragraph{Pretraining.}
+All methods use 100 epochs, batch size 256, AdamW learning rate $10^{-3}$, weight decay .01, gradient clipping at 1.0, ten warmup epochs, and cosine decay to $10^{-6}$, without early stopping. Batches contain only training-partition stays, and validation loss is monitored. Equal epochs give an equal data-pass schedule within each regime, not equal FLOPs, wall time, or objective-specific module cost. Configurations, shared across datasets, were fixed before the final rerun but informed by earlier development passes, whose test metrics we saw while fixing label and input defects. Test partitions were never used for training, normalization, or checkpoint selection, and objective-specific changes followed label-free pretraining diagnostics (Appendix~\ref{app:config}).
+
+\paragraph{Adaptation.}
+Frozen probing trains a linear head for at most 50 epochs with learning rate $10^{-4}$ while keeping the encoder fixed. Full fine-tuning trains the encoder and a width-64 ReLU head for at most 100 epochs with learning rate $3\times10^{-4}$. Both use batch size 64, weight decay .05, cosine scheduling, gradient clipping at 1.0, and validation patience 10. Neural classification uses square-root-balanced class weights and label smoothing of .1. LOS trains with mean squared error but uses mean absolute error in days for evaluation and checkpoint selection. Classification checkpoint selection maximizes validation AUPRC. The two protocols differ in trainable scope, head capacity, learning rate, and epoch cap.
+
+\paragraph{Converged and loss-matched probes.}
+The capped probe is not trained to convergence, and its LOS training loss differs from the reported metric. We therefore refit all 180 core full-label frozen probes on the same embeddings, splits, and test rows: L2 logistic regression fitted to convergence, and for LOS a Huber probe approximating absolute error and a ridge probe. Validation selects regularization, and the protocol was fixed before any of its test metrics were computed (Appendix~\ref{app:converged}). Appendix~\ref{app:post-review} collects all analyses added during peer review. We recommend the converged probe for new objectives; its script is released with the diagnostics but is not yet a framework protocol.
+
+\paragraph{Baselines.}
+The supervised Transformer uses the same encoder family and full-fine-tuning trainer from random initialization. GRU-D provides a recurrent, missingness-aware comparator \citep{che2018grud}. XGBoost uses per-variable summary features, including extrema, first and last values, counts, and observation fractions \citep{chen2016xgboost}. TS2Vec is a temporal-contrastive extension, not a fourth core objective.
+
+\paragraph{Seeds, metrics, and checkpoints.}
+All reported core cells contain five runs with matched seeds. A seed jointly determines the patient split and stochastic training. We report mean and sample standard deviation across runs, without confirmatory significance claims (Section~\ref{sec:limitations}).
+
+Every downstream SSL run starts from the encoder saved after the final pretraining epoch, not one selected on objective-specific validation loss. This gives all objectives the same 100-epoch data-pass rule but may disadvantage an objective whose useful representations peak earlier. Selecting encoders on downstream validation would make SSL checkpoint choice label-dependent and task-specific. The final epoch is a label-free rule that treats objectives alike. Downstream and baseline test metrics use validation-selected downstream checkpoints. Section~\ref{sec:secondary} tests this rule.

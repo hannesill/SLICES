@@ -1,0 +1,710 @@
+<svg width="938" height="520" viewBox="0 0 938 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="fig04-ssl-objectives">
+<rect width="937.1" height="520" fill="white"/>
+<g id="mae-objective">
+<rect x="0.55" y="0.55" width="289.9" height="518.9" rx="5.45" fill="white"/>
+<rect x="0.55" y="0.55" width="289.9" height="518.9" rx="5.45" stroke="#D7DEE6" stroke-width="1.1"/>
+<text id="title" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="18" font-weight="bold" letter-spacing="0px"><tspan x="22" y="39.5455">MAE</tspan></text>
+<text id="subtitle" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="22" y="62.0909">reconstruct masked values</tspan></text>
+<rect id="header-rule" x="22" y="75" width="247" height="1" fill="#D7DEE6"/>
+<g id="input-label">
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="21" y="105.727">Input tokens </tspan></text>
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" letter-spacing="0px"><tspan x="103.494" y="105.727">(missingness included)</tspan></text>
+</g>
+<text id="input-label_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="22" y="161.727">Masking</tspan></text>
+<text id="input-label_3" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="47" y="494.727">MSE on observed masked values</tspan></text>
+<g id="Group 49">
+<rect id="input-lab-box" x="29.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="37.8291" y="132.091">z1</tspan></text>
+</g>
+<g id="Group 69">
+<rect id="input-lab-box_2" x="64.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_2" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="71.8447" y="132.091">z2</tspan></text>
+</g>
+<g id="Group 70">
+<rect id="input-lab-box_3" x="134.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_3" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="141.558" y="132.091">z4</tspan></text>
+</g>
+<g id="Group 71">
+<rect id="input-lab-box_4" x="169.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_4" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="176.797" y="132.091">z5</tspan></text>
+</g>
+<g id="Group 64">
+<rect id="input-lab-box_5" x="29.5" y="447.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+</g>
+<g id="Group 67">
+<rect id="input-lab-box_6" x="65" y="448" width="30" height="18" rx="2" fill="#EAF4F7" stroke="#5B8FA8" stroke-width="2"/>
+<text id="input-lab-label_5" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="67.4561" y="462.091">Rec</tspan></text>
+</g>
+<g id="Group 68">
+<rect id="input-lab-box_7" x="135" y="448" width="30" height="18" rx="2" fill="#EAF4F7" stroke="#5B8FA8" stroke-width="2"/>
+<text id="input-lab-label_6" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="137.456" y="462.091">Rec</tspan></text>
+</g>
+<g id="Group 90">
+<rect id="input-lab-box_8" x="170" y="448" width="30" height="18" rx="2" fill="#EAF4F7" stroke="#5B8FA8" stroke-width="2"/>
+<text id="input-lab-label_7" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="172.456" y="462.091">Rec</tspan></text>
+</g>
+<g id="Group 60">
+<rect id="input-lab-box_9" x="29.5" y="349.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_8" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="37.7607" y="364.091">h1</tspan></text>
+</g>
+<g id="Group 50">
+<rect id="input-lab-box_10" x="99.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_9" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="106.626" y="132.091">z3</tspan></text>
+</g>
+<g id="Group 65">
+<rect id="input-lab-box_11" x="99.5" y="447.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+</g>
+<g id="Group 61">
+<rect id="input-lab-box_12" x="99.5" y="349.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_10" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="106.277" y="364.091">h3</tspan></text>
+</g>
+<g id="Group 51">
+<rect id="input-lab-box_13" x="222.5" y="117.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_11" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="225.374" y="132.091">z24</tspan></text>
+</g>
+<g id="Group 66">
+<rect id="input-lab-box_14" x="222.5" y="447.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+</g>
+<g id="Group 62">
+<rect id="input-lab-box_15" x="222.5" y="349.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_12" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="225.025" y="364.091">h24</tspan></text>
+</g>
+<rect id="input-mask-box" x="134.5" y="349.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<rect id="input-mask-box_2" x="169.5" y="349.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<g id="Group 86">
+<rect id="input-mask-box_3" x="64.5" y="349.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<text id="input-mask-label" fill="#C46A4A" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="68.3662" y="364.091">[M]</tspan></text>
+</g>
+<g id="Group 87">
+<rect id="input-mask-box_4" x="64.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+</g>
+<g id="Group 88">
+<rect id="input-mask-box_5" x="134.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+</g>
+<g id="Group 89">
+<rect id="input-mask-box_6" x="169.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+</g>
+<text id="input-mask-label_2" fill="#C46A4A" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="138.366" y="364.091">[M]</tspan></text>
+<text id="input-mask-label_3" fill="#C46A4A" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="172.366" y="364.091">[M]</tspan></text>
+<text id="input-ellipsis" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="206.192" y="133.727">...</tspan></text>
+<text id="input-ellipsis_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="206.192" y="463.727">...</tspan></text>
+<text id="input-ellipsis_3" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="206.192" y="365.727">...</tspan></text>
+<rect id="encoder-block" x="77.6" y="391.6" width="123.8" height="30.8" rx="3.4" fill="white" stroke="#5B8FA8" stroke-width="1.2"/>
+<g id="Group 92">
+<rect id="encoder-block_2" x="45.6" y="254.6" width="193.8" height="30.8" rx="3.4" fill="white" stroke="#5B8FA8" stroke-width="1.2"/>
+<text id="encoder-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="81.3662" y="275.091">Common Encoder</tspan></text>
+</g>
+<text id="encoder-label_2" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="95.7764" y="412.091">MAE Decoder</tspan></text>
+<g id="Group 55">
+<rect id="Rectangle" x="140" y="147" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector" d="M137 155H145L141 161L137 155Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 91">
+<rect id="Rectangle_2" x="140" y="194" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_2" d="M137 202H145L141 208L137 202Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 93">
+<rect id="Rectangle_3" x="140" y="236" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_3" d="M137 244H145L141 250L137 244Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 94">
+<rect id="Rectangle_4" x="140" y="290" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_4" d="M137 298H145L141 304L137 298Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 95">
+<rect id="Rectangle_5" x="140" y="332" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_5" d="M137 340H145L141 346L137 340Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 96">
+<rect id="Rectangle_6" x="140" y="373" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_6" d="M137 381H145L141 387L137 381Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 97">
+<rect id="Rectangle_7" x="140" y="427" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_7" d="M137 435H145L141 441L137 435Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 71_2">
+<rect id="input-lab-box_16" x="29.5" y="170.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_13" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="37.8291" y="185.091">z1</tspan></text>
+</g>
+<g id="Group 80">
+<rect id="input-lab-box_17" x="84.5" y="212.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_14" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="92.8291" y="227.091">z1</tspan></text>
+</g>
+<g id="Group 83">
+<rect id="input-lab-box_18" x="84.5" y="308.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_15" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="92.7607" y="323.091">h1</tspan></text>
+</g>
+<g id="Group 74">
+<rect id="input-lab-box_19" x="99.5" y="170.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_16" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="106.626" y="185.091">z3</tspan></text>
+</g>
+<g id="Group 81">
+<rect id="input-lab-box_20" x="119.5" y="212.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_17" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="126.626" y="227.091">z3</tspan></text>
+</g>
+<g id="Group 84">
+<rect id="input-lab-box_21" x="119.5" y="308.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_18" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="126.277" y="323.091">h3</tspan></text>
+</g>
+<g id="Group 75">
+<rect id="input-lab-box_22" x="222.5" y="170.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_19" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="225.374" y="185.091">z24</tspan></text>
+</g>
+<g id="Group 82">
+<rect id="input-lab-box_23" x="170.5" y="212.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_20" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="173.374" y="227.091">z24</tspan></text>
+</g>
+<g id="Group 85">
+<rect id="input-lab-box_24" x="170.5" y="308.5" width="31" height="19" rx="2.5" fill="#EAF4F7" stroke="#5B8FA8"/>
+<text id="input-lab-label_21" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="173.025" y="323.091">h24</tspan></text>
+</g>
+</g>
+<g id="jepa-objective">
+<rect x="323.55" y="0.55" width="289.9" height="518.9" rx="5.45" fill="white"/>
+<rect x="323.55" y="0.55" width="289.9" height="518.9" rx="5.45" stroke="#D7DEE6" stroke-width="1.1"/>
+<text id="title_2" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="18" font-weight="bold" letter-spacing="0px"><tspan x="346" y="39.0455">JEPA</tspan></text>
+<text id="subtitle_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="345" y="62.0909">predict masked embeddings</tspan></text>
+<rect id="header-rule_2" x="345" y="75" width="247" height="1" fill="#D7DEE6"/>
+<g id="input-label_4">
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="345" y="104.727">Input tokens </tspan></text>
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" letter-spacing="0px"><tspan x="427.494" y="104.727">(missingness included)</tspan></text>
+</g>
+<g id="Group 98">
+<rect id="jepa-input-z1-box" x="352.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z1-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="360.829" y="131.591">z1</tspan></text>
+</g>
+<g id="Group 99">
+<rect id="jepa-input-z1-box_2" x="516.5" y="311.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_1" clip-path="url(#clip0_2014_2)">
+<g id="LiveTeX Math">
+<g id="Group">
+<g id="Group_2">
+<g id="Group_3">
+<g id="Group_4">
+<path id="Vector_8" d="M533.025 327.989V327.244H531.933V323.143C531.933 321.481 531.078 320.863 529.494 320.863C527.974 320.863 527.167 321.782 526.818 322.383H526.803V317L524 317.127V317.871C524.982 317.871 525.093 317.871 525.093 318.488V327.244H524V327.989L525.995 327.941L527.99 327.989V327.244H526.898V323.935C526.898 322.209 528.259 321.433 529.257 321.433C529.795 321.433 530.128 321.766 530.128 322.969V327.244H529.035V327.989L531.03 327.941L533.025 327.989Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_5">
+<path id="Vector_9" d="M536.939 322.908C536.48 323.378 535.809 323.614 534.924 323.614V324.05C535.506 324.05 535.988 323.961 536.357 323.781V329.446C536.357 329.647 536.312 329.782 536.212 329.838C536.111 329.894 535.831 329.927 535.383 329.927H534.991V330.364C535.271 330.342 535.876 330.33 536.805 330.33C537.734 330.33 538.339 330.342 538.618 330.364V329.927H538.227C537.768 329.927 537.488 329.894 537.398 329.838C537.309 329.782 537.253 329.647 537.253 329.446V323.244C537.253 322.975 537.23 322.908 536.939 322.908Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 105">
+<rect id="jepa-input-z1-box_3" x="461.5" y="311.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \hat{\mathbf{h}}_1" clip-path="url(#clip1_2014_2)">
+<g id="LiveTeX Math_2">
+<g id="Group_6">
+<g id="Group_7">
+<g id="Group_8">
+<g id="Group_9">
+<g id="Group_10">
+<g id="Group_11">
+<path id="Vector_10" d="M478.825 328.486V327.741H477.732V323.64C477.732 321.978 476.877 321.36 475.294 321.36C473.774 321.36 472.966 322.279 472.618 322.88H472.602V317.497L469.8 317.624V318.368C470.781 318.368 470.892 318.368 470.892 318.985V327.741H469.8V328.486L471.795 328.438L473.79 328.486V327.741H472.697V324.432C472.697 322.706 474.059 321.93 475.056 321.93C475.595 321.93 475.927 322.263 475.927 323.466V327.741H474.835V328.486L476.83 328.438L478.825 328.486Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_12">
+<path id="Vector_11" d="M473.576 315.834L473.845 315.549L471.423 313L469 315.549L469.269 315.834L471.423 314.203L473.576 315.834Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_13">
+<path id="Vector_12" d="M482.739 323.405C482.28 323.875 481.608 324.11 480.724 324.11V324.547C481.306 324.547 481.787 324.457 482.157 324.278V329.943C482.157 330.144 482.112 330.279 482.011 330.335C481.91 330.391 481.631 330.424 481.183 330.424H480.791V330.861C481.071 330.838 481.675 330.827 482.605 330.827C483.534 330.827 484.138 330.838 484.418 330.861V330.424H484.026C483.567 330.424 483.287 330.391 483.198 330.335C483.108 330.279 483.052 330.144 483.052 329.943V323.741C483.052 323.472 483.03 323.405 482.739 323.405Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 100">
+<rect id="jepa-input-z1-box_4" x="516.5" y="335.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_2" clip-path="url(#clip2_2014_2)">
+<g id="LiveTeX Math_3">
+<g id="Group_14">
+<g id="Group_15">
+<g id="Group_16">
+<g id="Group_17">
+<path id="Vector_13" d="M533.025 351.989V351.244H531.933V347.143C531.933 345.481 531.078 344.863 529.494 344.863C527.974 344.863 527.167 345.782 526.818 346.383H526.803V341L524 341.127V341.871C524.982 341.871 525.093 341.871 525.093 342.488V351.244H524V351.989L525.995 351.941L527.99 351.989V351.244H526.898V347.935C526.898 346.209 528.259 345.433 529.257 345.433C529.795 345.433 530.128 345.766 530.128 346.969V351.244H529.035V351.989L531.03 351.941L533.025 351.989Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_18">
+<path id="Vector_14" d="M536.581 346.908C536.01 346.908 535.529 347.11 535.115 347.513C534.7 347.916 534.488 348.386 534.488 348.957C534.488 349.338 534.767 349.617 535.115 349.617C535.45 349.617 535.73 349.326 535.73 348.99C535.73 348.621 535.462 348.364 535.103 348.364C535.07 348.364 535.047 348.364 535.025 348.375C535.238 347.826 535.73 347.345 536.435 347.345C537.353 347.345 537.868 348.14 537.868 349.102C537.868 349.852 537.488 350.658 536.727 351.509L534.622 353.883C534.476 354.05 534.488 354.039 534.488 354.364H538.641L538.965 352.349H538.596C538.506 352.92 538.428 353.244 538.361 353.345C538.305 353.401 537.969 353.424 537.353 353.424H535.484L536.57 352.36C537.331 351.644 538.294 350.871 538.618 350.278C538.842 349.886 538.954 349.494 538.954 349.102C538.954 347.781 537.924 346.908 536.581 346.908Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 106">
+<rect id="jepa-input-z1-box_5" x="461.5" y="335.5" width="31" height="21" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<g id="LaTeX: \hat{\mathbf{h}}_2" clip-path="url(#clip3_2014_2)">
+<g id="LiveTeX Math_4">
+<g id="Group_19">
+<g id="Group_20">
+<g id="Group_21">
+<g id="Group_22">
+<g id="Group_23">
+<g id="Group_24">
+<path id="Vector_15" d="M478.825 352.485V351.741H477.732V347.64C477.732 345.978 476.877 345.36 475.294 345.36C473.774 345.36 472.966 346.278 472.618 346.88H472.602V341.497L469.8 341.623V342.367C470.781 342.367 470.892 342.367 470.892 342.985V351.741H469.8V352.485L471.795 352.438L473.79 352.485V351.741H472.697V348.432C472.697 346.706 474.059 345.93 475.056 345.93C475.595 345.93 475.927 346.263 475.927 347.466V351.741H474.835V352.485L476.83 352.438L478.825 352.485Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_25">
+<path id="Vector_16" d="M473.576 339.834L473.845 339.549L471.423 337L469 339.549L469.269 339.834L471.423 338.203L473.576 339.834Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_26">
+<path id="Vector_17" d="M482.381 347.405C481.81 347.405 481.328 347.606 480.914 348.009C480.5 348.413 480.287 348.883 480.287 349.454C480.287 349.834 480.567 350.114 480.914 350.114C481.25 350.114 481.53 349.823 481.53 349.487C481.53 349.118 481.261 348.86 480.903 348.86C480.869 348.86 480.847 348.86 480.825 348.871C481.037 348.323 481.53 347.842 482.235 347.842C483.153 347.842 483.668 348.636 483.668 349.599C483.668 350.349 483.287 351.155 482.526 352.006L480.422 354.379C480.276 354.547 480.287 354.536 480.287 354.861H484.44L484.765 352.846H484.396C484.306 353.416 484.228 353.741 484.161 353.842C484.105 353.898 483.769 353.92 483.153 353.92H481.284L482.369 352.857C483.131 352.14 484.093 351.368 484.418 350.775C484.642 350.383 484.754 349.991 484.754 349.599C484.754 348.278 483.724 347.405 482.381 347.405Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+<rect id="jepa-input-z1-box_6" x="461.5" y="383.5" width="31" height="21" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<rect id="jepa-input-z1-box_7" x="461.5" y="359.5" width="31" height="21" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<g id="LaTeX: \hat{\mathbf{h}}_3" clip-path="url(#clip4_2014_2)">
+<g id="LiveTeX Math_5">
+<g id="Group_27">
+<g id="Group_28">
+<g id="Group_29">
+<g id="Group_30">
+<g id="Group_31">
+<g id="Group_32">
+<path id="Vector_18" d="M478.825 376.486V375.741H477.732V371.64C477.732 369.978 476.877 369.36 475.294 369.36C473.774 369.36 472.966 370.279 472.618 370.88H472.602V365.497L469.8 365.624V366.368C470.781 366.368 470.892 366.368 470.892 366.985V375.741H469.8V376.486L471.795 376.438L473.79 376.486V375.741H472.697V372.432C472.697 370.706 474.059 369.93 475.056 369.93C475.595 369.93 475.927 370.263 475.927 371.466V375.741H474.835V376.486L476.83 376.438L478.825 376.486Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_33">
+<path id="Vector_19" d="M473.576 363.834L473.845 363.549L471.423 361L469 363.549L469.269 363.834L471.423 362.203L473.576 363.834Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_34">
+<path id="Vector_20" d="M483.119 374.909C483.858 374.629 484.552 373.924 484.552 372.972C484.552 372.491 484.317 372.099 483.858 371.797C483.455 371.539 482.996 371.405 482.481 371.405C481.978 371.405 481.541 371.539 481.149 371.797C480.713 372.088 480.489 372.469 480.489 372.95C480.489 373.319 480.735 373.577 481.093 373.577C481.451 373.577 481.698 373.319 481.698 372.961C481.698 372.592 481.485 372.39 481.06 372.368C481.351 371.976 481.81 371.775 482.437 371.775C483.108 371.775 483.444 372.166 483.444 372.961C483.444 373.431 483.354 373.823 483.187 374.148C482.884 374.685 482.47 374.786 481.776 374.786C481.642 374.808 481.575 374.864 481.575 374.965C481.575 375.133 481.653 375.133 481.877 375.133H482.358C483.198 375.133 483.623 375.726 483.623 376.924C483.623 377.876 483.276 378.704 482.425 378.704C481.698 378.704 481.16 378.458 480.836 377.965C481.228 377.976 481.519 377.685 481.519 377.305C481.519 376.924 481.239 376.644 480.858 376.644C480.422 376.644 480.198 376.868 480.198 377.327C480.198 377.876 480.444 378.312 480.936 378.659C481.373 378.961 481.888 379.107 482.459 379.107C483.097 379.107 483.646 378.894 484.127 378.48C484.608 378.066 484.843 377.551 484.843 376.924C484.843 375.872 484.015 375.144 483.119 374.909Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="LaTeX: \hat{\mathbf{h}}_4" clip-path="url(#clip5_2014_2)">
+<g id="LiveTeX Math_6">
+<g id="Group_35">
+<g id="Group_36">
+<g id="Group_37">
+<g id="Group_38">
+<g id="Group_39">
+<g id="Group_40">
+<path id="Vector_21" d="M478.825 400.485V399.741H477.732V395.64C477.732 393.978 476.877 393.36 475.294 393.36C473.774 393.36 472.966 394.279 472.618 394.88H472.602V389.497L469.8 389.623V390.368C470.781 390.368 470.892 390.368 470.892 390.985V399.741H469.8V400.485L471.795 400.438L473.79 400.485V399.741H472.697V396.432C472.697 394.706 474.059 393.93 475.056 393.93C475.595 393.93 475.927 394.263 475.927 395.466V399.741H474.835V400.485L476.83 400.438L478.825 400.485Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_41">
+<path id="Vector_22" d="M473.576 387.834L473.845 387.549L471.423 385L469 387.549L469.269 387.834L471.423 386.203L473.576 387.834Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_42">
+<path id="Vector_23" d="M483.679 395.282C483.578 395.282 483.489 395.338 483.422 395.439L480.041 400.633V401.036H482.963V401.954C482.963 402.155 482.918 402.29 482.84 402.346C482.761 402.402 482.549 402.424 482.179 402.424H481.899V402.861C482.224 402.838 482.739 402.827 483.433 402.827C484.127 402.827 484.642 402.838 484.967 402.861V402.424H484.687C484.317 402.424 484.105 402.402 484.026 402.346C483.948 402.29 483.903 402.155 483.903 401.954V401.036H485V400.599H483.903V395.472C483.903 395.36 483.825 395.282 483.679 395.282ZM483.03 396.67V400.599H480.478L483.03 396.67Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 101">
+<rect id="jepa-input-z1-box_8" x="516.5" y="359.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_3" clip-path="url(#clip6_2014_2)">
+<g id="LiveTeX Math_7">
+<g id="Group_43">
+<g id="Group_44">
+<g id="Group_45">
+<g id="Group_46">
+<path id="Vector_24" d="M533.025 375.989V375.245H531.933V371.144C531.933 369.481 531.078 368.863 529.494 368.863C527.974 368.863 527.167 369.782 526.818 370.384H526.803V365L524 365.127V365.871C524.982 365.871 525.093 365.871 525.093 366.488V375.245H524V375.989L525.995 375.941L527.99 375.989V375.245H526.898V371.935C526.898 370.209 528.259 369.434 529.257 369.434C529.795 369.434 530.128 369.766 530.128 370.969V375.245H529.035V375.989L531.03 375.941L533.025 375.989Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_47">
+<path id="Vector_25" d="M537.32 374.412C538.059 374.132 538.753 373.427 538.753 372.475C538.753 371.994 538.518 371.602 538.059 371.3C537.656 371.043 537.197 370.908 536.682 370.908C536.178 370.908 535.741 371.043 535.35 371.3C534.913 371.591 534.689 371.972 534.689 372.453C534.689 372.822 534.935 373.08 535.294 373.08C535.652 373.08 535.898 372.822 535.898 372.464C535.898 372.095 535.685 371.893 535.26 371.871C535.551 371.479 536.01 371.278 536.637 371.278C537.309 371.278 537.644 371.669 537.644 372.464C537.644 372.934 537.555 373.326 537.387 373.651C537.085 374.188 536.671 374.289 535.976 374.289C535.842 374.311 535.775 374.367 535.775 374.468C535.775 374.636 535.853 374.636 536.077 374.636H536.559C537.398 374.636 537.824 375.229 537.824 376.427C537.824 377.379 537.477 378.207 536.626 378.207C535.898 378.207 535.361 377.961 535.036 377.468C535.428 377.479 535.719 377.188 535.719 376.808C535.719 376.427 535.439 376.147 535.058 376.147C534.622 376.147 534.398 376.371 534.398 376.83C534.398 377.379 534.644 377.815 535.137 378.162C535.573 378.465 536.088 378.61 536.659 378.61C537.297 378.61 537.846 378.397 538.327 377.983C538.809 377.569 539.044 377.054 539.044 376.427C539.044 375.375 538.215 374.647 537.32 374.412Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 107">
+<rect id="jepa-input-z1-box_9" x="461.5" y="407.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \hat{\mathbf{h}}_5" clip-path="url(#clip7_2014_2)">
+<g id="LiveTeX Math_8">
+<g id="Group_48">
+<g id="Group_49">
+<g id="Group_50">
+<g id="Group_51">
+<g id="Group_52">
+<g id="Group_53">
+<path id="Vector_26" d="M478.825 424.486V423.741H477.732V419.64C477.732 417.978 476.877 417.36 475.294 417.36C473.774 417.36 472.966 418.279 472.618 418.88H472.602V413.497L469.8 413.624V414.368C470.781 414.368 470.892 414.368 470.892 414.985V423.741H469.8V424.486L471.795 424.438L473.79 424.486V423.741H472.697V420.432C472.697 418.706 474.059 417.93 475.056 417.93C475.595 417.93 475.927 418.263 475.927 419.466V423.741H474.835V424.486L476.83 424.438L478.825 424.486Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_54">
+<path id="Vector_27" d="M473.576 411.834L473.845 411.549L471.423 409L469 411.549L469.269 411.834L471.423 410.203L473.576 411.834Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_55">
+<path id="Vector_28" d="M481.048 423.334C481.104 423.334 481.172 423.29 481.228 423.211C481.563 422.707 482.022 422.461 482.605 422.461C482.996 422.461 483.299 422.685 483.5 423.144C483.623 423.446 483.69 423.905 483.69 424.521C483.69 425.226 483.601 425.719 483.433 426.01C483.153 426.469 482.772 426.704 482.291 426.704C481.541 426.704 480.948 426.167 480.746 425.584C480.78 425.596 480.802 425.584 480.847 425.584C481.183 425.584 481.463 425.327 481.463 424.991C481.463 424.644 481.183 424.409 480.847 424.409C480.455 424.409 480.287 424.622 480.287 425.036C480.287 426.155 481.194 427.107 482.313 427.107C482.996 427.107 483.578 426.861 484.049 426.368C484.519 425.876 484.754 425.282 484.754 424.599C484.754 423.95 484.564 423.39 484.183 422.909C483.769 422.383 483.254 422.125 482.627 422.125C482.101 422.125 481.642 422.293 481.272 422.629V420.636C481.575 420.726 481.866 420.771 482.168 420.771C482.683 420.771 483.131 420.648 483.511 420.39C483.858 420.178 484.093 419.965 484.228 419.763C484.295 419.674 484.328 419.607 484.328 419.573C484.328 419.461 484.272 419.405 484.161 419.405C483.545 419.64 483.019 419.763 482.593 419.763C482.09 419.763 481.608 419.663 481.149 419.45C481.093 419.427 481.048 419.416 481.004 419.416C480.903 419.416 480.847 419.517 480.847 419.73V422.999C480.847 423.234 480.847 423.334 481.048 423.334Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 102">
+<rect id="jepa-input-z1-box_10" x="516.5" y="383.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_4" clip-path="url(#clip8_2014_2)">
+<g id="LiveTeX Math_9">
+<g id="Group_56">
+<g id="Group_57">
+<g id="Group_58">
+<g id="Group_59">
+<path id="Vector_29" d="M533.025 399.989V399.244H531.933V395.143C531.933 393.481 531.078 392.863 529.494 392.863C527.974 392.863 527.167 393.782 526.818 394.383H526.803V389L524 389.127V389.871C524.982 389.871 525.093 389.871 525.093 390.488V399.244H524V399.989L525.995 399.941L527.99 399.989V399.244H526.898V395.935C526.898 394.209 528.259 393.433 529.257 393.433C529.795 393.433 530.128 393.766 530.128 394.969V399.244H529.035V399.989L531.03 399.941L533.025 399.989Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_60">
+<path id="Vector_30" d="M537.88 394.785C537.779 394.785 537.689 394.841 537.622 394.942L534.241 400.136V400.539H537.163V401.457C537.163 401.659 537.118 401.793 537.04 401.849C536.962 401.905 536.749 401.927 536.38 401.927H536.1V402.364C536.424 402.342 536.939 402.33 537.633 402.33C538.327 402.33 538.842 402.342 539.167 402.364V401.927H538.887C538.518 401.927 538.305 401.905 538.227 401.849C538.148 401.793 538.104 401.659 538.104 401.457V400.539H539.201V400.103H538.104V394.975C538.104 394.864 538.025 394.785 537.88 394.785ZM537.23 396.173V400.103H534.678L537.23 396.173Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 103">
+<rect id="jepa-input-z1-box_11" x="516.5" y="407.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_5" clip-path="url(#clip9_2014_2)">
+<g id="LiveTeX Math_10">
+<g id="Group_61">
+<g id="Group_62">
+<g id="Group_63">
+<g id="Group_64">
+<path id="Vector_31" d="M533.025 423.989V423.245H531.933V419.144C531.933 417.481 531.078 416.863 529.494 416.863C527.974 416.863 527.167 417.782 526.818 418.384H526.803V413L524 413.127V413.871C524.982 413.871 525.093 413.871 525.093 414.488V423.245H524V423.989L525.995 423.941L527.99 423.989V423.245H526.898V419.935C526.898 418.209 528.259 417.434 529.257 417.434C529.795 417.434 530.128 417.766 530.128 418.969V423.245H529.035V423.989L531.03 423.941L533.025 423.989Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_65">
+<path id="Vector_32" d="M535.249 422.838C535.305 422.838 535.372 422.793 535.428 422.714C535.764 422.211 536.223 421.964 536.805 421.964C537.197 421.964 537.499 422.188 537.7 422.647C537.824 422.949 537.891 423.408 537.891 424.024C537.891 424.729 537.801 425.222 537.633 425.513C537.353 425.972 536.973 426.207 536.491 426.207C535.741 426.207 535.148 425.67 534.947 425.088C534.98 425.099 535.003 425.088 535.047 425.088C535.383 425.088 535.663 424.83 535.663 424.494C535.663 424.147 535.383 423.912 535.047 423.912C534.656 423.912 534.488 424.125 534.488 424.539C534.488 425.659 535.394 426.61 536.514 426.61C537.197 426.61 537.779 426.364 538.249 425.871C538.719 425.379 538.954 424.785 538.954 424.103C538.954 423.453 538.764 422.893 538.383 422.412C537.969 421.886 537.454 421.629 536.827 421.629C536.301 421.629 535.842 421.796 535.473 422.132V420.14C535.775 420.229 536.066 420.274 536.368 420.274C536.883 420.274 537.331 420.151 537.712 419.893C538.059 419.681 538.294 419.468 538.428 419.266C538.495 419.177 538.529 419.11 538.529 419.076C538.529 418.964 538.473 418.908 538.361 418.908C537.745 419.143 537.219 419.266 536.794 419.266C536.29 419.266 535.809 419.166 535.35 418.953C535.294 418.931 535.249 418.919 535.204 418.919C535.103 418.919 535.047 419.02 535.047 419.233V422.502C535.047 422.737 535.047 422.838 535.249 422.838Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 104">
+<rect id="jepa-input-z1-box_12" x="516.5" y="445.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \mathbf{h}_{24}" clip-path="url(#clip10_2014_2)">
+<g id="LiveTeX Math_11">
+<g id="Group_66">
+<g id="Group_67">
+<g id="Group_68">
+<g id="Group_69">
+<path id="Vector_33" d="M532.026 461.99V461.246H530.934V457.144C530.934 455.481 530.079 454.864 528.495 454.864C526.975 454.864 526.167 455.782 525.819 456.384H525.803V451L523 451.127V451.871C523.982 451.871 524.093 451.871 524.093 452.488V461.246H523V461.99L524.995 461.942L526.991 461.99V461.246H525.898V457.936C525.898 456.21 527.26 455.434 528.257 455.434C528.796 455.434 529.128 455.767 529.128 456.97V461.246H528.036V461.99L530.031 461.942L532.026 461.99Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_70">
+<g id="Group_71">
+<path id="Vector_34" d="M535.582 456.909C535.011 456.909 534.53 457.111 534.116 457.514C533.702 457.917 533.489 458.387 533.489 458.958C533.489 459.339 533.769 459.618 534.116 459.618C534.452 459.618 534.732 459.327 534.732 458.991C534.732 458.622 534.463 458.364 534.105 458.364C534.071 458.364 534.049 458.364 534.026 458.376C534.239 457.827 534.732 457.346 535.437 457.346C536.355 457.346 536.87 458.141 536.87 459.103C536.87 459.854 536.489 460.66 535.728 461.511L533.623 463.884C533.478 464.052 533.489 464.041 533.489 464.365H537.643L537.967 462.35H537.598C537.508 462.921 537.43 463.246 537.363 463.347C537.307 463.403 536.971 463.425 536.355 463.425H534.485L535.571 462.361C536.333 461.645 537.295 460.872 537.62 460.279C537.844 459.887 537.956 459.495 537.956 459.103C537.956 457.782 536.926 456.909 535.582 456.909Z" fill="#26333F"/>
+<path id="Vector_35" d="M542.479 456.786C542.378 456.786 542.289 456.842 542.222 456.943L538.841 462.137V462.541H541.763V463.459C541.763 463.66 541.718 463.794 541.639 463.85C541.561 463.906 541.348 463.929 540.979 463.929H540.699V464.365C541.024 464.343 541.539 464.332 542.233 464.332C542.927 464.332 543.442 464.343 543.767 464.365V463.929H543.487C543.117 463.929 542.905 463.906 542.826 463.85C542.748 463.794 542.703 463.66 542.703 463.459V462.541H543.8V462.104H542.703V456.976C542.703 456.864 542.625 456.786 542.479 456.786ZM541.83 458.174V462.104H539.277L541.83 458.174Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g id="Group 110">
+<rect id="jepa-input-z1-box_13" x="461.5" y="445.5" width="31" height="21" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<g id="LaTeX: \hat{\mathbf{h}}_{24}" clip-path="url(#clip11_2014_2)">
+<g id="LiveTeX Math_12">
+<g id="Group_72">
+<g id="Group_73">
+<g id="Group_74">
+<g id="Group_75">
+<g id="Group_76">
+<g id="Group_77">
+<path id="Vector_36" d="M476.826 462.487V461.743H475.733V457.642C475.733 455.979 474.878 455.361 473.295 455.361C471.774 455.361 470.967 456.28 470.618 456.881H470.603V451.497L467.8 451.624V452.368C468.781 452.368 468.892 452.368 468.892 452.986V461.743H467.8V462.487L469.795 462.44L471.79 462.487V461.743H470.698V458.433C470.698 456.707 472.059 455.931 473.057 455.931C473.595 455.931 473.928 456.264 473.928 457.467V461.743H472.835V462.487L474.831 462.44L476.826 462.487Z" fill="#26333F"/>
+</g>
+</g>
+<g id="Group_78">
+<path id="Vector_37" d="M471.576 449.835L471.846 449.55L469.423 447L467 449.55L467.269 449.835L469.423 448.204L471.576 449.835Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+<g id="Group_79">
+<g id="Group_80">
+<path id="Vector_38" d="M480.382 457.406C479.811 457.406 479.33 457.608 478.915 458.011C478.501 458.414 478.288 458.884 478.288 459.455C478.288 459.836 478.568 460.115 478.915 460.115C479.251 460.115 479.531 459.824 479.531 459.488C479.531 459.119 479.262 458.862 478.904 458.862C478.871 458.862 478.848 458.862 478.826 458.873C479.038 458.324 479.531 457.843 480.236 457.843C481.154 457.843 481.669 458.638 481.669 459.6C481.669 460.351 481.289 461.157 480.527 462.008L478.423 464.381C478.277 464.549 478.288 464.538 478.288 464.862H482.442L482.767 462.847H482.397C482.308 463.418 482.229 463.743 482.162 463.844C482.106 463.9 481.77 463.922 481.154 463.922H479.285L480.371 462.858C481.132 462.142 482.095 461.369 482.42 460.776C482.643 460.384 482.755 459.992 482.755 459.6C482.755 458.279 481.725 457.406 480.382 457.406Z" fill="#26333F"/>
+<path id="Vector_39" d="M487.278 457.283C487.178 457.283 487.088 457.339 487.021 457.44L483.64 462.634V463.038H486.562V463.956C486.562 464.157 486.517 464.291 486.439 464.347C486.36 464.403 486.148 464.426 485.778 464.426H485.498V464.862C485.823 464.84 486.338 464.829 487.032 464.829C487.726 464.829 488.241 464.84 488.566 464.862V464.426H488.286C487.917 464.426 487.704 464.403 487.626 464.347C487.547 464.291 487.502 464.157 487.502 463.956V463.038H488.6V462.601H487.502V457.473C487.502 457.361 487.424 457.283 487.278 457.283ZM486.629 458.671V462.601H484.077L486.629 458.671Z" fill="#26333F"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<rect id="jepa-input-z2-box" x="387.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z2-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="394.845" y="131.591">z2</tspan></text>
+<rect id="jepa-input-z3-box" x="422.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z3-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="429.626" y="131.591">z3</tspan></text>
+<rect id="jepa-input-z4-box" x="457.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z4-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="464.558" y="131.591">z4</tspan></text>
+<rect id="jepa-input-z5-box" x="492.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z5-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="499.797" y="131.591">z5</tspan></text>
+<text id="input-ellipsis_4" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="529.192" y="131.727">...</tspan></text>
+<rect id="jepa-input-z24-box" x="545.5" y="117.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-input-z24-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="548.374" y="131.591">z24</tspan></text>
+<text id="split-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="345" y="160.727">Block masking</tspan></text>
+<rect id="jepa-context-z1-box" x="352.5" y="170.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-context-z1-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="360.829" y="184.591">z1</tspan></text>
+<rect id="jepa-target-z2-box" x="387.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<rect id="jepa-context-z3-box" x="492.5" y="170.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-context-z3-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="499.797" y="184.591">z5</tspan></text>
+<rect id="jepa-target-z4-box" x="457.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<rect id="jepa-target-z5-box" x="422.5" y="170.5" width="31" height="19" rx="2.5" fill="#FFF7F4" stroke="#C46A4A"/>
+<text id="input-ellipsis_5" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="529.192" y="184.727">...</tspan></text>
+<text id="input-ellipsis_6" transform="translate(465 453) rotate(-90)" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="10.1919" y="12.7273">...</tspan></text>
+<text id="input-ellipsis_7" transform="translate(520 453) rotate(-90)" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="10.1919" y="12.7273">...</tspan></text>
+<rect id="jepa-context-z24-box" x="545.5" y="170.5" width="31" height="19" rx="2.5" fill="#F5F3FA" stroke="#7B6EA8"/>
+<text id="jepa-context-z24-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="548.374" y="184.591">z24</tspan></text>
+<rect id="online-encoder" x="347.6" y="237.6" width="88.8" height="46.8" rx="3.4" fill="white" stroke="#7B6EA8" stroke-width="1.2"/>
+<text id="online-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="370.5" y="257.091">online&#10;</tspan><tspan x="363.062" y="273.091">encoder</tspan></text>
+<rect id="predictor-block" x="347.6" y="344.6" width="88.8" height="46.8" rx="3.4" fill="white" stroke="#7B6EA8" stroke-width="1.2"/>
+<text id="predictor-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="359.397" y="373.091">predictor</tspan></text>
+<rect id="target-encoder" x="486.6" y="237.6" width="88.8" height="46.8" rx="3.4" fill="white" stroke="#7B6EA8" stroke-width="1.2"/>
+<text id="target-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="509.698" y="258.091">target&#10;</tspan><tspan x="502.062" y="274.091">encoder</tspan></text>
+<text id="ema-label" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="445" y="277.091">EMA</tspan></text>
+<text id="loss-caption" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="383.208" y="494.727">MSE on masked valid hours</tspan></text>
+<path id="Vector_40" d="M440 258.45L480.5 258.45" stroke="#9AA7B3" stroke-width="1.6" stroke-dasharray="4 3"/>
+<path id="Vector_41" d="M478 263L478 254L484 258.5L478 263Z" fill="#9AA3AD"/>
+<g id="Group 91_2">
+<rect id="Rectangle_8" x="391" y="196" width="2" height="23.2" fill="#9AA3AD"/>
+<path id="Vector_42" d="M388 219.2H396L392 224L388 219.2Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 93_2">
+<rect id="Rectangle_9" x="391" y="196" width="2" height="23.2" fill="#9AA3AD"/>
+<path id="Vector_43" d="M388 219H396L392 225L388 219Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 96_2">
+<rect id="Rectangle_10" x="441" y="369" width="2" height="10" transform="rotate(-90 441 369)" fill="#9AA3AD"/>
+<path id="Vector_44" d="M451 372L451 364L457 368L451 372Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 94_2">
+<rect id="Rectangle_11" x="391" y="287" width="2" height="7" fill="#9AA3AD"/>
+<path id="Vector_45" d="M388 294H396L392 300L388 294Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 111">
+<rect id="Rectangle_12" x="531" y="287" width="2" height="14" fill="#9AA3AD"/>
+<path id="Vector_46" d="M528 301H536L532 307L528 301Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 95_2">
+<rect id="Rectangle_13" x="391" y="329" width="2" height="7" fill="#9AA3AD"/>
+<path id="Vector_47" d="M388 336H396L392 342L388 336Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 92_2">
+<path id="Rectangle_14" d="M577 127H596V197H532V219.2H530V195H594V129H577V127Z" fill="#9AA3AD"/>
+<path id="Vector_48" d="M527 219H535L531 225L527 219Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 83_2">
+<rect id="input-lab-box_25" x="356.5" y="305.5" width="15" height="19" rx="2.5" fill="#EBE7F6" stroke="#7B6EA8"/>
+</g>
+<g id="Group 84_2">
+<rect id="input-lab-box_26" x="377.5" y="305.5" width="15" height="19" rx="2.5" fill="#EBE7F6" stroke="#7B6EA8"/>
+</g>
+<g id="Group 85_2">
+<rect id="input-lab-box_27" x="412.5" y="305.5" width="15" height="19" rx="2.5" fill="#EBE7F6" stroke="#7B6EA8"/>
+</g>
+<text id="input-ellipsis_8" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="397.192" y="320.727">...</tspan></text>
+<rect id="Rectangle_15" x="494" y="347" width="2" height="21" transform="rotate(-90 494 347)" fill="#9AA3AD"/>
+<rect id="Rectangle_16" x="494" y="395" width="2" height="21" transform="rotate(-90 494 395)" fill="#9AA3AD"/>
+<rect id="Rectangle_17" x="494" y="372" width="2" height="21" transform="rotate(-90 494 372)" fill="#9AA3AD"/>
+<text id="negative-label" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="343" y="215.091">visible</tspan></text>
+<text id="negative-label_2" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="505" y="215.091">full</tspan></text>
+<g id="Group 55_2">
+<rect id="Rectangle_18" x="463" y="147" width="2" height="8" fill="#9AA3AD"/>
+<path id="Vector_49" d="M460 155H468L464 161L460 155Z" fill="#9AA3AD"/>
+</g>
+</g>
+<g id="contrastive-objective">
+<rect x="646.55" y="0.55" width="289.9" height="518.9" rx="5.45" fill="white"/>
+<rect x="646.55" y="0.55" width="289.9" height="518.9" rx="5.45" stroke="#D7DEE6" stroke-width="1.1"/>
+<text id="title_3" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="18" font-weight="bold" letter-spacing="0px"><tspan x="668" y="39.0455">Contrastive</tspan></text>
+<text id="subtitle_3" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="668" y="62.0909">align augmented views</tspan></text>
+<rect id="header-rule_3" x="668" y="75" width="247" height="1" fill="#D7DEE6"/>
+<g id="input-label_5">
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="668" y="104.727">Input tokens </tspan></text>
+<text fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" letter-spacing="0px"><tspan x="750.494" y="104.727">(missingness included)</tspan></text>
+</g>
+<rect id="contrast-input-z1-box" x="675.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z1-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="683.829" y="131.591">z1</tspan></text>
+<rect id="contrast-input-z2-box" x="710.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z2-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="717.845" y="131.591">z2</tspan></text>
+<rect id="contrast-input-z3-box" x="745.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z3-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="752.626" y="131.591">z3</tspan></text>
+<rect id="contrast-input-z4-box" x="780.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z4-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="787.558" y="131.591">z4</tspan></text>
+<rect id="contrast-input-z5-box" x="815.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z5-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="822.797" y="131.591">z5</tspan></text>
+<text id="input-ellipsis_9" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="852.192" y="131.727">...</tspan></text>
+<rect id="contrast-input-z24-box" x="868.5" y="117.5" width="31" height="19" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<text id="contrast-input-z24-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="500" letter-spacing="0px"><tspan x="871.374" y="131.591">z24</tspan></text>
+<text id="views-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="668" y="160.727">Two complementary masked views</tspan></text>
+<text id="view1-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="668" y="183.727">view 1</tspan></text>
+<text id="view2-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="668" y="206.727">view 2</tspan></text>
+<rect id="view1-0" x="730.5" y="170.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view2-0" x="730.5" y="193.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view1-1" x="752.5" y="170.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view2-1" x="752.5" y="193.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view1-2" x="774.5" y="170.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view2-2" x="774.5" y="193.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view1-3" x="796.5" y="170.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view2-3" x="796.5" y="193.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view1-4" x="818.5" y="170.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view2-4" x="818.5" y="193.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view1-5" x="840.5" y="170.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view2-5" x="840.5" y="193.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view1-6" x="862.5" y="170.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<rect id="view2-6" x="862.5" y="193.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view1-7" x="884.5" y="170.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+<rect id="view2-7" x="884.5" y="193.5" width="17" height="15" rx="2.5" fill="white" stroke="#D7DEE6"/>
+<g id="Group 112">
+<rect id="shared-encoder" x="694.6" y="233.6" width="193.8" height="30.8" rx="3.4" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<text id="encoder-label_3" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="730.366" y="254.091">Common Encoder</tspan></text>
+</g>
+<text id="pool-left-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="776.22" y="316.091">pool</tspan></text>
+<text id="projection-left-label" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="754.186" y="348.091">projections</tspan></text>
+<text id="z1-label-flow" fill="#5A9A78" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="720.646" y="368.091">p1</tspan></text>
+<text id="z2-label-flow" fill="#5A9A78" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="846.661" y="368.091">p2</tspan></text>
+<rect id="embed-neg-0" x="683" y="420.162" width="12" height="12" rx="6" fill="#B8C2CC"/>
+<rect id="embed-z1" x="750" y="403" width="12" height="12" rx="6" fill="#5A9A78"/>
+<rect id="embed-z2" x="807" y="399" width="12" height="12" rx="6" fill="#5A9A78"/>
+<rect id="embed-neg-2" x="817" y="460.162" width="11" height="12" rx="5.5" fill="#B8C2CC"/>
+<rect id="embed-neg-3" x="736" y="449.162" width="12" height="11" rx="5.5" fill="#B8C2CC"/>
+<text id="pull-pair-label" fill="#5A9A78" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="762" y="426.091">pull pair</tspan></text>
+<text id="pull-pair-label_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="842" y="423.091">move&#10;</tspan><tspan x="842" y="441.091">negatives&#10;</tspan><tspan x="842" y="459.091">away</tspan></text>
+<g id="Group 126">
+<rect id="Rectangle_19" x="761.724" y="409.689" width="2.59459" height="5.00839" transform="rotate(-91.2736 761.724 409.689)" fill="#9AA3AD"/>
+</g>
+<path id="Vector_50" d="M765.138 412.91L764.974 403.362L772.839 408.002L765.138 412.91Z" fill="#9AA3AD"/>
+<text id="loss-caption_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="698.382" y="495.727">NT-Xent with batch negatives</tspan></text>
+<text id="loss-caption_3" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="668.208" y="390.727">Embedding space:</tspan></text>
+<g id="Group 94_3">
+<rect id="Rectangle_20" x="792" y="215" width="2" height="10" fill="#9AA3AD"/>
+<path id="Vector_51" d="M789 225H797L793 231L789 225Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 127">
+<rect id="Rectangle_21" x="728" y="265" width="2" height="10" fill="#9AA3AD"/>
+<path id="Vector_52" d="M725 275H733L729 281L725 275Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 128">
+<rect id="Rectangle_22" x="854" y="265" width="2" height="10" fill="#9AA3AD"/>
+<path id="Vector_53" d="M851 275H859L855 281L851 275Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 121">
+<rect id="Rectangle_23" x="749.522" y="426.528" width="2.59459" height="12.973" transform="rotate(15.9332 749.522 426.528)" fill="#9AA3AD"/>
+<path id="Vector_54" d="M742.218 437.934L752.198 440.783L745.071 446.843L742.218 437.934Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 123">
+<rect id="Rectangle_24" x="817.907" y="437.641" width="2.59459" height="12.973" transform="rotate(-4.47171 817.907 437.641)" fill="#9AA3AD"/>
+<path id="Vector_55" d="M815.038 450.878L825.385 450.069L820.819 458.233L815.038 450.878Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 122">
+<rect id="Rectangle_25" x="717.916" y="414.69" width="2.59459" height="12.973" transform="rotate(71.443 717.916 414.69)" fill="#9AA3AD"/>
+<path id="Vector_56" d="M704.379 415.129L707.682 424.968L698.651 422.525L704.379 415.129Z" fill="#9AA3AD"/>
+</g>
+<g id="Group 118">
+<g id="Group 116">
+<rect id="Rectangle_26" x="728" y="312" width="2" height="14" fill="#9AA3AD"/>
+<rect id="Rectangle_27" x="691" y="307" width="2" height="6" fill="#9AA3AD"/>
+<rect id="Rectangle_28" x="763" y="307" width="2" height="6" fill="#9AA3AD"/>
+<rect id="Rectangle_29" x="691" y="313" width="2" height="74" transform="rotate(-90 691 313)" fill="#9AA3AD"/>
+<path id="Vector_57" d="M725 326H733L729 332L725 326Z" fill="#9AA3AD"/>
+</g>
+</g>
+<g id="Group 119">
+<g id="Group 116_2">
+<rect id="Rectangle_30" x="854" y="312" width="2" height="14" fill="#9AA3AD"/>
+<rect id="Rectangle_31" x="817" y="307" width="2" height="6" fill="#9AA3AD"/>
+<rect id="Rectangle_32" x="889" y="307" width="2" height="6" fill="#9AA3AD"/>
+<rect id="Rectangle_33" x="817" y="313" width="2" height="74" transform="rotate(-90 817 313)" fill="#9AA3AD"/>
+<path id="Vector_58" d="M851 326H859L855 332L851 326Z" fill="#9AA3AD"/>
+</g>
+</g>
+<g id="Group 83_3">
+<rect id="input-lab-box_28" x="691.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 113">
+<rect id="input-lab-box_29" x="817.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 84_3">
+<rect id="input-lab-box_30" x="712.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 117">
+<rect id="input-lab-box_31" x="720.5" y="335.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 120">
+<rect id="input-lab-box_32" x="846.5" y="335.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 114">
+<rect id="input-lab-box_33" x="838.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 85_3">
+<rect id="input-lab-box_34" x="747.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<g id="Group 115">
+<rect id="input-lab-box_35" x="873.5" y="288.5" width="17" height="15" rx="2.5" fill="#EDF7F1" stroke="#5A9A78"/>
+</g>
+<text id="input-ellipsis_10" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="733.192" y="300.727">...</tspan></text>
+<text id="input-ellipsis_11" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="859.192" y="300.727">...</tspan></text>
+<g id="Group 125">
+<rect id="Rectangle_34" x="805.496" y="405.413" width="2.59459" height="5.00839" transform="rotate(85 805.496 405.413)" fill="#9AA3AD"/>
+</g>
+<path id="Vector_59" d="M801.88 402.421L802.664 411.938L794.514 407.819L801.88 402.421Z" fill="#9AA3AD"/>
+</g>
+<text id="input-ellipsis_12" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="206.192" y="185.727">...</tspan></text>
+<text id="input-ellipsis_13" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="155.192" y="226.727">...</tspan></text>
+<text id="input-ellipsis_14" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-weight="bold" letter-spacing="0px"><tspan x="155.192" y="322.727">...</tspan></text>
+</g>
+<defs>
+<clipPath id="clip0_2014_2">
+<rect width="14.6184" height="13.3639" fill="white" transform="translate(524 317)"/>
+</clipPath>
+<clipPath id="clip1_2014_2">
+<rect width="15.418" height="17.8607" fill="white" transform="translate(469 313)"/>
+</clipPath>
+<clipPath id="clip2_2014_2">
+<rect width="14.9655" height="13.3639" fill="white" transform="translate(524 341)"/>
+</clipPath>
+<clipPath id="clip3_2014_2">
+<rect width="15.7651" height="17.8607" fill="white" transform="translate(469 337)"/>
+</clipPath>
+<clipPath id="clip4_2014_2">
+<rect width="15.8434" height="18.1069" fill="white" transform="translate(469 361)"/>
+</clipPath>
+<clipPath id="clip5_2014_2">
+<rect width="16.0002" height="17.8607" fill="white" transform="translate(469 385)"/>
+</clipPath>
+<clipPath id="clip6_2014_2">
+<rect width="15.0438" height="13.6101" fill="white" transform="translate(524 365)"/>
+</clipPath>
+<clipPath id="clip7_2014_2">
+<rect width="15.7538" height="18.1069" fill="white" transform="translate(469 409)"/>
+</clipPath>
+<clipPath id="clip8_2014_2">
+<rect width="15.2005" height="13.3639" fill="white" transform="translate(524 389)"/>
+</clipPath>
+<clipPath id="clip9_2014_2">
+<rect width="14.9543" height="13.6101" fill="white" transform="translate(524 413)"/>
+</clipPath>
+<clipPath id="clip10_2014_2">
+<rect width="20.8003" height="13.3654" fill="white" transform="translate(523 451)"/>
+</clipPath>
+<clipPath id="clip11_2014_2">
+<rect width="21.5996" height="17.8624" fill="white" transform="translate(467 447)"/>
+</clipPath>
+</defs>
+</svg>

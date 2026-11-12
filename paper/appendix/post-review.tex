@@ -1,0 +1,68 @@
+\section{Post-Review Diagnostics}
+\label{app:post-review}
+
+The analyses in this section were run after review, to answer reviewer questions. They are stored separately from the archived results, with their scripts and checksums, in \texttt{results/ml4h-rebuttal-v1/}. \texttt{render\_rebuttal.py} regenerates their tables from those aggregates.
+
+\subsection{Converged and Loss-Matched Probes}
+\label{app:converged}
+
+The classification probe is an L2-regularized logistic regression fitted with L-BFGS to convergence, with the reference square-root-balanced class weights and 17 log-spaced regularization strengths selected on validation AUPRC. The absolute-error LOS probe uses a Huber loss with a .01-day threshold and is selected on validation absolute error. The ridge probe is selected on validation squared error. Each selected probe scores the test set once. Embeddings come from the archived final-epoch encoders, whose SHA256 digests match the encoder audit in 45/45 cases. Training rows, positives, and test rows match the archived results in every cell. In three checked cells, cached embeddings match the benchmark forward pass to within $9.5\times10^{-7}$. Embeddings are standardized with training statistics. The converged classification probe differs from the capped probe in optimizer (L-BFGS to convergence instead of AdamW for at most 50 epochs), regularization (tuned L2 instead of fixed weight decay), input scaling, and label smoothing (none instead of .1). Class weights are the same. All logistic, ridge, and Huber fits met their convergence criterion. No selected strength lies at the strongest end of its grid, and the selections at the weakest end (6/135 logistic, 15/45 ridge, 21/45 Huber) lie on a flat part of the regularization path.
+
+\tableref{tab:converged-probe} gives the converged-probe results with seed variation and paired advantages. AUROC means and objective rankings for both probes are in \texttt{p1\_objective\_ranking.csv}.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:converged-probe}
+  {\caption{Converged frozen probe. Test AUPRC, mean (sample SD) over five seeds, on the same frozen embeddings as the capped probe. $\Delta$ is the mean paired difference between \MAE{} and the stronger alternative, for the converged (conv.) and capped (cap.) probe. Bold marks the highest mean.}}
+  {\scriptsize
+  \input{generated/converged-probe.tex}}
+\end{table*}
+
+Rerunning the capped recipe on fixed embeddings with five head-initialization seeds shows that its result is not a stable function of the embedding for 24-hour mortality and LOS, where early stopping on a noisy validation metric decides the outcome. \tableref{tab:los-reference} gives the capped-probe LOS results that \tableref{tab:los} replaces. The Huber probe uses a fixed .01-day threshold rather than an exact absolute-error loss.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:los-reference}
+  {\caption{Capped-probe LOS results from the archived results, superseded for probing by \tableref{tab:los}. Absolute error in days, mean (sample SD), $n=5$. Probes train with squared error for at most 50 epochs and are selected on validation absolute error. The constant predicts each seed's training-label median. Duplicate logs are collapsed by dataset and seed. Bold marks the lowest model mean within a protocol.}}
+  {\scriptsize
+  \input{generated/los.tex}}
+\end{table*}
+
+\subsection{Combined Results by Source Database}
+\label{app:per-source}
+
+\tableref{tab:per-source} scores the \Combined{}-regime models separately on the \MIMIC{} and \EICU{} portions of the \Combined{} test split. Probe columns use the converged probe. Fine-tune and supervised columns rerun test inference on the archived reference checkpoints, after verifying their SHA256 digests. Pooled metrics from this inference reproduce the archived results to within $2.4\times10^{-5}$. Prevalence differs between portions, so AUPRC should be compared within a portion. AUROC, which is higher on the \MIMIC{} portion in all 30 objective--protocol--task cells, is in the two \texttt{p3\_*\_per\_source\_aggregated.csv} files. For LOS, the converged absolute-error probe puts \MAE{} first on the \EICU{} portion and last on the \MIMIC{} portion, within .021 days there. Fine-tuned \MAE{} has the lowest LOS error on both portions.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:per-source}
+  {\caption{\Combined{}-regime models scored separately on the two source portions of the \Combined{} test split. Means over five seeds. Classification uses AUPRC. LOS uses absolute error in days, with the Huber probe in the probe columns. Prev.\ is the mean test prevalence of the portion. Bold marks the best mean within each protocol.}}
+  {\scriptsize
+  \input{generated/per-source.tex}}
+\end{table*}
+
+\subsection{Compute}
+\label{app:compute}
+
+All 45 core pretraining runs completed the 100-epoch schedule at batch size 256 in fp32 on one NVIDIA L4. The reference runs shared the GPU, about four at a time, so their wall-clock times in \tableref{tab:compute} are not exclusive GPU time. One \MAE{} \MIMIC{} run that ran nearly alone took 0.92 hours, against about 2.25 hours for each of the four that ran concurrently. We therefore also timed each objective alone on an idle L4 of the same machine type, with the reference configuration on real \MIMIC{} batches, 20 warm-up steps, and 300 timed training steps. Projected hours cover training steps only, without validation or checkpointing. Step time did not depend on the database and changed by at most 3\% with eight data-loader workers. In a monitored repeat, GPU utilization peaked at 13--21\% (typically 10--18\%) while one host CPU core was saturated, so wall time does not follow FLOPs. The cost order depends on the measure. FLOPs and shared-GPU wall-clock rank \MAE{} $<$ contrastive $<$ \JEPA{}, while the idle GPU ranks contrastive $<$ \MAE{} $<$ \JEPA{}. Dividing each run's shared wall-clock time by its mean number of concurrent runs gives about 55 L4-hours for the 45 runs. Projecting the idle-GPU step times onto their optimizer steps gives about 63 hours of training steps alone. Under an equal-FLOPs budget, \JEPA{} would receive about 45 \MAE{}-equivalent epochs and contrastive learning about 76. In the checkpoint diagnostic, early \JEPA{} checkpoints of the 100-epoch schedule probed worse, but a shorter full schedule was not tested, nor was longer contrastive training.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:compute}
+  {\caption{Pretraining cost per objective. FLOPs are forward FLOPs per sample. Wall-clock hours are W\&B runtimes on a shared L4, mean (sample SD) over five seeds. Idle-GPU columns time training steps alone on an idle L4 and project them to the 100-epoch schedule. The \JEPA{} EMA target copy is not trainable.}}
+  {\scriptsize
+  \input{generated/compute.tex}}
+\end{table*}
+
+\subsection{Reproduction with the Maintained Framework}
+\label{app:reproduction}
+
+The reference runs used the historical implementation. We reran a \MIMIC{} slice with the maintained repository code, starting from the processed tensors (\tableref{tab:reproduction}). Training configurations equal the reference apart from data path, data-loader workers, and device. Downstream runs from the archived reference encoders (seed 42) isolate the downstream code. Full-pipeline runs (seeds 42 and 123) also retrain the encoders. All six pretraining runs completed the 100-epoch schedule with the reference number of optimizer steps, and their final validation losses lie within 0.63 across-seed SDs of the reference. The reruns used a laptop CPU, while the reference used an L4. CPU and GPU draw different random streams for masks and dropout, so a rerun with the same seed is a different realization of the same configuration. The archived-encoder probes are deterministic and match to within $7.6\times10^{-6}$. In the full pipeline, the objective order differs from the reference in three fine-tuning cells whose five-seed reference means are near-ties. LOS fine-tuning error is higher than the reference in all nine comparisons. Twenty of the 24 seed-123 reference downstream runs, and 37 of the 420 core downstream runs overall, had been resumed from their last checkpoint after an interruption, while the reruns ran uninterrupted. This slice cannot separate chance, resumption, and a small CPU-versus-GPU effect.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:reproduction}
+  {\caption{Maintained-framework reruns against the same-seed reference runs on \MIMIC{}. $|\Delta|$ is the absolute difference in the test metric. SD columns count runs whose primary-metric difference lies within one or two reference across-seed SDs of the same objective, task, and protocol.}}
+  {\scriptsize
+  \input{generated/reproduction.tex}}
+\end{table*}

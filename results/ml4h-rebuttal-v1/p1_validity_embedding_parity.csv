@@ -1,0 +1,10 @@
+paradigm,dataset,seed,task,split,n_rows_compared,max_abs_diff,embedding_abs_mean,stay_id_order_match,label_match,split_size_match
+mae,miiv,42,aki_kdigo,test,8366,4.76837158203125e-07,0.659645676612854,True,True,True
+mae,miiv,42,aki_kdigo,val,1280,4.76837158203125e-07,0.6594095230102539,True,True,True
+mae,miiv,42,aki_kdigo,train,39686,,,True,True,True
+jepa,eicu,123,mortality_24h,test,19636,9.5367431640625e-07,0.8477822542190552,True,True,True
+jepa,eicu,123,mortality_24h,val,1280,4.76837158203125e-07,0.8464372754096985,True,True,True
+jepa,eicu,123,mortality_24h,train,92078,,,True,True,True
+contrastive,combined,456,los_remaining,test,31193,4.76837158203125e-07,0.49997010827064514,True,True,True
+contrastive,combined,456,los_remaining,val,1280,3.5762786865234375e-07,0.49480217695236206,True,True,True
+contrastive,combined,456,los_remaining,train,145027,,,True,True,True

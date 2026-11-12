@@ -1,0 +1,83 @@
+{
+  "format": "SLICES manual vector sources and print exports v2",
+  "conversion": "Typst 0.14.2, document date omitted. Revised sources use bundled Inter 3.19 at 6.5 inches. Original data/encoder sources use Arial fallback.",
+  "sources": "Native revised vector exports for overview, SSL objectives, and protocols. Data-pipeline and encoder sources unchanged.",
+  "files": {
+    "fig01-benchmark-overview.pdf": {
+      "sha256": "ce4062dabe624b407f261050b94f530d90c6269192ca80d5a97bcb264f9d6fad",
+      "bytes": 52907
+    },
+    "fig01-benchmark-overview.svg": {
+      "sha256": "831fe94d4543e8882d33719c7e7a37e6c46fbcd4010268096922221602feec8c",
+      "bytes": 93598
+    },
+    "fig02-data-pipeline.pdf": {
+      "sha256": "a7de334f54de5f21e7d63d539db97c110b1e522d900bd5ef4e90c2c05c016266",
+      "bytes": 204280
+    },
+    "fig02-data-pipeline.svg": {
+      "sha256": "9deb90ee57c4311f8807a7ae0df3d89df727faae1a108a141466bf8e9d5b4294",
+      "bytes": 514656
+    },
+    "fig03-encoder-tokenization.pdf": {
+      "sha256": "06c82e868dadedf7e779986edc2c5915463cd6960b42a826f6f97282c931e5c6",
+      "bytes": 166468
+    },
+    "fig03-encoder-tokenization.svg": {
+      "sha256": "abe5c1f0d5ecaad595986636ac972241899a05261f891977e83db4e9d04841cd",
+      "bytes": 414909
+    },
+    "fig04-ssl-objectives.pdf": {
+      "sha256": "6d9df4307cbe77ad10ba9e4dd75ca65b2e928e4c69860767287f0096bf4265d2",
+      "bytes": 39051
+    },
+    "fig04-ssl-objectives.svg": {
+      "sha256": "3f7df78e84736af28825363181c6561b0f3cd7b395c7886a987221b6c758ecb0",
+      "bytes": 61944
+    },
+    "fig05-protocol-ab.pdf": {
+      "sha256": "e4ada4c97a70e79f48f5e611460eb4fcfeef94d55a101368382cdb53266a3b86",
+      "bytes": 28276
+    },
+    "fig05-protocol-ab.svg": {
+      "sha256": "5960c2f6c7964d6ea0a8b5be5495d1aa53c6e4c9aa1d6a3303fa3dffc5b46c77",
+      "bytes": 18516
+    }
+  },
+  "figma_converted_stems": [
+    "fig01-benchmark-overview",
+    "fig04-ssl-objectives",
+    "fig05-protocol-ab"
+  ],
+  "protocol_pdf_note": "Only the PDF conversion substitutes the stop-gradient text with its exact native outline because Inter 3.19 lacks U+2207. Editable SVG source remains intact.",
+  "conversion_files": {
+    "figma-conversion/convert-svg.typ": {
+      "sha256": "1244654f4a1c1bc0bddaa84a2fc4a21b2a049d4b291853eef1199b113525d75c",
+      "bytes": 317
+    },
+    "figma-conversion/fonts/Inter-Bold.otf": {
+      "sha256": "1e9dfd6a6e33ac63a8fe3b4ed7ae0df9eac2d0b25e444e8e7daef4ac77943fc1",
+      "bytes": 271436
+    },
+    "figma-conversion/fonts/Inter-Italic.otf": {
+      "sha256": "45ecfe6cbadfd4803de6214e02c336a95163a7703973bc8a5ce7ac2d174ecaf7",
+      "bytes": 271400
+    },
+    "figma-conversion/fonts/Inter-Medium.otf": {
+      "sha256": "99dab2bdcb613c4c8264000a94351d1227f74dc95a86d1249493aeee0c0179c4",
+      "bytes": 269692
+    },
+    "figma-conversion/fonts/Inter-Regular.otf": {
+      "sha256": "a7e791e8f5a0fb02b65663f7fca73e1d1ca9543f772ad480cbd76f4e3fe3f8cc",
+      "bytes": 258992
+    },
+    "figma-conversion/fonts/LICENSE.txt": {
+      "sha256": "4d7d9c95e7d7f2f0ebf76d5e0b344826b74e903a34028ee18ab54bb639e45906",
+      "bytes": 4426
+    },
+    "figma-conversion/stop-gradient-native-path.svg": {
+      "sha256": "2433cfa24b60213160a1d8ec499d657c031e224e0c32699de26edb06b3b3bbea",
+      "bytes": 4706
+    }
+  }
+}

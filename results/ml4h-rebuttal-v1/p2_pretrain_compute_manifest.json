@@ -1,0 +1,10 @@
+{
+ "access": "read-only public API (wandb.Api().runs)",
+ "caveat": "runtime_sec is W&B _runtime on a single shared L4 GPU with many concurrent runs; it is not exclusive GPU time.",
+ "experiment_class": "core_ssl_benchmark",
+ "n_pretrain_runs": 45,
+ "n_runs_used_for_concurrency": 2455,
+ "revision": "thesis-v1",
+ "source": "wandb:hannes-ill/slices-final",
+ "timestamp_utc": "2026-10-06T21:18:57.148006+00:00"
+}

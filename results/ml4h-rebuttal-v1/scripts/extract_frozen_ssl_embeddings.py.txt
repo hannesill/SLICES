@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Cache frozen SSL-encoder embeddings for the ML4H rebuttal converged probe.
+
+For each archived core SSL encoder (final-epoch ``encoder.pt``), this script
+builds the benchmark's own ``FineTuneModule`` in linear-probe configuration,
+runs the frozen encoder exactly as the downstream probe does (obs-aware
+tokenisation, valid-timestep padding mask, mean pooling, eval mode) and stores
+one pooled embedding per ICU stay of the matching dataset.
+
+Embeddings are computed for the full cohort of a dataset under the seed's
+train-split normalisation. Because the encoder is frozen, in eval mode and
+processes stays independently, an embedding does not depend on the downstream
+task. Task-specific label filtering and split membership are applied later by
+``run_converged_frozen_probe.py`` through ``compute_patient_level_splits``.
+
+Diagnostic-only: reads the frozen encoder archive and processed data, writes
+only under ``outputs/`` and never touches the frozen thesis result export.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+import hydra
+import numpy as np
+import torch
+from omegaconf import DictConfig, OmegaConf
+
+from slices.data.datamodule import ICUDataModule
+from slices.training import FineTuneModule
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT_ROOT = Path("outputs/ml4h-rebuttal/embeddings")
+DEFAULT_DATASETS = ("miiv", "eicu", "combined")
+DEFAULT_PARADIGMS = ("mae", "jepa", "contrastive")
+DEFAULT_SEEDS = (42, 123, 456, 789, 1011)
+EMBEDDING_SCHEMA_VERSION = "ml4h-rebuttal-embeddings-v1"
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "--encoder-archive",
+        type=Path,
+        required=True,
+        help="Directory holding pretrain_{paradigm}_{dataset}_seed{seed}/encoder.pt.",
+    )
+    parser.add_argument(
+        "--processed-root",
+        type=Path,
+        required=True,
+        help="Directory holding {dataset}/ processed parquet folders.",
+    )
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--datasets", nargs="+", default=list(DEFAULT_DATASETS))
+    parser.add_argument("--paradigms", nargs="+", default=list(DEFAULT_PARADIGMS))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
+    parser.add_argument("--device", default="cpu", choices=("cpu", "mps", "cuda"))
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1024,
+        help="Inference batch size. Frozen eval-mode embeddings do not depend on it.",
+    )
+    parser.add_argument("--encoder-file", default="encoder.pt")
+    parser.add_argument("--skip-existing", action="store_true")
+    return parser.parse_args(argv)
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def encoder_path(archive: Path, paradigm: str, dataset: str, seed: int, filename: str) -> Path:
+    return archive / f"pretrain_{paradigm}_{dataset}_seed{seed}" / filename
+
+
+def embedding_path(output_root: Path, paradigm: str, dataset: str, seed: int) -> Path:
+    return output_root / dataset / f"seed{seed}" / f"{paradigm}.npz"
+
+
+def compose_probe_cfg(
+    *,
+    dataset: str,
+    seed: int,
+    task: str,
+    processed_dir: Path,
+    checkpoint: Path | None,
+    extra_overrides: Sequence[str] = (),
+) -> DictConfig:
+    """Compose the benchmark linear-probe config used for frozen-encoder runs."""
+    overrides = [
+        f"dataset={dataset}",
+        f"tasks={task}",
+        f"seed={seed}",
+        "protocol=linear_probe",
+        f"data.processed_dir={processed_dir.as_posix()}",
+        "label_fraction=1.0",
+        "logging.use_wandb=false",
+        "output_dir=outputs/ml4h-rebuttal/_unused",
+        "checkpoint_dir=outputs/ml4h-rebuttal/_unused/checkpoints",
+        *extra_overrides,
+    ]
+    if checkpoint is not None:
+        overrides.append(f"checkpoint={checkpoint.as_posix()}")
+    with hydra.initialize_config_dir(config_dir=str(REPO_ROOT / "configs"), version_base=None):
+        return hydra.compose(config_name="finetune", overrides=overrides)
+
+
+def build_frozen_probe_module(
+    cfg: DictConfig,
+    *,
+    feature_dim: int,
+    seq_length: int,
+    checkpoint: Path,
+) -> FineTuneModule:
+    """Instantiate the benchmark FineTuneModule the way finetune.py does."""
+    OmegaConf.set_struct(cfg, False)
+    cfg.encoder.d_input = feature_dim
+    cfg.encoder.max_seq_length = seq_length
+    # Class weights only affect the loss, never the frozen encoder forward pass.
+    cfg.training.class_weight = None
+    OmegaConf.set_struct(cfg, True)
+    model = FineTuneModule(config=cfg, checkpoint_path=str(checkpoint))
+    model.eval()
+    return model
+
+
+@torch.inference_mode()
+def embed_tensors(
+    model: FineTuneModule,
+    timeseries: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    device: torch.device,
+    batch_size: int,
+) -> np.ndarray:
+    """Run the frozen encoder + pooling used by the downstream probe head."""
+    model.encoder.to(device)
+    model.encoder.eval()
+    chunks: list[torch.Tensor] = []
+    for start in range(0, timeseries.shape[0], batch_size):
+        ts = timeseries[start : start + batch_size].to(device)
+        obs = mask[start : start + batch_size].to(device)
+        padding_mask = model._downstream_padding_mask(obs)
+        encoded = model.encoder(ts, mask=obs, padding_mask=padding_mask)
+        if model.projection is not None:
+            encoded = model.projection(encoded)
+        chunks.append(encoded.detach().float().cpu())
+    return torch.cat(chunks, dim=0).numpy()
+
+
+def extract_dataset_seed(args: argparse.Namespace, dataset: str, seed: int) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    pending = []
+    for paradigm in args.paradigms:
+        out_path = REPO_ROOT / embedding_path(args.output_root, paradigm, dataset, seed)
+        if args.skip_existing and out_path.exists():
+            print(f"SKIP existing: {out_path}", flush=True)
+            continue
+        pending.append((paradigm, out_path))
+    if not pending:
+        return records
+
+    processed_dir = (args.processed_root / dataset).resolve()
+    start = time.perf_counter()
+    datamodule = ICUDataModule(
+        processed_dir=processed_dir,
+        task_name=None,
+        batch_size=args.batch_size,
+        num_workers=0,
+        seed=seed,
+    )
+    datamodule.setup()
+    dataset_obj = datamodule.dataset
+    assert dataset_obj is not None
+    timeseries = dataset_obj._timeseries_tensor
+    mask = dataset_obj._mask_tensor
+    stay_ids = np.asarray(dataset_obj.stay_ids, dtype=np.int64)
+    setup_sec = time.perf_counter() - start
+    device = torch.device(args.device)
+
+    for paradigm, out_path in pending:
+        ckpt = encoder_path(args.encoder_archive, paradigm, dataset, seed, args.encoder_file)
+        if not ckpt.exists():
+            raise FileNotFoundError(f"Missing encoder checkpoint: {ckpt}")
+        cfg = compose_probe_cfg(
+            dataset=dataset,
+            seed=seed,
+            task="mortality_24h",
+            processed_dir=processed_dir,
+            checkpoint=ckpt,
+        )
+        model = build_frozen_probe_module(
+            cfg,
+            feature_dim=datamodule.get_feature_dim(),
+            seq_length=datamodule.get_seq_length(),
+            checkpoint=ckpt,
+        )
+        embed_start = time.perf_counter()
+        embeddings = embed_tensors(
+            model, timeseries, mask, device=device, batch_size=args.batch_size
+        )
+        embed_sec = time.perf_counter() - embed_start
+        if not np.isfinite(embeddings).all():
+            raise RuntimeError(f"Non-finite embeddings for {paradigm}/{dataset}/seed{seed}")
+
+        metadata = {
+            "schema_version": EMBEDDING_SCHEMA_VERSION,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "paradigm": paradigm,
+            "dataset": dataset,
+            "seed": seed,
+            "encoder_file": args.encoder_file,
+            "encoder_sha256": file_sha256(ckpt),
+            "encoder_pooling": str(model.encoder.config.pooling),
+            "encoder_obs_aware": bool(model.encoder.config.obs_aware),
+            "embedding_dim": int(embeddings.shape[1]),
+            "n_stays": int(embeddings.shape[0]),
+            "feature_dim": int(datamodule.get_feature_dim()),
+            "seq_length": int(datamodule.get_seq_length()),
+            "normalization_train_stays": int(len(datamodule.normalization_train_indices)),
+            "device": args.device,
+            "embed_sec": embed_sec,
+            "datamodule_setup_sec": setup_sec,
+        }
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = out_path.with_suffix(".tmp.npz")
+        np.savez(
+            tmp_path,
+            embeddings=embeddings.astype(np.float32),
+            stay_ids=stay_ids,
+            metadata=np.asarray(json.dumps(metadata, sort_keys=True)),
+        )
+        tmp_path.replace(out_path)
+        print(
+            f"WROTE {out_path.relative_to(REPO_ROOT)} n={embeddings.shape[0]} "
+            f"dim={embeddings.shape[1]} embed_sec={embed_sec:.1f}",
+            flush=True,
+        )
+        records.append(metadata)
+    return records
+
+
+def load_embeddings(path: Path) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Load a cached embedding file written by this script."""
+    with np.load(path, allow_pickle=False) as payload:
+        embeddings = payload["embeddings"]
+        stay_ids = payload["stay_ids"]
+        metadata = json.loads(str(payload["metadata"]))
+    return embeddings, stay_ids, metadata
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    args.encoder_archive = args.encoder_archive.resolve()
+    args.processed_root = args.processed_root.resolve()
+    total = 0
+    for dataset in args.datasets:
+        for seed in args.seeds:
+            records = extract_dataset_seed(args, dataset, seed)
+            total += len(records)
+    print(f"Done. Wrote {total} embedding files.", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

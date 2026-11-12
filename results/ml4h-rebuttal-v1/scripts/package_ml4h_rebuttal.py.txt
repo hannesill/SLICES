@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Assemble the ML4H rebuttal result package from diagnostic outputs.
+
+Copies run-level aggregate tables from ``outputs/ml4h-rebuttal`` into
+``results/ml4h-rebuttal-v1``, adds forward-pass FLOPs per SSL objective (via
+``scripts/measure_flops.py``) to the compute table, and writes a checksum
+manifest. Only aggregate metric tables are packaged; embedding caches, run
+directories and anything patient-level stay under ``outputs/``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Sequence
+
+import pandas as pd
+import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SOURCE = Path("outputs/ml4h-rebuttal")
+DEFAULT_OUTPUT = Path("results/ml4h-rebuttal-v1")
+CORE_PARADIGMS = ("mae", "jepa", "contrastive")
+PRETRAIN_BATCH_SIZE = 256
+
+# (source path relative to outputs/ml4h-rebuttal, packaged file name)
+COPY_PLAN = (
+    ("validity/encoder_sha256_check.csv", "p1_validity_encoder_sha256.csv"),
+    ("validity/split_label_parity.csv", "p1_validity_split_label_parity.csv"),
+    ("validity/embedding_parity.csv", "p1_validity_embedding_parity.csv"),
+    ("validity/capped_probe_reproduction.csv", "p1_validity_capped_probe_reproduction.csv"),
+    (
+        "validity/capped_probe_seed_sensitivity.csv",
+        "p1_validity_capped_probe_seed_sensitivity.csv",
+    ),
+    ("validity/validity_summary.json", "p1_validity_summary.json"),
+    ("compute/pretrain_compute_per_run.csv", "p2_pretrain_compute_per_run.csv"),
+    ("compute/pretrain_compute_manifest.json", "p2_pretrain_compute_manifest.json"),
+    (
+        "converged_probe_per_source/converged_probe_per_source_per_seed.csv",
+        "p3_local_converged_probe_per_source_per_seed.csv",
+    ),
+    (
+        "converged_probe_per_source/converged_probe_per_source_aggregated.csv",
+        "p3_local_converged_probe_per_source_aggregated.csv",
+    ),
+    (
+        "converged_probe_per_source/converged_probe_per_source_paired_deltas.csv",
+        "p3_local_converged_probe_per_source_paired_deltas.csv",
+    ),
+    ("per_source/per_run_per_source.csv", "p3_checkpoint_per_source_per_run.csv"),
+    ("per_source/per_source_aggregated.csv", "p3_checkpoint_per_source_aggregated.csv"),
+    ("per_source/per_source_summary.json", "p3_checkpoint_per_source_summary.json"),
+    (
+        "head_reproduction_tables/head_reproduction_downstream.csv",
+        "p4_head_reproduction_downstream.csv",
+    ),
+    (
+        "head_reproduction_tables/head_reproduction_pretrain.csv",
+        "p4_head_reproduction_pretrain.csv",
+    ),
+    (
+        "head_reproduction_tables/head_reproduction_pretrain_curves.csv",
+        "p4_head_reproduction_pretrain_curves.csv",
+    ),
+    (
+        "head_reproduction_tables/head_reproduction_config_parity.csv",
+        "p4_head_reproduction_config_parity.csv",
+    ),
+    (
+        "head_reproduction_tables/head_reproduction_summary.json",
+        "p4_head_reproduction_summary.json",
+    ),
+    (
+        "head_downstream_frozen_encoders_tables/head_reproduction_downstream.csv",
+        "p4b_head_downstream_from_frozen_encoders.csv",
+    ),
+    (
+        "head_downstream_frozen_encoders_tables/head_reproduction_config_parity.csv",
+        "p4b_head_downstream_from_frozen_encoders_config_parity.csv",
+    ),
+    (
+        "head_downstream_frozen_encoders_tables/head_reproduction_summary.json",
+        "p4b_head_downstream_from_frozen_encoders_summary.json",
+    ),
+    ("compute/local_step_timing.csv", "p2_local_cpu_step_timing.csv"),
+    ("compute/l4_exclusive_step_timing.csv", "p2_l4_exclusive_step_timing.csv"),
+    (
+        "compute/l4_exclusive_step_timing_miiv_2000steps.csv",
+        "p2_l4_exclusive_step_timing_miiv_2000steps.csv",
+    ),
+    ("compute/l4_exclusive_step_timing_eicu.csv", "p2_l4_exclusive_step_timing_eicu.csv"),
+    (
+        "compute/l4_exclusive_step_timing_combined.csv",
+        "p2_l4_exclusive_step_timing_combined.csv",
+    ),
+    (
+        "compute/l4_exclusive_step_timing_miiv_workers8_2000steps.csv",
+        "p2_l4_exclusive_step_timing_miiv_workers8_2000steps.csv",
+    ),
+)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    return parser.parse_args(argv)
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def measure_flops_table(batch_size: int = PRETRAIN_BATCH_SIZE) -> pd.DataFrame:
+    """Forward FLOPs per objective at the pretraining batch size."""
+    from scripts import measure_flops as mf
+
+    encoder_config = dict(mf.ENCODER_CONFIG)
+    torch.manual_seed(42)
+    shape = (batch_size, encoder_config["max_seq_length"], encoder_config["d_input"])
+    x = torch.randn(*shape)
+    obs_mask = torch.rand(*shape) > 0.7
+    obs_mask[:, :, 0] = True
+    rows = []
+    for name in CORE_PARADIGMS:
+        objective = mf.build_objective(name, encoder_config)
+        trainable, total = mf.count_parameters(objective)
+        forward = mf.measure_forward_flops(objective, x.clone(), obs_mask.clone())
+        rows.append(
+            {
+                "paradigm": name,
+                "trainable_params": trainable,
+                "total_params": total,
+                "profile_batch_size": batch_size,
+                "forward_flops_per_step": forward,
+                "forward_flops_per_sample": forward / batch_size,
+                # measure_flops.py convention: backward ~ 2x forward. For JEPA this is an
+                # upper bound because the EMA target encoder has no backward pass.
+                "approx_train_flops_per_step": 3 * forward,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_compute_table(source_root: Path, flops: pd.DataFrame) -> pd.DataFrame:
+    table = pd.read_csv(source_root / "compute" / "pretrain_compute_by_paradigm_dataset.csv")
+    table = table.merge(flops, on="paradigm", how="left", validate="many_to_one")
+    table["approx_total_train_flops"] = table["approx_train_flops_per_step"] * table["steps_mean"]
+    table["shared_gpu_hours_over_mean_concurrency"] = (
+        table["runtime_hours_mean"] / table["mean_concurrent_project_runs_mean"]
+    )
+    return table
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    source_root = REPO_ROOT / args.source_root
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    flops = measure_flops_table()
+    flops.to_csv(out_dir / "p2_flops_per_objective.csv", index=False)
+    if (source_root / "compute" / "pretrain_compute_by_paradigm_dataset.csv").exists():
+        build_compute_table(source_root, flops).to_csv(
+            out_dir / "p2_pretrain_compute_by_paradigm_dataset.csv", index=False
+        )
+
+    missing = []
+    for relative, name in COPY_PLAN:
+        source = source_root / relative
+        if source.exists():
+            shutil.copyfile(source, out_dir / name)
+        else:
+            missing.append(relative)
+
+    files = {}
+    for path in sorted(out_dir.iterdir()):
+        if path.name == "checksum_manifest.json" or path.is_dir():
+            continue
+        entry = {"sha256": file_sha256(path), "bytes": path.stat().st_size}
+        if path.suffix == ".csv":
+            frame = pd.read_csv(path)
+            entry.update({"rows": int(len(frame)), "columns": int(frame.shape[1])})
+        files[path.name] = entry
+    manifest = {
+        "package": out_dir.name,
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "note": "Aggregate run-level metric tables only; no patient-level data.",
+        "not_packaged_missing_sources": missing,
+        "files": files,
+    }
+    (out_dir / "checksum_manifest.json").write_text(
+        json.dumps(manifest, indent=1, sort_keys=True) + "\n"
+    )
+    print(f"Packaged {len(files)} files into {out_dir.relative_to(REPO_ROOT)}", flush=True)
+    if missing:
+        print("Missing (not packaged): " + ", ".join(missing), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

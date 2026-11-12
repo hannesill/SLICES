@@ -1,0 +1,50 @@
+# Debug configuration for pipeline inspection and embedding analysis
+#
+# Example usage:
+#   # Export snapshots from already-processed data (quick, no re-extraction):
+#   uv run python scripts/debug/export_snapshots.py
+#
+#   # Override data paths:
+#   uv run python scripts/debug/export_snapshots.py data.processed_dir=data/processed/miiv
+#
+#   # Override RICU data paths:
+#   uv run python scripts/debug/export_snapshots.py \
+#       data.parquet_root=/path/to/ricu-output
+#
+#   # Explore missingness patterns:
+#   uv run python scripts/debug/explore_missingness.py
+#
+#   # Analyze embeddings:
+#   uv run python scripts/debug/inspect_embeddings.py checkpoint=outputs/encoder.pt
+
+defaults:
+  - data: ricu
+  - _self_
+
+dataset: miiv
+
+# Output directory for debug artifacts (defaults to processed_dir/debug_snapshots)
+debug_output_dir: null
+
+# Sentinel patient selection
+sentinel:
+  n_per_stratum: 3
+  seed: 42
+  # Criteria: los_days, age by default
+  # Override with sentinel.criteria for custom
+
+# Specific stay IDs (overrides sentinel selection)
+stay_ids: null  # e.g., [30118103, 30145082]
+
+# Embedding analysis
+checkpoint: null  # Path to encoder checkpoint (.pt file)
+embeddings_file: null  # Path to pre-computed embeddings (.npz or .pt)
+max_samples: 5000  # Max samples for embedding extraction
+
+# Output options
+plots: false  # Generate visualization plots
+max_hours: 24  # Max hours for timeseries export
+flatten_timeseries: true  # Convert nested arrays to long format
+
+# General
+seed: 42

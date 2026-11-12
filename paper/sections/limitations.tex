@@ -1,0 +1,13 @@
+\section{Limitations}
+\label{sec:limitations}
+
+The benchmark holds clinical inputs and downstream evaluation fixed while retaining the components needed by each objective. Objective-specific heads, target networks, encoder passes, and trainable parameter counts therefore differ. Results thus describe these implementations, not objective families. Configurations reflect unequal development histories and a small targeted sensitivity analysis, not matched compute or tuning budgets or objective-specific optima, and the benchmark was not preregistered.
+
+\paragraph{No out-of-domain validation.}
+No model is evaluated on a database or hospital without training on its labels. Cross-database analyses fine-tune on target labels, and per-source results stay within the pooled regime. The results therefore do not show that rankings or predictors hold in a new hospital, for instance one with different ordering practices. Such a test needs source normalization applied to target data, which the benchmark does not yet provide. \Combined{} is a union, not an external cohort, and both databases are from the US, retrospective, and deidentified.
+
+\paragraph{Representation and architecture.}
+Rankings may change with observation-triplet, quantized, event-token, or patch representations, which also change the masking unit. Waveforms, notes, images, and full medication histories are out of scope. A new modality needs an encoder implementing the tokenize/encode interface and a masking rule per objective. Heads, protocols, and metrics would carry over, but reference results would not. All objectives use one small Transformer. SSL on decay-based recurrent encoders such as GRU-D is the first architecture extension, since masked hours must then be skipped or fed as missing. Shared masked views may underrepresent contrastive methods with clinically defined positive pairs.
+
+\paragraph{Statistics and labels.}
+All comparisons are descriptive. Five matched seeds are few and reuse overlapping source populations. They describe split and optimization variation but do not establish population uncertainty, statistical equivalence, calibration quality, subgroup fairness, clinical utility, or deployment readiness. Reduced-label subsets are not class-stratified, and reduced-label GRU-D and XGBoost runs are not compared. The AKI label uses creatinine only. Fine-tuned LOS models train with squared error. Final-epoch checkpoints may miss better earlier states. The random-encoder, raw/mask, and post-review diagnostics are post hoc.

@@ -1,0 +1,132 @@
+[
+  {
+    "best_val": [
+      {
+        "mean": 0.5095991654366527,
+        "paradigm": "mae"
+      },
+      {
+        "mean": 0.4572729203647493,
+        "paradigm": "contrastive"
+      },
+      {
+        "mean": 0.3733201707246466,
+        "paradigm": "jepa"
+      }
+    ],
+    "final": [
+      {
+        "mean": 0.5093247684155531,
+        "paradigm": "mae"
+      },
+      {
+        "mean": 0.457401561509369,
+        "paradigm": "contrastive"
+      },
+      {
+        "mean": 0.41393165112001845,
+        "paradigm": "jepa"
+      }
+    ],
+    "per_seed_winners": [
+      {
+        "best_val": "mae",
+        "final": "mae",
+        "seed": 42
+      },
+      {
+        "best_val": "mae",
+        "final": "mae",
+        "seed": 123
+      },
+      {
+        "best_val": "mae",
+        "final": "mae",
+        "seed": 456
+      },
+      {
+        "best_val": "mae",
+        "final": "mae",
+        "seed": 789
+      },
+      {
+        "best_val": "mae",
+        "final": "mae",
+        "seed": 1011
+      }
+    ],
+    "shared_seeds": [
+      42,
+      123,
+      456,
+      789,
+      1011
+    ],
+    "task": "mortality_hospital"
+  },
+  {
+    "best_val": [
+      {
+        "mean": 2.5948642253875733,
+        "paradigm": "contrastive"
+      },
+      {
+        "mean": 2.7643927097320558,
+        "paradigm": "mae"
+      },
+      {
+        "mean": 2.9395611763000487,
+        "paradigm": "jepa"
+      }
+    ],
+    "final": [
+      {
+        "mean": 2.5945887088775637,
+        "paradigm": "contrastive"
+      },
+      {
+        "mean": 2.675798463821411,
+        "paradigm": "jepa"
+      },
+      {
+        "mean": 2.7654592514038088,
+        "paradigm": "mae"
+      }
+    ],
+    "per_seed_winners": [
+      {
+        "best_val": "contrastive",
+        "final": "contrastive",
+        "seed": 42
+      },
+      {
+        "best_val": "contrastive",
+        "final": "contrastive",
+        "seed": 123
+      },
+      {
+        "best_val": "contrastive",
+        "final": "contrastive",
+        "seed": 456
+      },
+      {
+        "best_val": "contrastive",
+        "final": "contrastive",
+        "seed": 789
+      },
+      {
+        "best_val": "contrastive",
+        "final": "contrastive",
+        "seed": 1011
+      }
+    ],
+    "shared_seeds": [
+      42,
+      123,
+      456,
+      789,
+      1011
+    ],
+    "task": "los_remaining"
+  }
+]

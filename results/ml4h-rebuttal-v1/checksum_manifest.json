@@ -1,0 +1,224 @@
+{
+ "files": {
+  "README.md": {
+   "bytes": 47185,
+   "sha256": "482dea08b95865168de60a2c9c4dc855372e7d554b4a7c47499c09b3fd38e01b"
+  },
+  "p1_converged_probe_aggregated.csv": {
+   "bytes": 22543,
+   "columns": 41,
+   "rows": 54,
+   "sha256": "d5be883df8fbe0e4b559875a8ce940947d112975cb2526f42bb0361cc3baf22f"
+  },
+  "p1_converged_probe_per_seed.csv": {
+   "bytes": 117014,
+   "columns": 42,
+   "rows": 270,
+   "sha256": "202f499c810da605979767becc2133100fd2e0dae2242e660a6c83df43bc6e63"
+  },
+  "p1_los_loss_matched.csv": {
+   "bytes": 7607,
+   "columns": 45,
+   "rows": 9,
+   "sha256": "33cbaa38a2f6ac360a62be910111bf9f2b4e12ef581df3eb130ae72d0d09d324"
+  },
+  "p1_objective_ranking.csv": {
+   "bytes": 8900,
+   "columns": 19,
+   "rows": 36,
+   "sha256": "cbda267f2e1938b367abb5ef46e8b7acd516fbd0f36370448f7a68b63bbdd2ea"
+  },
+  "p1_paired_deltas_mae_vs_others.csv": {
+   "bytes": 24018,
+   "columns": 15,
+   "rows": 144,
+   "sha256": "c73ed989d4f88703129cea485bc37a6906b276464cde76c9eb67a125e2b120a4"
+  },
+  "p1_regularisation_path_validation.csv": {
+   "bytes": 541434,
+   "columns": 14,
+   "rows": 4545,
+   "sha256": "f78c5b924e41f7da5748b03f41b8e709a2d827c1b68973db7bc941f031827ee7"
+  },
+  "p1_regularisation_selection.csv": {
+   "bytes": 853,
+   "columns": 16,
+   "rows": 6,
+   "sha256": "b6cdab78e2310813dfe5dbd5652a407dff9cc168b85bd78600ddfbf2d9222734"
+  },
+  "p1_validity_capped_probe_reproduction.csv": {
+   "bytes": 3410,
+   "columns": 22,
+   "rows": 15,
+   "sha256": "15ebf6d813e0e52c7ef417f3c2b0e4cc8f3d1dd05889ef6883a145797d4ae73d"
+  },
+  "p1_validity_capped_probe_seed_sensitivity.csv": {
+   "bytes": 1101,
+   "columns": 11,
+   "rows": 12,
+   "sha256": "3d4d69a7b468e3a4a57400605bb390aaa730ebd9702d5cca73cf8595e21058f4"
+  },
+  "p1_validity_embedding_parity.csv": {
+   "bytes": 876,
+   "columns": 11,
+   "rows": 9,
+   "sha256": "98a43b40861b33203ceefbe10ccfeb9394933b1abaea60d9506d887ccb98b7f7"
+  },
+  "p1_validity_encoder_sha256.csv": {
+   "bytes": 7490,
+   "columns": 4,
+   "rows": 45,
+   "sha256": "f7367785c7a0d6ff32b3ff054dec18d6b00fe81f9c300afeea10396d0ea10082"
+  },
+  "p1_validity_split_label_parity.csv": {
+   "bytes": 7286,
+   "columns": 20,
+   "rows": 60,
+   "sha256": "3ca0975e8e9c603351978e3736eefc1b2db2220cfaf1e17b8fd94bfdd79ce79a"
+  },
+  "p1_validity_summary.json": {
+   "bytes": 1272,
+   "sha256": "86f0b0a93a8a89deb5971426f3a4a080fbf99fa2b3fe34691b6184f60635f424"
+  },
+  "p2_flops_per_objective.csv": {
+   "bytes": 306,
+   "columns": 7,
+   "rows": 3,
+   "sha256": "bc9f065c738c4370720ea195f520aaabbb3d9b05da0b1f0dcdff6b9a1564d2f9"
+  },
+  "p2_l4_exclusive_step_timing.csv": {
+   "bytes": 858,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "cbd9c8fe959f4cd33b8cebdb28e8952356c50c4dd2a902b64b6b1f38ed099fbc"
+  },
+  "p2_l4_exclusive_step_timing_combined.csv": {
+   "bytes": 868,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "440b09e068bf95c1cb4e8a00ba3b12bc873f1f2d080ca45a8dd2082db17193b0"
+  },
+  "p2_l4_exclusive_step_timing_eicu.csv": {
+   "bytes": 858,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "3c3c0866e7f8b2a13a6a10bd332a555188554dd3bd52118dd92ac87adcccf77b"
+  },
+  "p2_l4_exclusive_step_timing_miiv_2000steps.csv": {
+   "bytes": 861,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "5623b2061bd9848167aa517dce6e5dd9ebc3841fe6df21c02c3ae98290c8b6d0"
+  },
+  "p2_l4_exclusive_step_timing_miiv_workers8_2000steps.csv": {
+   "bytes": 857,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "9825f099aad08dbc8a49381bc28c972a740900c2f4d61caf6526de8788974cfd"
+  },
+  "p2_local_cpu_step_timing.csv": {
+   "bytes": 854,
+   "columns": 18,
+   "rows": 3,
+   "sha256": "a7de9a09b597846cc3551d2b3074f1f24cad60f2ff4c3245c01222eec082069c"
+  },
+  "p2_pretrain_compute_by_paradigm_dataset.csv": {
+   "bytes": 3318,
+   "columns": 25,
+   "rows": 9,
+   "sha256": "63b5a9517b286e62961c4fdb608900bdb18c2cfeb72755f8f09efe291bb62474"
+  },
+  "p2_pretrain_compute_manifest.json": {
+   "bytes": 411,
+   "sha256": "f10b8675745a24429d71dcf5d2f5d9d7db6afb407169f3da4b1cee71ea903efa"
+  },
+  "p2_pretrain_compute_per_run.csv": {
+   "bytes": 10447,
+   "columns": 19,
+   "rows": 45,
+   "sha256": "1450cb6251bd80e2470ba26dbe3cd229ce5a1af4c37145878b116bc6c4f92079"
+  },
+  "p3_checkpoint_per_source_aggregated.csv": {
+   "bytes": 18148,
+   "columns": 21,
+   "rows": 84,
+   "sha256": "00cf95ca1c5f190dd5297f1eb5998ead75224684a80df9181852eda4a7bdb9fd"
+  },
+  "p3_checkpoint_per_source_per_run.csv": {
+   "bytes": 95196,
+   "columns": 26,
+   "rows": 420,
+   "sha256": "471afab2a8ca7322339831a19b2a3a1c2216b90965ae1ddee2635405defc40ae"
+  },
+  "p3_checkpoint_per_source_summary.json": {
+   "bytes": 122,
+   "sha256": "f44a985ea575709a64458ad24c87dd7252953b71b57a2780e7f597879d358897"
+  },
+  "p3_local_converged_probe_per_source_aggregated.csv": {
+   "bytes": 11222,
+   "columns": 21,
+   "rows": 54,
+   "sha256": "da093ecf5a634a6e1936ce179859a7d8091d311647b77058c7dfb8920c40030e"
+  },
+  "p3_local_converged_probe_per_source_paired_deltas.csv": {
+   "bytes": 3952,
+   "columns": 11,
+   "rows": 36,
+   "sha256": "513269e025e06baf84205d98743003f0982c36463f05cc20b38d1a8f9caaa22a"
+  },
+  "p3_local_converged_probe_per_source_per_seed.csv": {
+   "bytes": 40655,
+   "columns": 17,
+   "rows": 270,
+   "sha256": "f151d038b1d72f7b15cdc6ac560ed19695e897dbee903eb3c71615cf6d4b7488"
+  },
+  "p4_head_reproduction_config_parity.csv": {
+   "bytes": 3594,
+   "columns": 6,
+   "rows": 54,
+   "sha256": "452054e815cf67ae000c4c1915f64599a347774171e9d1c6f316089c59645473"
+  },
+  "p4_head_reproduction_downstream.csv": {
+   "bytes": 20752,
+   "columns": 20,
+   "rows": 96,
+   "sha256": "b7a798387946c6e0db2cb64e084c84c73011602003e96680fb7e60190fab19ac"
+  },
+  "p4_head_reproduction_pretrain.csv": {
+   "bytes": 2405,
+   "columns": 16,
+   "rows": 12,
+   "sha256": "59e6068f84f5b8d2b957db8ea94e81525a5e806d647f17c0cd695937b09ca8c3"
+  },
+  "p4_head_reproduction_pretrain_curves.csv": {
+   "bytes": 1851,
+   "columns": 11,
+   "rows": 12,
+   "sha256": "d2e7ba04ea63951e6c17fcbafcbbd19187b1acc5e468eb354ba41d7d9e5f5d35"
+  },
+  "p4_head_reproduction_summary.json": {
+   "bytes": 602,
+   "sha256": "439b0f49d7e4b1870951d23ef7cb5b47f09f9c2992a1e00fe178b3c3b227c913"
+  },
+  "p4b_head_downstream_from_frozen_encoders.csv": {
+   "bytes": 10023,
+   "columns": 20,
+   "rows": 48,
+   "sha256": "b90177d81ef469a3acd8ead2c14f90c228c3ecc5c0f6a945803a68f51030cb45"
+  },
+  "p4b_head_downstream_from_frozen_encoders_config_parity.csv": {
+   "bytes": 1697,
+   "columns": 6,
+   "rows": 24,
+   "sha256": "87cfacf5fe96374752bcba1e7f5adffe5002b9dfc5eef4b6892cb686622d55a9"
+  },
+  "p4b_head_downstream_from_frozen_encoders_summary.json": {
+   "bytes": 601,
+   "sha256": "9febacec5b7d6593de2a4e24d38f1110e5a10410dffff0ac41effc0063ac5a51"
+  }
+ },
+ "generated_utc": "2026-10-10T10:52:00.067014+00:00",
+ "not_packaged_missing_sources": [],
+ "note": "Aggregate run-level metric tables only; no patient-level data.",
+ "package": "ml4h-rebuttal-v1"
+}

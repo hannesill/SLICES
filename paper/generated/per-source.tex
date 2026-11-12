@@ -1,0 +1,17 @@
+\begin{tabular}{llrrrrrrrr}
+\toprule
+Task & Portion & Prev. & \multicolumn{3}{c}{Probe (converged)} & \multicolumn{4}{c}{Fine-tune} \\
+\cmidrule(lr){4-6} \cmidrule(lr){7-10}
+ & & & MAE & JEPA & Con. & MAE & JEPA & Con. & Sup. \\
+\midrule
+24h mortality & eICU-CRD & 0.016 & \textbf{0.302} & 0.195 & 0.225 & \textbf{0.392} & 0.377 & 0.384 & 0.373 \\
+24h mortality & MIMIC-IV & 0.016 & \textbf{0.334} & 0.250 & 0.276 & \textbf{0.448} & 0.423 & 0.429 & 0.424 \\
+Hospital mortality & eICU-CRD & 0.093 & \textbf{0.443} & 0.337 & 0.362 & \textbf{0.498} & 0.485 & 0.479 & 0.484 \\
+Hospital mortality & MIMIC-IV & 0.118 & \textbf{0.507} & 0.401 & 0.442 & \textbf{0.576} & 0.570 & 0.563 & 0.566 \\
+AKI & eICU-CRD & 0.139 & \textbf{0.373} & 0.261 & 0.309 & 0.553 & 0.556 & 0.541 & \textbf{0.582} \\
+AKI & MIMIC-IV & 0.204 & \textbf{0.525} & 0.396 & 0.486 & 0.697 & 0.695 & 0.685 & \textbf{0.720} \\
+\midrule
+Remaining LOS & eICU-CRD & -- & \textbf{2.013} & 2.049 & 2.036 & \textbf{1.967} & 1.982 & 2.001 & 2.034 \\
+Remaining LOS & MIMIC-IV & -- & 2.513 & 2.509 & \textbf{2.493} & \textbf{2.387} & 2.408 & 2.422 & 2.468 \\
+\bottomrule
+\end{tabular}

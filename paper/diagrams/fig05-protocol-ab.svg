@@ -1,0 +1,155 @@
+<svg width="938" height="467" viewBox="0 0 938 467" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="fig05-protocol-ab">
+<rect width="937.1" height="467" fill="white"/>
+<rect id="background" width="937.1" height="467" fill="white"/>
+<g id="ssl-checkpoint">
+<rect x="289.5" y="0.5" width="359" height="69" rx="3.5" fill="white"/>
+<rect x="289.5" y="0.5" width="359" height="69" rx="3.5" stroke="#AEB7C2"/>
+<text id="checkpoint-title" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="15" font-weight="bold" letter-spacing="0px"><tspan x="307" y="30.4545">SSL encoder checkpoint</tspan></text>
+<text id="checkpoint-equation" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="307" y="50.5909">&#x3b8;&#x2080; &#x2190; encoder.pt</tspan></text>
+<text id="checkpoint-note" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="12" letter-spacing="0px"><tspan x="432" y="50.8636">final pretraining epoch</tspan></text>
+</g>
+<rect id="branch/down-from-checkpoint" x="469" y="70" width="2" height="14" fill="#667583"/>
+<rect id="branch/horizontal" x="227" y="84" width="484" height="2" fill="#667583"/>
+<rect id="branch/drop-a" x="226.55" y="84" width="2" height="25" fill="#667583"/>
+<rect id="branch/drop-b" x="711" y="84" width="2" height="24" fill="#667583"/>
+<text id="branch-label" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-style="italic" letter-spacing="0px"><tspan x="400" y="99.5909">same &#x3b8;&#x2080; initialization</tspan></text>
+<g id="protocol-a">
+<rect x="1.05" y="115.5" width="451" height="351" rx="3.5" fill="white"/>
+<rect x="1.05" y="115.5" width="451" height="351" rx="3.5" stroke="#AEB7C2"/>
+<text id="title/Protocol A &#226;&#128;&#148; linear probe" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="18" font-weight="bold" letter-spacing="0px"><tspan x="24.55" y="166.545">Protocol A &#x2014; linear probe</tspan></text>
+<text id="subtitle/Protocol A &#226;&#128;&#148; linear probe" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="24.55" y="187.591">max 50 epochs &#xb7; val patience 10</tspan></text>
+<rect id="header-divider" x="24.55" y="201" width="404" height="1" fill="#DFE5EA"/>
+<rect id="labeled-stay/1" x="115.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/2" x="132.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/3" x="149.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/4" x="166.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/5" x="183.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/6" x="200.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/7" x="217.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/8" x="234.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/9" x="251.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/10" x="268.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/11" x="285.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/12" x="302.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<text id="label/labeled-stays" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="340.55" y="237.591">labeled stays</tspan></text>
+<rect id="flow/input-to-encoder" x="226.55" y="247" width="2" height="10" fill="#9AA6B2"/>
+<g id="encoder/encoder f&#206;&#184;&#226;&#130;&#128;">
+<rect x="127.25" y="257.7" width="198.6" height="56.6" rx="3.3" fill="white"/>
+<rect x="127.25" y="257.7" width="198.6" height="56.6" rx="3.3" stroke="#8A8F98" stroke-width="1.4"/>
+</g>
+<text id="encoder-label/encoder f&#206;&#184;&#226;&#130;&#128;" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="185.972" y="279.591">encoder f&#x3b8;&#x2080;</tspan></text>
+<rect id="encoder-layer" x="146.95" y="288.4" width="159.2" height="15.2" rx="2.6" fill="#FAFBFC" stroke="#8A8F98" stroke-width="0.8"/>
+<text id="encoder-layer-label" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="10.5" letter-spacing="0px"><tspan x="180.859" y="300.318">2&#xd7; self-attn + FFN</tspan></text>
+<rect id="tag-bg/fixed &#206;&#184;&#226;&#130;&#128;" x="339.05" y="275.5" width="73" height="19" rx="9.5" fill="#F5F7F9" stroke="#8A8F98"/>
+<text id="tag/fixed &#206;&#184;&#226;&#130;&#128;" fill="#8A8F98" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="11" font-weight="bold" letter-spacing="0px"><tspan x="354.678" y="287.5">fixed &#x3b8;&#x2080;</tspan></text>
+<rect id="flow/encoder-to-head" x="226.55" y="315" width="2" height="14" fill="#9AA6B2"/>
+<rect id="stop-gradient-bar" x="218.55" y="322" width="18" height="2" fill="#C46A4A"/>
+<text id="stop-gradient-label" fill="#C46A4A" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="12" font-weight="bold" letter-spacing="0px"><tspan x="338.55" y="316.864">stop &#x2207;</tspan></text>
+<g id="head/linear">
+<rect x="147.7" y="329.7" width="158.6" height="69.6" rx="3.3" fill="white"/>
+<rect x="147.7" y="329.7" width="158.6" height="69.6" rx="3.3" stroke="#5A9A78" stroke-width="1.4"/>
+</g>
+<text id="head-label/linear" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="181.016" y="350.591">linear head w</tspan></text>
+<rect id="tag-bg/train w" x="325.05" y="346.5" width="71" height="19" rx="9.5" fill="#EEF7F2" stroke="#5A9A78"/>
+<text id="tag/train w" fill="#5A9A78" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="11" font-weight="bold" letter-spacing="0px"><tspan x="342.186" y="358.5">train w</tspan></text>
+<rect id="flow/head-to-loss" x="227" y="400" width="2" height="22" fill="#9AA6B2"/>
+<g id="loss/L_task">
+<rect x="177.6" y="422.6" width="98.8" height="28.8" rx="14.4" fill="white"/>
+<rect x="177.6" y="422.6" width="98.8" height="28.8" rx="14.4" stroke="#5A9A78" stroke-width="1.2"/>
+</g>
+<text id="loss-label/L_task" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="196.532" y="441.591">task loss</tspan></text>
+<text id="protocol-equation" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-style="italic" letter-spacing="0px"><tspan x="24.55" y="455.727">H = f&#x3b8;&#x2080;(x, m); train w</tspan></text>
+<g id="Group 34">
+<path id="Vector" d="M210.4 361.4L244.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_2" d="M210.4 361.4L244.4 379.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_3" d="M210.4 370.4H244.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_4" d="M210.4 370.4L244.4 379.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_5" d="M210.4 379.4L244.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_6" d="M210.4 379.4H244.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_7" d="M210.4 388.4L244.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_8" d="M210.4 388.4L244.4 379.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_9" d="M210.4 364.8C212.278 364.8 213.8 363.278 213.8 361.4C213.8 359.522 212.278 358 210.4 358C208.522 358 207 359.522 207 361.4C207 363.278 208.522 364.8 210.4 364.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_10" d="M210.4 373.8C212.278 373.8 213.8 372.278 213.8 370.4C213.8 368.522 212.278 367 210.4 367C208.522 367 207 368.522 207 370.4C207 372.278 208.522 373.8 210.4 373.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_11" d="M210.4 382.8C212.278 382.8 213.8 381.278 213.8 379.4C213.8 377.522 212.278 376 210.4 376C208.522 376 207 377.522 207 379.4C207 381.278 208.522 382.8 210.4 382.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_12" d="M210.4 391.8C212.278 391.8 213.8 390.278 213.8 388.4C213.8 386.522 212.278 385 210.4 385C208.522 385 207 386.522 207 388.4C207 390.278 208.522 391.8 210.4 391.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_13" d="M244.4 373.8C246.278 373.8 247.8 372.278 247.8 370.4C247.8 368.522 246.278 367 244.4 367C242.522 367 241 368.522 241 370.4C241 372.278 242.522 373.8 244.4 373.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_14" d="M244.4 382.8C246.278 382.8 247.8 381.278 247.8 379.4C247.8 377.522 246.278 376 244.4 376C242.522 376 241 377.522 241 379.4C241 381.278 242.522 382.8 244.4 382.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+</g>
+</g>
+<g id="protocol-b">
+<rect x="485.05" y="115.5" width="451" height="351" rx="3.5" fill="white"/>
+<rect x="485.05" y="115.5" width="451" height="351" rx="3.5" stroke="#AEB7C2"/>
+<text id="title/Protocol B &#226;&#128;&#148; full fine-tune" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="18" font-weight="bold" letter-spacing="0px"><tspan x="508.55" y="166.545">Protocol B &#x2014; full fine-tune</tspan></text>
+<text id="subtitle/Protocol B &#226;&#128;&#148; full fine-tune" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="508.55" y="187.591">max 100 epochs &#xb7; val patience 10</tspan></text>
+<rect id="header-divider_2" x="508.55" y="201" width="404" height="1" fill="#DFE5EA"/>
+<rect id="labeled-stay/1_2" x="599.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/2_2" x="616.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/3_2" x="633.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/4_2" x="650.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/5_2" x="667.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/6_2" x="684.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/7_2" x="701.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/8_2" x="718.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/9_2" x="735.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/10_2" x="752.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/11_2" x="769.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<rect id="labeled-stay/12_2" x="786.05" y="227.5" width="13" height="13" rx="2.5" fill="#EAF3F7" stroke="#5B8FA8"/>
+<text id="label/labeled-stays_2" fill="#8A94A0" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" letter-spacing="0px"><tspan x="824.55" y="237.591">labeled stays</tspan></text>
+<rect id="flow/input-to-encoder_2" x="710.55" y="247" width="2" height="10" fill="#9AA6B2"/>
+<g id="encoder/encoder f&#206;&#184;">
+<rect x="611.25" y="257.7" width="198.6" height="56.6" rx="3.3" fill="white"/>
+<rect x="611.25" y="257.7" width="198.6" height="56.6" rx="3.3" stroke="#7B6EA8" stroke-width="1.4"/>
+</g>
+<text id="encoder-label/encoder f&#206;&#184;" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="673.205" y="279.591">encoder f&#x3b8;</tspan></text>
+<rect id="encoder-layer_2" x="630.95" y="288.4" width="159.2" height="15.2" rx="2.6" fill="#FAFBFC" stroke="#7B6EA8" stroke-width="0.8"/>
+<text id="encoder-layer-label_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="10.5" letter-spacing="0px"><tspan x="664.859" y="300.318">2&#xd7; self-attn + FFN</tspan></text>
+<rect id="tag-bg/train &#206;&#184;" x="823.05" y="275.5" width="73" height="19" rx="9.5" fill="#F1EEFA" stroke="#7B6EA8"/>
+<text id="tag/train &#206;&#184;" fill="#7B6EA8" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="11" font-weight="bold" letter-spacing="0px"><tspan x="842.26" y="287.5">train &#x3b8;</tspan></text>
+<rect id="flow/encoder-to-head_2" x="710.55" y="315" width="2" height="14" fill="#9AA6B2"/>
+<g id="head/mlp">
+<rect x="611.7" y="329.7" width="198.6" height="68.6" rx="3.3" fill="white"/>
+<rect x="611.7" y="329.7" width="198.6" height="68.6" rx="3.3" stroke="#5A9A78" stroke-width="1.4"/>
+<g id="Group 35">
+<path id="Vector_15" d="M681.4 362.4L711.4 366.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_16" d="M681.4 362.4L711.4 374.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_17" d="M681.4 362.4L711.4 382.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_18" d="M681.4 370.4L711.4 366.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_19" d="M681.4 370.4L711.4 374.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_20" d="M681.4 370.4L711.4 382.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_21" d="M681.4 378.4L711.4 366.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_22" d="M681.4 378.4L711.4 374.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_23" d="M681.4 378.4L711.4 382.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_24" d="M681.4 386.4L711.4 366.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_25" d="M681.4 386.4L711.4 374.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_26" d="M681.4 386.4L711.4 382.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_27" d="M711.4 366.4L741.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_28" d="M711.4 366.4L741.4 378.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_29" d="M711.4 374.4L741.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_30" d="M711.4 374.4L741.4 378.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_31" d="M711.4 382.4L741.4 370.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_32" d="M711.4 382.4L741.4 378.4" stroke="#C2C9D2" stroke-width="0.8"/>
+<path id="Vector_33" d="M681.4 365.8C683.278 365.8 684.8 364.278 684.8 362.4C684.8 360.522 683.278 359 681.4 359C679.522 359 678 360.522 678 362.4C678 364.278 679.522 365.8 681.4 365.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_34" d="M681.4 373.8C683.278 373.8 684.8 372.278 684.8 370.4C684.8 368.522 683.278 367 681.4 367C679.522 367 678 368.522 678 370.4C678 372.278 679.522 373.8 681.4 373.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_35" d="M681.4 381.8C683.278 381.8 684.8 380.278 684.8 378.4C684.8 376.522 683.278 375 681.4 375C679.522 375 678 376.522 678 378.4C678 380.278 679.522 381.8 681.4 381.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_36" d="M681.4 389.8C683.278 389.8 684.8 388.278 684.8 386.4C684.8 384.522 683.278 383 681.4 383C679.522 383 678 384.522 678 386.4C678 388.278 679.522 389.8 681.4 389.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_37" d="M711.4 369.8C713.278 369.8 714.8 368.278 714.8 366.4C714.8 364.522 713.278 363 711.4 363C709.522 363 708 364.522 708 366.4C708 368.278 709.522 369.8 711.4 369.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_38" d="M711.4 377.8C713.278 377.8 714.8 376.278 714.8 374.4C714.8 372.522 713.278 371 711.4 371C709.522 371 708 372.522 708 374.4C708 376.278 709.522 377.8 711.4 377.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_39" d="M711.4 385.8C713.278 385.8 714.8 384.278 714.8 382.4C714.8 380.522 713.278 379 711.4 379C709.522 379 708 380.522 708 382.4C708 384.278 709.522 385.8 711.4 385.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_40" d="M741.4 373.8C743.278 373.8 744.8 372.278 744.8 370.4C744.8 368.522 743.278 367 741.4 367C739.522 367 738 368.522 738 370.4C738 372.278 739.522 373.8 741.4 373.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+<path id="Vector_41" d="M741.4 381.8C743.278 381.8 744.8 380.278 744.8 378.4C744.8 376.522 743.278 375 741.4 375C739.522 375 738 376.522 738 378.4C738 380.278 739.522 381.8 741.4 381.8Z" fill="white" stroke="#5A9A78" stroke-width="1.2"/>
+</g>
+</g>
+<text id="head-label/mlp" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="645.622" y="350.591">MLP head &#x3c6; &#xb7; h=64</tspan></text>
+<rect id="tag-bg/train &#207;&#134;" x="823.05" y="346.5" width="71" height="19" rx="9.5" fill="#EEF7F2" stroke="#5A9A78"/>
+<text id="tag/train &#207;&#134;" fill="#5A9A78" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="11" font-weight="bold" letter-spacing="0px"><tspan x="840.229" y="358.5">train &#x3c6;</tspan></text>
+<rect id="flow/head-to-loss_2" x="711" y="399" width="2" height="22" fill="#9AA6B2"/>
+<g id="loss/L_task_2">
+<rect x="661.6" y="421.6" width="98.8" height="28.8" rx="14.4" fill="white"/>
+<rect x="661.6" y="421.6" width="98.8" height="28.8" rx="14.4" stroke="#5A9A78" stroke-width="1.2"/>
+</g>
+<text id="loss-label/L_task_2" fill="#1F2933" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="14" font-weight="bold" letter-spacing="0px"><tspan x="680.532" y="440.591">task loss</tspan></text>
+<text id="protocol-equation_2" fill="#52616F" style="white-space: pre" xml:space="preserve" font-family="Inter" font-size="13" font-style="italic" letter-spacing="0px"><tspan x="508.55" y="455.727">H = f&#x3b8;(x, m); train &#x3b8;, &#x3c6;</tspan></text>
+</g>
+</g>
+</svg>

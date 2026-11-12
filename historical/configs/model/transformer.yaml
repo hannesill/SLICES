@@ -1,0 +1,44 @@
+# @package encoder
+# Transformer Encoder Configuration (Canonical Source)
+#
+# This is the single source of truth for transformer encoder architecture.
+# Training configs (supervised.yaml, pretrain.yaml, finetune.yaml) inherit
+# from this via Hydra defaults and override only what differs.
+#
+# All paradigms (SSL and supervised) share the same architecture (~174K params
+# with obs_aware=True) to eliminate model capacity as a confounding variable.
+
+
+name: transformer
+
+# Input/Output dimensions
+# d_input is typically set automatically from data config
+d_model: 64  # Model dimension (embedding size)
+max_seq_length: 168  # Default; overridden at runtime by datamodule.get_seq_length() (24h benchmark)
+
+# Transformer architecture
+n_layers: 2  # Number of transformer encoder layers
+n_heads: 4  # Number of attention heads (must divide d_model evenly)
+d_ff: 256  # Feedforward dimension (typically 4 * d_model)
+
+# Regularization
+dropout: 0.1  # Dropout probability for attention and feedforward
+
+# Architecture choices
+activation: gelu  # Activation function: gelu | relu | silu
+layer_norm_eps: 1.0e-5  # Layer normalization epsilon
+prenorm: true  # Pre-LN (true) vs Post-LN (false) transformer
+use_positional_encoding: true  # Add sinusoidal positional encoding
+
+# Pooling strategy for sequence-level representation
+# Options: mean | max | cls | last | none
+# - mean: Average over valid timesteps (default for supervised/finetune)
+# - max: Max pooling over valid timesteps
+# - cls: Use special [CLS] token (BERT-style)
+# - last: Use last valid timestep
+# - none: Return per-timestep embeddings (required for MAE pretraining)
+pooling: mean
+
+# Observation-aware mode: concat (values, obs_mask) -> MLP -> d_model
+# Enabled for all paradigms (SSL and supervised) for fair comparison
+obs_aware: true

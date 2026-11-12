@@ -1,0 +1,21 @@
+# @package _global_
+# Full finetune: train encoder and downstream head for practical utility.
+
+protocol: full_finetune
+
+training:
+  freeze_encoder: false
+  max_epochs: 100
+  early_stopping_patience: 10
+
+optimizer:
+  lr: 3.0e-4
+
+scheduler:
+  T_max: ${training.max_epochs}
+
+task:
+  head_type: mlp
+  hidden_dims: [64]
+  dropout: 0.3
+  activation: relu

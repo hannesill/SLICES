@@ -1,0 +1,2042 @@
+[
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7535052559374528,
+        2.046689673332484
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522942022273911,
+        2.0714603355605337
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7533403382851848,
+        2.050003736006223
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7523543860208973,
+        2.0702051749587222
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "contrastive",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522112696781477,
+        2.073194173709314
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7535052559374528,
+        2.046689673332484
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522942022273911,
+        2.0714603355605337
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7533403382851848,
+        2.050003736006223
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7523543860208973,
+        2.0702051749587222
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "jepa",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522112696781477,
+        2.073194173709314
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "los_remaining",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "mae",
+      "projection_dim": null,
+      "task_name": "los_remaining",
+      "task_type": "regression",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": null,
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 42,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7535052559374528,
+        2.046689673332484
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 123,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522942022273911,
+        2.0714603355605337
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 456,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7533403382851848,
+        2.050003736006223
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 789,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7523543860208973,
+        2.0702051749587222
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  },
+  {
+    "encoder": {
+      "activation": "gelu",
+      "d_ff": 256,
+      "d_input": 84,
+      "d_model": 64,
+      "dropout": 0.1,
+      "layer_norm_eps": 1e-05,
+      "max_seq_length": 24,
+      "n_heads": 4,
+      "n_layers": 2,
+      "name": "transformer",
+      "obs_aware": true,
+      "pooling": "mean",
+      "prenorm": true,
+      "use_positional_encoding": true
+    },
+    "optimizer": {
+      "lr": 0.0001,
+      "name": "adamw",
+      "weight_decay": 0.05
+    },
+    "paradigm": "mae",
+    "scheduler": {
+      "T_max": 50,
+      "eta_min": 1e-06,
+      "name": "cosine"
+    },
+    "seed": 1011,
+    "task": "mortality_hospital",
+    "task_config": {
+      "activation": "relu",
+      "dropout": 0,
+      "gap_hours": 0,
+      "head_type": "linear",
+      "hidden_dims": [],
+      "label_sources": [
+        "stays",
+        "mortality_info"
+      ],
+      "n_classes": null,
+      "observation_window_hours": 24,
+      "prediction_window_hours": null,
+      "primary_metric": "auprc",
+      "projection_dim": null,
+      "task_name": "mortality_hospital",
+      "task_type": "binary",
+      "use_layer_norm": false
+    },
+    "training": {
+      "accelerator": "auto",
+      "accumulate_grad_batches": 1,
+      "allow_best_ckpt_fallback": false,
+      "batch_size": 64,
+      "class_weight": [
+        0.7522112696781477,
+        2.073194173709314
+      ],
+      "devices": "auto",
+      "early_stopping_patience": 10,
+      "freeze_encoder": true,
+      "gradient_clip_val": 1,
+      "label_smoothing": 0.1,
+      "max_epochs": 50,
+      "overfit_batches": 0,
+      "precision": 32,
+      "unfreeze_epoch": null,
+      "use_missing_token": true
+    }
+  }
+]

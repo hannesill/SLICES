@@ -1,0 +1,12 @@
+\begin{tabular}{llrrrrr}
+\toprule
+Data & Protocol & MAE & JEPA & Contrastive & Supervised & Constant median \\
+\midrule
+Combined & Fine-tune & \textbf{2.118 (0.029)} & 2.135 (0.013) & 2.152 (0.024) & 2.190 (0.031) & 2.403 (0.025) \\
+Combined & Probe & 2.425 (0.027) & 2.475 (0.023) & \textbf{2.309 (0.029)} & -- & 2.403 (0.025) \\
+eICU-CRD & Fine-tune & \textbf{1.964 (0.017)} & 1.977 (0.034) & 2.008 (0.031) & 1.997 (0.030) & 2.176 (0.006) \\
+eICU-CRD & Probe & 2.191 (0.011) & 2.249 (0.022) & \textbf{2.139 (0.011)} & -- & 2.176 (0.006) \\
+MIMIC-IV & Fine-tune & 2.368 (0.051) & 2.371 (0.069) & \textbf{2.359 (0.069)} & 2.397 (0.066) & 2.733 (0.074) \\
+MIMIC-IV & Probe & 2.755 (0.058) & 2.679 (0.070) & \textbf{2.592 (0.076)} & -- & 2.733 (0.074) \\
+\bottomrule
+\end{tabular}

@@ -1,0 +1,7 @@
+{
+ "n_runs_selected": 140,
+ "status_counts": {
+  "ok": 140
+ },
+ "max_overall_abs_diff_vs_frozen": 2.357654732776382e-05
+}

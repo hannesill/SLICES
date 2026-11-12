@@ -1,0 +1,4 @@
+paradigm,dataset,seed,device,torch_threads,dataloader_workers,batch_size,precision,warmup_steps,timed_steps,steps_per_epoch,max_epochs,ms_per_step,steps_per_sec,sec_per_train_epoch,projected_train_hours_full_schedule,note,step_cost_relative_to_mae
+mae,eicu,42,NVIDIA L4,4,0,256,32,20,300,362,100,118.46652844333371,8.44120287088797,42.884883296486805,1.1912467582357447,"training steps only (no validation, checkpointing or logging)",1.0
+jepa,eicu,42,NVIDIA L4,4,0,256,32,20,300,362,100,179.86695946000054,5.559664782249147,65.11183932452019,1.8086622034588942,"training steps only (no validation, checkpointing or logging)",1.5182934945716469
+contrastive,eicu,42,NVIDIA L4,4,0,256,32,20,300,362,100,98.18486204333264,10.184869430876857,35.542920059686416,0.9873033349912893,"training steps only (no validation, checkpointing or logging)",0.8287983393579189

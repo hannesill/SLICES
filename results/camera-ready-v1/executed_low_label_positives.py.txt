@@ -1,0 +1,282 @@
+"""Recompute per-seed labeled-subset sizes and positive counts for the
+SLICES label-efficiency grid, using the unmodified split + subset functions.
+
+Outputs aggregate counts only (no stay/patient identifiers).
+
+Split logic: ``compute_patient_level_splits`` (patient-level 70/15/15 on the
+full cohort, label filtering afterwards). Subset logic:
+``subsample_train_indices`` (``max(1, int(n_full * fraction))`` indices drawn
+with ``np.random.RandomState(seed).choice(..., replace=False)``). Both are
+loaded by file path from ``src/slices/data/splits.py`` of the given checkout,
+so neither the package nor the training DataModule is imported and nothing is
+written next to the processed data.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import importlib.util
+import logging
+import sys
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+import yaml
+
+DATASETS = ["combined", "eicu", "miiv"]
+TASKS = ["mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining"]
+BINARY_TASKS = {"mortality_24h", "mortality_hospital", "aki_kdigo"}
+SEEDS = [42, 123, 456, 789, 1011]
+# Reduced-label fractions per task (from results/per_seed.csv,
+# experiment_class == label_efficiency); 1.0 = full-label reference.
+FRACTIONS = {
+    "mortality_24h": [0.05, 0.1, 0.25, 0.5, 1.0],
+    "mortality_hospital": [0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
+    "aki_kdigo": [0.1, 1.0],
+    "los_remaining": [0.1, 1.0],
+}
+TRAIN_RATIO, VAL_RATIO, TEST_RATIO = 0.7, 0.15, 0.15
+
+# Ranges reported in the rebuttal: (task, fraction) -> dataset -> (min, max, mean)
+REBUTTAL = {
+    ("mortality_24h", 0.05): {"miiv": (31, 43, 37), "eicu": (57, 71, 65), "combined": (110, 144, 121)},
+    ("mortality_hospital", 0.01): {"miiv": (56, 74, 66), "eicu": (74, 95, 82), "combined": (144, 164, 153)},
+    ("aki_kdigo", 0.1): {"miiv": (761, 819, 791), "eicu": (818, 852, 839), "combined": (1600, 1724, 1658)},
+}
+
+
+def load_splits_module(path: Path):
+    spec = importlib.util.spec_from_file_location("slices_splits_launch", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--splits-py", type=Path, required=True)
+    ap.add_argument("--processed-root", type=Path, required=True)
+    ap.add_argument("--per-seed-csv", type=Path, required=True)
+    ap.add_argument("--rebuttal-parity-csv", type=Path, required=True)
+    ap.add_argument("--out", type=Path, required=True)
+    args = ap.parse_args()
+
+    logging.basicConfig(level=logging.ERROR)
+    splits = load_splits_module(args.splits_py)
+    print(f"splits.py: {args.splits_py} sha256={hashlib.sha256(args.splits_py.read_bytes()).hexdigest()}")
+
+    rows = []
+    test_support = {}  # (dataset, task, seed) -> (n_test, n_test_pos)
+    size_rule_ok = 0
+    size_rule_total = 0
+    nested_ok = 0
+    nested_total = 0
+    cache_checks = []
+
+    for ds in DATASETS:
+        pdir = args.processed_root / ds
+
+        # Check that the cached splits.yaml (used by the training code for seed
+        # 42) equals a fresh computation of the same split function.
+        with open(pdir / "splits.yaml") as f:
+            cached = yaml.safe_load(f)
+        static = pl.read_parquet(pdir / "static.parquet", columns=["stay_id", "patient_id"])
+        ts_ids = pl.read_parquet(pdir / "timeseries.parquet", columns=["stay_id"])["stay_id"].to_list()
+        s2p = dict(zip(static["stay_id"].to_list(), static["patient_id"].to_list()))
+        full_patients = {s2p[s] for s in ts_ids if s in s2p}
+        fresh = splits._split_patient_sets(full_patients, int(cached["seed"]), TRAIN_RATIO, VAL_RATIO)
+        same = (
+            set(cached["train_patients"]) == fresh[0]
+            and set(cached["val_patients"]) == fresh[1]
+            and set(cached["test_patients"]) == fresh[2]
+        )
+        cache_checks.append((ds, int(cached["seed"]), same))
+        print(f"[{ds}] cached splits.yaml seed={cached['seed']} equals fresh split: {same}")
+        del cached, static, ts_ids, s2p, full_patients, fresh
+
+        for task in TASKS:
+            for seed in SEEDS:
+                (
+                    train_idx,
+                    val_idx,
+                    test_idx,
+                    _static_df,
+                    labels_df,
+                    _all_ids,
+                    stay_ids,
+                    _excluded,
+                    _norm_idx,
+                ) = splits.compute_patient_level_splits(
+                    pdir, task, seed, TRAIN_RATIO, VAL_RATIO, TEST_RATIO
+                )
+                assert labels_df["stay_id"].n_unique() == labels_df.height, "duplicate stay_id in labels"
+                label_of = dict(zip(labels_df["stay_id"].to_list(), labels_df[task].to_list()))
+                y = np.array([label_of[s] for s in stay_ids], dtype=float)
+                assert not np.isnan(y).any(), "null label survived filtering"
+                if task in BINARY_TASKS:
+                    assert set(np.unique(y)) <= {0.0, 1.0}, f"non-binary labels in {task}"
+
+                n_test = len(test_idx)
+                n_test_pos = int((y[test_idx] == 1).sum()) if task in BINARY_TASKS else None
+                test_support[(ds, task, seed)] = (n_test, n_test_pos)
+
+                prev_subset = None
+                for frac in sorted(FRACTIONS[task]):
+                    if frac < 1.0:
+                        sub = splits.subsample_train_indices(train_idx, frac, seed)
+                        expected = max(1, int(len(train_idx) * frac))
+                        size_rule_total += 1
+                        size_rule_ok += int(len(sub) == expected)
+                    else:
+                        sub = list(train_idx)
+                    if prev_subset is not None:
+                        nested_total += 1
+                        nested_ok += int(prev_subset <= set(sub))
+                    prev_subset = set(sub)
+
+                    n_lab = len(sub)
+                    if task in BINARY_TASKS:
+                        n_pos = int((y[sub] == 1).sum())
+                        prev = n_pos / n_lab
+                    else:
+                        n_pos, prev = None, None
+                    rows.append(
+                        {
+                            "dataset": ds,
+                            "task": task,
+                            "label_fraction": frac,
+                            "seed": seed,
+                            "n_train_labeled": n_lab,
+                            "n_train_positive": n_pos,
+                            "train_prevalence": prev,
+                            "_n_train_full": len(train_idx),
+                        }
+                    )
+                print(f"[{ds}] {task} seed={seed}: n_train_full={len(train_idx)} n_test={n_test} n_test_pos={n_test_pos}")
+
+    # ---- Validation 1: test support vs frozen core_ssl_benchmark rows ----
+    ps = pl.read_csv(args.per_seed_csv, infer_schema_length=100000)
+    core = ps.filter((pl.col("experiment_class") == "core_ssl_benchmark") & (pl.col("label_fraction") == 1.0))
+    v1_total = v1_ok = v1_rows = 0
+    v1_fail = []
+    for (ds, task, seed), (n_test, n_pos) in sorted(test_support.items()):
+        sel = core.filter((pl.col("dataset") == ds) & (pl.col("task") == task) & (pl.col("seed") == seed))
+        v1_rows += sel["test/n_samples"].drop_nulls().len()
+        n_vals = set(sel["test/n_samples"].drop_nulls().cast(pl.Int64).to_list())
+        if task in BINARY_TASKS:
+            p_vals = set(sel["test/n_positive"].drop_nulls().cast(pl.Int64).to_list())
+            ok = n_vals == {n_test} and p_vals == {n_pos}
+        else:
+            p_vals = None
+            ok = n_vals == {n_test}
+        v1_total += 1
+        v1_ok += int(ok)
+        if not ok:
+            v1_fail.append((ds, task, seed, n_test, n_pos, n_vals, p_vals))
+    print(f"\nV1 test support vs frozen core_ssl_benchmark: {v1_ok}/{v1_total} cells match "
+          f"({sum(1 for k in test_support if k[1] in BINARY_TASKS)} classification cells; "
+          f"{v1_rows} frozen rows with recorded test support compared)")
+    for f in v1_fail:
+        print("  MISMATCH", f)
+
+    # Extra: test support in label_efficiency rows is unchanged
+    le = ps.filter(pl.col("experiment_class") == "label_efficiency")
+    le_total = le_ok = le_null = 0
+    for (ds, task, seed), (n_test, n_pos) in test_support.items():
+        sel = le.filter((pl.col("dataset") == ds) & (pl.col("task") == task) & (pl.col("seed") == seed))
+        for r in sel.iter_rows(named=True):
+            if r["test/n_samples"] is None or (task in BINARY_TASKS and r["test/n_positive"] is None):
+                le_null += 1
+                continue
+            le_total += 1
+            ok = int(r["test/n_samples"]) == n_test
+            if task in BINARY_TASKS:
+                ok = ok and int(r["test/n_positive"]) == n_pos
+            le_ok += int(ok)
+    print(f"V1b test support vs frozen label_efficiency rows: {le_ok}/{le_total} rows with recorded support match "
+          f"({le_null} rows have no recorded test support)")
+
+    # ---- Validation 2: rebuttal ranges ----
+    print("\nV2 rebuttal ranges (min-max (mean, rounded)):")
+    v2_ok = v2_total = 0
+    for (task, frac), per_ds in REBUTTAL.items():
+        for ds, (lo, hi, mean) in per_ds.items():
+            vals = [r["n_train_positive"] for r in rows if r["dataset"] == ds and r["task"] == task and r["label_fraction"] == frac]
+            got = (min(vals), max(vals), round(float(np.mean(vals))))
+            ok = got == (lo, hi, mean)
+            v2_total += 1
+            v2_ok += int(ok)
+            print(f"  {task} {frac} {ds}: got {got[0]}-{got[1]} ({np.mean(vals):.1f}) expected {lo}-{hi} ({mean}) {'OK' if ok else 'MISMATCH'}")
+    print(f"V2: {v2_ok}/{v2_total} rebuttal cells reproduced")
+
+    # ---- Validation 3: size rule, nesting, full-label train vs rebuttal parity ----
+    print(f"\nV3 subset size == max(1, int(n_full * fraction)): {size_rule_ok}/{size_rule_total}")
+    print(f"V3 subsets nested across increasing fractions (same seed): {nested_ok}/{nested_total}")
+    max_rel = max(abs(r["n_train_labeled"] / r["_n_train_full"] - r["label_fraction"]) for r in rows)
+    print(f"V3 max |n_labeled / n_full - fraction| = {max_rel:.2e}")
+    par = pl.read_csv(args.rebuttal_parity_csv, infer_schema_length=100000)
+    p_total = p_ok = q_total = q_ok = 0
+    for r in rows:
+        if r["label_fraction"] != 1.0:
+            continue
+        sel = par.filter((pl.col("dataset") == r["dataset"]) & (pl.col("task") == r["task"]) & (pl.col("seed") == r["seed"]))
+        if sel.height == 0:
+            continue
+        s = sel.row(0, named=True)
+        if s["frozen_n_train"] is not None:
+            # classification: train rows/positives recorded by the frozen runs
+            ok = int(s["frozen_n_train"]) == r["n_train_labeled"]
+            if r["task"] in BINARY_TASKS:
+                ok = ok and int(s["frozen_n_train_positive"]) == r["n_train_positive"]
+            p_total += 1
+            p_ok += int(ok)
+        else:
+            # LOS: frozen runs recorded no train count; compare with the rebuttal's recomputation
+            q_total += 1
+            q_ok += int(int(s["n_train"]) == r["n_train_labeled"])
+    print(f"V3 full-label train rows/positives vs frozen run values (rebuttal parity table): {p_ok}/{p_total}")
+    print(f"V3 full-label LOS train rows vs rebuttal recomputation (no frozen value recorded): {q_ok}/{q_total}")
+
+    # ---- Write CSV ----
+    ds_order = {d: i for i, d in enumerate(DATASETS)}
+    task_order = {t: i for i, t in enumerate(TASKS)}
+    rows.sort(key=lambda r: (ds_order[r["dataset"]], task_order[r["task"]], r["label_fraction"], r["seed"]))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["dataset", "task", "label_fraction", "seed", "n_train_labeled", "n_train_positive", "train_prevalence"])
+        for r in rows:
+            w.writerow([
+                r["dataset"], r["task"], repr(r["label_fraction"]), r["seed"], r["n_train_labeled"],
+                "" if r["n_train_positive"] is None else r["n_train_positive"],
+                "" if r["train_prevalence"] is None else f"{r['train_prevalence']:.6f}",
+            ])
+    print(f"\nWrote {len(rows)} rows to {args.out}")
+    print(f"sha256 {hashlib.sha256(args.out.read_bytes()).hexdigest()}")
+
+    # ---- Summary table ----
+    print("\nSummary: positives (labeled) over seeds, min-max (mean)")
+    keys = []
+    for r in rows:
+        k = (r["dataset"], r["task"], r["label_fraction"])
+        if k not in keys:
+            keys.append(k)
+    for k in keys:
+        sel = [r for r in rows if (r["dataset"], r["task"], r["label_fraction"]) == k]
+        labs = [r["n_train_labeled"] for r in sel]
+        if k[1] in BINARY_TASKS:
+            pos = [r["n_train_positive"] for r in sel]
+            print(f"  {k[0]:9s} {k[1]:19s} {k[2]:<5} pos {min(pos)}-{max(pos)} ({np.mean(pos):.1f})  labeled {min(labs)}-{max(labs)}")
+        else:
+            print(f"  {k[0]:9s} {k[1]:19s} {k[2]:<5} labeled {min(labs)}-{max(labs)} ({np.mean(labs):.1f})")
+
+    all_ok = (v1_ok == v1_total) and (v2_ok == v2_total) and (size_rule_ok == size_rule_total) and all(c[2] for c in cache_checks)
+    print(f"\nALL CHECKS PASSED: {all_ok}")
+    return 0 if all_ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

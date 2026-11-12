@@ -1,0 +1,44 @@
+{
+ "capped": {
+  "auprc_max_abs_diff": 0.038954764604568454,
+  "auprc_mean_abs_diff": 0.006728779185901986,
+  "auroc_max_abs_diff": 0.00710749626159668,
+  "auroc_mean_abs_diff": 0.002097043124112216,
+  "mae_max_abs_diff": 0.09038424491882324,
+  "mae_mean_abs_diff": 0.0359344482421875,
+  "mse_max_abs_diff": 6.764797210693359,
+  "mse_mean_abs_diff": 2.6554689407348624,
+  "n_cells": 15
+ },
+ "capped_seed_sensitivity": {
+  "max_range_across_probe_seeds": 0.053414344787597656,
+  "n_cells": 3,
+  "n_cells_frozen_within_probe_seed_range": 1,
+  "n_runs": 12
+ },
+ "embeddings": {
+  "all_label_match": true,
+  "all_split_size_match": true,
+  "all_stay_id_order_match": true,
+  "max_abs_diff": 9.5367431640625e-07,
+  "n_comparisons": 9
+ },
+ "encoders": {
+  "n_encoders": 45,
+  "n_match": 45
+ },
+ "splits": {
+  "class_weight_max_abs_diff": 2.220446049250313e-16,
+  "los_mean_predictor_mse_max_abs_diff": 2.495330555518649e-06,
+  "los_median_predictor_mae_max_abs_diff": 3.0364924885617484e-07,
+  "los_train_mean_max_abs_diff": 3.9959070408102093e-07,
+  "los_train_median_max_abs_diff": 0.0,
+  "n_cells": 60,
+  "n_classification_cells": 45,
+  "n_regression_cells": 15,
+  "n_test_match": 60,
+  "n_test_positive_match": 45,
+  "n_train_match": 45,
+  "n_train_positive_match": 45
+ }
+}

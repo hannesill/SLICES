@@ -1,0 +1,42 @@
+# Default evaluation configuration
+#
+# This configures which metrics to compute during training/validation/testing.
+# Metrics are computed using torchmetrics and logged to tensorboard/wandb.
+#
+# Available metrics by task type:
+#   binary:     auroc, auprc, accuracy, f1, precision, recall, specificity,
+#               brier_score, ece (expected calibration error)
+#   multiclass: auroc, auprc, accuracy, f1, precision, recall
+#   multilabel: auroc, auprc, accuracy, f1
+#   regression: mse, mae, r2
+#
+# Clinical metrics explanation:
+#   - auroc: Area under ROC curve (discrimination)
+#   - auprc: Area under precision-recall curve (useful for imbalanced data)
+#   - brier_score: Mean squared error of predictions (calibration + discrimination)
+#   - ece: Expected calibration error (how well probabilities match true rates)
+#   - specificity: True negative rate (important for ruling out conditions)
+#   - recall/sensitivity: True positive rate (important for screening)
+
+# Metric configuration
+metrics:
+  # Metrics to compute (null = use defaults for task type)
+  # Defaults:
+  #   binary -> [auroc, auprc, accuracy, f1, precision, recall, specificity,
+  #              brier_score, ece]
+  #   multiclass -> [auroc, accuracy]
+  #   regression -> [mse, mae, r2]
+  names: null
+
+  # Decision threshold for binary classification
+  threshold: 0.5
+
+# Fairness analysis configuration
+# Enable in-training fairness eval via eval.fairness.enabled=true, or use
+# scripts/eval/evaluate_fairness.py for post-run batch evaluation.
+# fairness:
+#   enabled: false
+#   protected_attributes:
+#     - gender
+#     - race
+#   min_subgroup_size: 50

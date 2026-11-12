@@ -1,0 +1,55 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Core Classification Results}
+
+\tableref{tab:classification} reports all full-label classification cells. Under the capped linear probe, \MAE{} has the highest mean AUPRC in all nine cells. This ordering holds in all 90 matched-seed comparisons against JEPA and contrastive learning. Mean paired advantages over the stronger SSL alternative range from .026 to .084 AUPRC (Appendix Figure~\ref{fig:seed-differences}). Under fine-tuning, the SSL ranking is less uniform and paired differences often cross zero: \MAE{} leads seven cells, ties \JEPA{} on \Combined{} AKI (.626 each), and trails contrastive learning on \MIMIC{} 24-hour mortality. The supervised Transformer has the highest fine-tuned mean in all three AKI cells.
+
+Probe optimization does not drive the frozen ranking (\tableref{tab:classification}; Appendix~\ref{app:converged}). The converged probe scores higher in 132 of 135 runs, by .017 AUPRC on average. Gains are largest for 24-hour mortality, where 82\% of capped probes stopped early on a low-prevalence validation metric, and .004--.012 per objective elsewhere, where 93--96\% reached the epoch cap. The objective order is unchanged in all nine cells by AUPRC and AUROC. \MAE{} beats both alternatives in all 90 matched-seed comparisons, with a mean paired advantage of .018--.081.
+
+\begin{table*}[t]
+\floatconts
+  {tab:classification}
+  {\caption{Core classification AUPRC, mean over five matched seeds. Capped probe: linear probe trained for at most 50 epochs. Converged probe: L2 logistic regression fitted to convergence on the same embeddings. Baselines are trained from scratch with full labels (Transf.: supervised Transformer). Bold marks the best mean per row within each probe block and across fine-tuning and baselines, ties at three decimals included. Appendix Tables~\ref{tab:classification-full} and~\ref{tab:converged-probe} give SDs.}}
+  {\scriptsize
+  \input{generated/classification-main.tex}}
+\end{table*}
+
+\subsection{SSL Versus Supervised and Classical Baselines}
+
+At full labels, baselines lead six of the twelve cells (\tableref{tab:classification} and the fine-tune rows of \tableref{tab:los}; Appendix \tableref{tab:baseline-full} gives the compact matrix). GRU-D has the highest 24-hour-mortality AUPRC and XGBoost the highest AKI AUPRC in all three regimes. Fine-tuned \MAE{} leads hospital mortality in all three, narrowly (.531, .495, and .579 against at most .527, .484, and .577 on \Combined{}, \EICU{}, and \MIMIC{}). The best SSL model has the lowest LOS error in all three regimes, by .03--.06 days. The baselines share cohorts, splits, and metrics but differ in input summaries and inductive biases.
+
+\subsection{Length of Stay and Loss Matching}
+
+The capped LOS probes trained with squared error but were selected and evaluated on absolute error. The target is right-skewed, with training means of 2.7--3.4 days and medians of 1.3--1.5 days. Absolute error therefore favors the training-median constant, while a squared-error model estimates the conditional mean. With an absolute-error loss, all three objectives beat the median constant in 5/5 seeds per regime, by 7--12\% (\tableref{tab:los}). Ridge probes lose to this constant on absolute error but beat a training-mean constant on squared error in 5/5 seeds. Objective differences are small: \MAE{} is lowest on \EICU{} and \Combined{}, and the three are within .023 days on \MIMIC{}, where \MAE{} is last in 5/5 seeds. The capped-probe ordering, in which contrastive learning was lowest and frozen \MAE{} was above the constant (Appendix \tableref{tab:los-reference}), does not survive loss matching. Its contrastive heads came from the first few epochs. Fine-tuning still trains with squared error and beats the constant in every regime, but was not rerun with an absolute-error loss.
+
+\begin{table*}[t]
+\floatconts
+  {tab:los}
+  {\caption{Remaining-LOS absolute error in days, mean (sample SD), $n=5$; lower is better. Probe rows are linear probes on frozen final-epoch embeddings, trained with an absolute-error-type Huber loss (abs.) or ridge squared error (sq.). Fine-tune rows are the reference squared-error runs beside full-label baselines (Transf.: supervised Transformer). Const.\ predicts each seed's training-label median. Bold marks the lowest learned-model mean per row; in sq.\ probe rows the constant is lower.}}
+  {\scriptsize
+  \input{generated/los-matched.tex}}
+\end{table*}
+
+\subsection{Label Efficiency}
+\label{sec:label-efficiency}
+
+Does pretraining help when labels are scarce? We reduce only the training labels, to 1--50\% for hospital mortality, 5--50\% for 24-hour mortality, and 10\% for AKI and LOS, giving 33 reduced-label cells per protocol. Among the three SSL implementations, \MAE{} leads 30/33 fine-tuning and 28/33 capped-probe means (28/30 classification cells under each protocol), and 28/33 fine-tuning means with the supervised Transformer included. For hospital mortality, fine-tuned \MAE{} exceeds the supervised Transformer at every fraction in every regime, by .033 (paired SD .012) at 1\% labels on \Combined{}. No single fraction marks where pretraining stops paying off: for \MIMIC{} 24-hour mortality, differences above 5\% labels change sign, and at 5\% the unstratified subsets have 31--43 training positives per seed. Reduced-label GRU-D and XGBoost runs are not compared. Appendix Figure~\ref{fig:label-efficiency} and \tableref{tab:label-fraction-delta} give all fractions.
+
+\subsection{Secondary Diagnostics}
+\label{sec:secondary}
+
+\paragraph{Sources and databases.}
+Scored separately on the \MIMIC{} and \EICU{} portions of the \Combined{} test split, converged \MAE{} probes lead both alternatives on both portions for all classification tasks in 5/5 seeds. Fine-tuned \MAE{} leads five of six portion--task means among SSL objectives, and supervised training leads AKI on both portions. Pooling hides a difference in absolute level, with higher AUROC on the \MIMIC{} portion, not a reversal (Appendix~\ref{app:per-source}). With source pretraining and target-label fine-tuning, MAE leads or ties all four \MIMIC{}-to-\EICU{} tasks and leads three reverse tasks, and stays within .004--.010 AUPRC of target pretraining for mortality (Appendix~\ref{app:transfer}). This is adaptation with target labels, not out-of-domain validation (Section~\ref{sec:limitations}).
+
+\paragraph{Compute.}
+The 45 core pretraining runs took an estimated 55--63 L4-hours. \JEPA{} costs the most on every GPU measure, with 2.2 times the forward FLOPs of \MAE{} and 1.5 times its idle-GPU step time, yet ranks last in 7 of 9 frozen classification cells. \MAE{} uses the fewest FLOPs, while a contrastive step takes 18\% less time on an idle GPU. Cost alone therefore does not explain the ranking, although we ran no compute-matched ablation (Appendix~\ref{app:compute}).
+
+\paragraph{Checkpoint selection.}
+Selecting \MIMIC{} encoders on SSL validation loss instead of the final epoch worsens \JEPA{} capped probes on hospital mortality and LOS by .041 AUPRC and .26 days, changes \MAE{} and contrastive learning by at most .001, and leaves both leaders unchanged (Appendix~\ref{app:diagnostics}).
+
+\paragraph{Missingness.}
+A linear control on \MIMIC{} hospital mortality reaches .301 (.025) AUPRC from masks alone and .404 (.013) from values plus masks, evidence of input signal, not an optimized baseline (Appendix~\ref{app:raw}).
+
+\paragraph{Other diagnostics.}
+Medium and large \MAE{} encoders beat matched supervised models on \MIMIC{} 24-hour mortality at three label fractions, and a random encoder trails SSL probes in 118/120 seed-level comparisons. Appendices~\ref{app:capacity-subgroups}--\ref{app:random} add the TS2Vec-style extension and subgroup audits.

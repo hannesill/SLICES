@@ -1,0 +1,17 @@
+{
+ "n_downstream_runs": 24,
+ "n_primary_within_1_sd": 24,
+ "n_primary_within_2_sd": 24,
+ "n_primary_within_frozen_seed_range": 22,
+ "primary_abs_diff_over_sd_median": 0.04492577378062517,
+ "primary_abs_diff_over_sd_max": 0.900500219237998,
+ "n_downstream_runs_same_last_epoch": 15,
+ "n_all_metrics": 48,
+ "n_all_metrics_within_1_sd": 48,
+ "n_all_metrics_within_2_sd": 48,
+ "primary_abs_diff_max_auprc": 0.040349155664443914,
+ "primary_abs_diff_max_los_mae": 0.04479169845581055,
+ "n_runs_config_checked": 24,
+ "n_runs_with_training_config_differences": 0,
+ "n_frozen_runs_resumed_from_last_ckpt": 0
+}

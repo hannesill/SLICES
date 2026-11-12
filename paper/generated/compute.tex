@@ -1,0 +1,12 @@
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrrrrrrr@{}}
+\toprule
+ & Fwd. MFLOPs & Trainable & Idle L4 & \multicolumn{2}{c}{MIMIC-IV (h)} & \multicolumn{2}{c}{eICU-CRD (h)} & \multicolumn{2}{c}{Combined (h)} \\
+\cmidrule(lr){5-6} \cmidrule(lr){7-8} \cmidrule(lr){9-10}
+Objective & per sample & params & ms/step & Shared & Idle & Shared & Idle & Shared & Idle \\
+\midrule
+MAE & 4.78 & 269,460 & 119.6 & 1.99 (0.60) & 0.68 & 3.94 (0.04) & 1.19 & 6.16 (0.04) & 1.89 \\
+JEPA & 10.60 & 189,440 + 159,808 EMA & 179.7 & 3.00 (0.02) & 1.02 & 5.34 (0.03) & 1.81 & 8.32 (0.06) & 2.86 \\
+Contrastive & 6.32 & 193,408 & 97.6 & 2.67 (0.01) & 0.56 & 4.76 (0.05) & 0.99 & 7.41 (0.03) & 1.56 \\
+\bottomrule
+\end{tabular}

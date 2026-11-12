@@ -1,0 +1,15 @@
+\section{Evidence and Reproducibility Boundary}
+\label{app:reproducibility}
+
+The archived evidence bundle used for the paper contains:
+\begin{itemize}
+  \item an aggregate result table with one row per scientific cell and seed summaries.
+  \item a per-seed table used for matched differences and coverage checks.
+  \item long-form metrics and retained diagnostic test outputs.
+  \item label-efficiency, classical-context, and TS2Vec comparison tables.
+  \item an evidence manifest recording row counts, schemas, analysis revision, and source hashes.
+\end{itemize}
+
+The core audit filter is: core SSL analysis, default model size, full label fraction, the three data regimes, four tasks, and the two adaptation protocols. It yields 84 aggregate rows with five seeds each and 420 per-seed rows. The random-encoder diagnostic is stored separately and is not merged into the archived core ranking. No patient-level row is included in the paper source or code repository.
+
+The code repository also includes \texttt{thesis-coverage-evidence.json}, with source hashes and aggregate cells for the capacity, subgroup, and LOS secondary-metric summaries. Post-review diagnostics (Appendix~\ref{app:post-review}) and the recomputed reduced-label positive counts (\texttt{results/camera-ready-v1/}) are separate packages with their own provenance notes. They do not modify the archived results. The paper source includes LaTeX, generated table fragments and vector figures, a bibliography, and the official class/style files. It builds with PDF\LaTeX{} and BibTeX through \texttt{latexmk}.

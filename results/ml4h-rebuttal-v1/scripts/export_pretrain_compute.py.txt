@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Export a read-only compute table for the core SSL pretraining runs.
+
+ML4H rebuttal diagnostic. Reads run summaries/configs from the frozen W&B
+project through the public API (no writes, no run creation) and reports
+runtime, optimisation steps and epochs per SSL objective and dataset.
+
+Caveat encoded in the output: the thesis corpus was launched with many runs
+sharing one L4 GPU, so W&B ``_runtime`` is shared-GPU wall-clock time, not
+exclusive GPU time. For every pretraining run the script therefore also
+reports how many other runs of the same project were active on average while
+it ran (time-weighted concurrency from run start/duration).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT = Path("outputs/ml4h-rebuttal/compute")
+CORE_PARADIGMS = ("mae", "jepa", "contrastive")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--entity", default="hannes-ill")
+    parser.add_argument("--project", default="slices-final")
+    parser.add_argument("--revision", default="thesis-v1")
+    parser.add_argument("--experiment-class", default="core_ssl_benchmark")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--skip-concurrency",
+        action="store_true",
+        help="Do not fetch all project runs to estimate GPU sharing.",
+    )
+    return parser.parse_args(argv)
+
+
+def _parse_time(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    stamp = datetime.fromisoformat(text)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
+
+
+def fetch_pretrain_runs(api: Any, path: str, revision: str, experiment_class: str) -> pd.DataFrame:
+    filters = {
+        "tags": {
+            "$all": [
+                "phase:pretrain",
+                f"revision:{revision}",
+                f"experiment_class:{experiment_class}",
+            ]
+        },
+        "state": "finished",
+    }
+    rows = []
+    for run in api.runs(path, filters=filters, order="+created_at", per_page=200):
+        config = dict(run.config)
+        summary = dict(run.summary_metrics or {})
+        ssl_cfg = config.get("ssl") or {}
+        training = config.get("training") or {}
+        rows.append(
+            {
+                "wandb_run_id": run.id,
+                "wandb_run_name": run.name,
+                "paradigm": ssl_cfg.get("name") or config.get("paradigm"),
+                "dataset": config.get("dataset"),
+                "seed": config.get("seed"),
+                "launch_commit": config.get("launch_commit"),
+                "batch_size": training.get("batch_size"),
+                "max_epochs": training.get("max_epochs"),
+                "precision": training.get("precision"),
+                "created_at_unix": _parse_time(run.created_at),
+                "runtime_sec": summary.get("_runtime"),
+                "train_wall_clock_sec": summary.get("train/wall_clock_seconds"),
+                "gradient_steps": summary.get("train/gradient_steps"),
+                "global_step": summary.get("trainer/global_step"),
+                "last_logged_epoch": summary.get("epoch"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def fetch_all_run_intervals(api: Any, path: str, revision: str) -> pd.DataFrame:
+    filters = {"tags": {"$all": [f"revision:{revision}"]}}
+    rows = []
+    for run in api.runs(path, filters=filters, order="+created_at", per_page=500):
+        summary = dict(run.summary_metrics or {})
+        start = _parse_time(run.created_at)
+        runtime = summary.get("_runtime")
+        if start is None or runtime is None:
+            continue
+        rows.append({"wandb_run_id": run.id, "start": start, "end": start + float(runtime)})
+    return pd.DataFrame(rows)
+
+
+def mean_concurrency(start: float, end: float, intervals: pd.DataFrame) -> float:
+    """Time-weighted mean number of project runs active during [start, end]."""
+    if end <= start:
+        return float("nan")
+    overlap = np.minimum(intervals["end"].to_numpy(), end) - np.maximum(
+        intervals["start"].to_numpy(), start
+    )
+    return float(np.clip(overlap, 0.0, None).sum() / (end - start))
+
+
+def aggregate(runs: pd.DataFrame, by: list[str]) -> pd.DataFrame:
+    metrics = [
+        "runtime_sec",
+        "train_wall_clock_sec",
+        "steps",
+        "epochs_completed",
+        "sec_per_step_shared_gpu",
+        "mean_concurrent_project_runs",
+    ]
+    metrics = [m for m in metrics if m in runs.columns]
+    grouped = runs.groupby(by)
+    out = grouped[metrics].agg(["mean", "std"])
+    out.columns = [f"{metric}_{stat}" for metric, stat in out.columns]
+    out.insert(0, "n_runs", grouped.size())
+    out["runtime_hours_mean"] = out["runtime_sec_mean"] / 3600.0
+    out["runtime_hours_std"] = out["runtime_sec_std"] / 3600.0
+    return out.reset_index()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    import wandb
+
+    api = wandb.Api(timeout=300)
+    path = f"{args.entity}/{args.project}"
+    runs = fetch_pretrain_runs(api, path, args.revision, args.experiment_class)
+    runs = runs[runs.paradigm.isin(CORE_PARADIGMS)].copy()
+    if runs.empty:
+        raise SystemExit("No pretraining runs found")
+    runs["steps"] = runs["gradient_steps"].fillna(runs["global_step"])
+    runs["epochs_completed"] = runs["last_logged_epoch"].astype(float) + 1.0
+    runs["sec_per_step_shared_gpu"] = runs["runtime_sec"] / runs["steps"]
+
+    if not args.skip_concurrency:
+        intervals = fetch_all_run_intervals(api, path, args.revision)
+        runs["mean_concurrent_project_runs"] = [
+            mean_concurrency(row.created_at_unix, row.created_at_unix + row.runtime_sec, intervals)
+            for row in runs.itertuples()
+        ]
+        n_interval_runs = int(len(intervals))
+    else:
+        n_interval_runs = 0
+
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    runs.sort_values(["dataset", "paradigm", "seed"]).to_csv(
+        out_dir / "pretrain_compute_per_run.csv", index=False
+    )
+    by_cell = aggregate(runs, ["paradigm", "dataset"])
+    by_cell.to_csv(out_dir / "pretrain_compute_by_paradigm_dataset.csv", index=False)
+    by_paradigm = aggregate(runs, ["paradigm"])
+    by_paradigm.to_csv(out_dir / "pretrain_compute_by_paradigm.csv", index=False)
+    manifest = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "source": f"wandb:{path}",
+        "revision": args.revision,
+        "experiment_class": args.experiment_class,
+        "n_pretrain_runs": int(len(runs)),
+        "n_runs_used_for_concurrency": n_interval_runs,
+        "access": "read-only public API (wandb.Api().runs)",
+        "caveat": (
+            "runtime_sec is W&B _runtime on a single shared L4 GPU with many concurrent "
+            "runs; it is not exclusive GPU time."
+        ),
+    }
+    (out_dir / "pretrain_compute_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, indent=1) + "\n"
+    )
+    pd.set_option("display.width", 220)
+    pd.set_option("display.max_columns", 50)
+    print(by_cell.round(3).to_string(index=False))
+    print(by_paradigm.round(3).to_string(index=False))
+    print(json.dumps(manifest, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,6 @@
+# Preserve the exact bytes pinned by MANIFEST.json on every checkout.
+* -text
+
+# Generated or byte-pinned archival copies: exempt from the token-size commit hook.
+MANIFEST.json -token-limit
+results/ml4h-rebuttal-v1/** -token-limit

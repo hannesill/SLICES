@@ -1,0 +1,128 @@
+\documentclass[pmlr,twocolumn,10pt]{jmlr}
+
+% Official ML4H 2026 Proceedings camera-ready configuration.
+\mlhtrack{proceedings}
+\newif\iffinal
+\finaltrue
+
+\iffinal
+  \ifmlhneedspmlr
+    \jmlrvolume{346}
+    \jmlryear{2026}
+  \fi
+  \jmlrworkshop{Machine Learning for Health (ML4H) 2026}
+\else
+  \jmlrproceedings{}{Submitted to ML4H 2026: \mlhtrackname}
+  \jmlrworkshop{Machine Learning for Health (ML4H) 2026}
+\fi
+
+% The class loads amsmath, amssymb, natbib, graphicx, url, and algorithm2e.
+\urlstyle{same}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{fontawesome5}
+\usepackage[switch]{lineno}
+
+\hypersetup{
+  pdftitle={SLICES: A Benchmark and Evaluation Framework for Self-Supervised Learning on Sparse ICU Time Series},
+  pdfauthor={Hannes Ill, Dimitrios Proios, Leo Anthony Celi, Peter J. Sch\"uffler},
+  pdfsubject={ML4H 2026 Proceedings},
+  pdfkeywords={self-supervised learning, clinical time series, intensive care, benchmark, missing data}
+}
+
+\newcommand{\SLICES}{SLICES}
+\newcommand{\MIMIC}{MIMIC-IV}
+\newcommand{\EICU}{eICU-CRD}
+\newcommand{\Combined}{Combined}
+\newcommand{\MAE}{MAE}
+\newcommand{\JEPA}{JEPA}
+\newcommand{\Con}{Contrastive}
+\newcommand{\FT}{Fine-tune}
+\newcommand{\LP}{Probe}
+\newcommand{\NA}{--}
+\defcitealias{kdigo2012aki}{KDIGO AKI Work Group, 2012}
+
+% Placeholders that still need author input are marked in red.
+\newcommand{\camerareadytodo}[1]{\textcolor{red}{#1}}
+\newcommand{\releaseurl}{https://github.com/hannesill/SLICES/tree/ml4h-2026}
+
+\title[SLICES: Benchmarking SSL on Sparse ICU Time Series]{SLICES: A Benchmark and Evaluation Framework for Self-Supervised Learning on Sparse ICU Time Series}
+\author{%
+  \centering
+  \Name{Hannes Ill\nametag{$^{1,4,*}$}},
+  \Name{Dimitrios Proios\nametag{$^{2}$}},
+  \Name{Leo Anthony Celi\nametag{$^{1,3}$}},
+  \Name{Peter J. {Sch\"uffler}\nametag{$^{4,5,6}$}}\\[2ex]
+  \addr $^{1}$Laboratory for Computational Physiology, Massachusetts Institute of Technology, USA\\[0.6ex]
+  \addr $^{2}$Department of Radiology and Medical Informatics, Faculty of Medicine, University of Geneva, Geneva, Switzerland\\[0.6ex]
+  \addr $^{3}$Division of Pulmonary, Critical Care and Sleep Medicine, Beth Israel Deaconess Medical Center, USA\\[0.6ex]
+  \addr $^{4}$Institute of Pathology, Technical University of Munich, TUM School of Medicine and Health, Munich, Germany\\[0.6ex]
+  \addr $^{5}$Munich Center for Machine Learning (MCML), Munich, Germany\\[0.6ex]
+  \addr $^{6}$Munich Data Science Institute (MDSI), Munich, Germany\\[0.9ex]
+  \addr $^{*}$Corresponding author: \texttt{illh@mit.edu}\\[2.5ex]
+  \addr \href{\releaseurl}{\faGithub\ \ \texttt{github.com/hannesill/SLICES}}\endgraf
+}
+
+\iffinal\else\linenumbers\fi
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Self-supervised learning (SSL) results for intensive care unit (ICU) time series are hard to compare when data processing, encoders, and adaptation vary together. We present \SLICES{}, a benchmark and evaluation framework for comparing and extending SSL methods under a shared clinical setup. It fixes 24-hour value--observation-mask inputs, a Transformer encoder, patient-level splits, four endpoints, two adaptation protocols, and five matched seeds across \MIMIC{}, \EICU{}, and their pooled union. Masked autoencoding (\MAE{}), joint-embedding prediction (\JEPA{}), and contrastive learning provide reference implementations. Among these objectives, \MAE{} leads mean AUPRC in all nine frozen classification comparisons, also under converged probes, and in seven of nine fine-tuning comparisons. Fine-tuned \MAE{} leads hospital mortality at full labels and scores higher than a supervised Transformer of the same architecture at every label fraction, and SSL fine-tuning gives the lowest length-of-stay error. Supervised baselines remain strong elsewhere: GRU-D leads 24-hour mortality and XGBoost leads acute kidney injury in all three regimes. Rankings depend on the adaptation protocol, the comparator set, and whether the probe loss matches the metric. A two-seed \MIMIC{} rerun with the maintained code stays within two across-seed SDs of the reference in all 48 downstream runs. The code repository supports new objectives, shared downstream evaluation, and regeneration of the reference results, so new SSL methods can be compared with these references under the same conditions~\href{\releaseurl}{\faGithub}. Generalization to unseen hospitals is not tested here and is the natural next extension.
+\end{abstract}
+
+\begin{keywords}
+self-supervised learning, clinical time series, intensive care, benchmark, missing data
+\end{keywords}
+
+\ifmlhneedsstatements
+\paragraph*{Data and Code Availability}
+We use deidentified \MIMIC{} v3.1 and \EICU{} v2.0 data from PhysioNet under credentialed access \citep{physionet2024mimiciv31,physionet2019eicu20}. Code, run-level aggregate results, post-review diagnostics, and executable audits are available in the code repository linked above (tag \texttt{ml4h-2026}). The repository excludes patient records, split identities, credentials, and trained patient-data weights. Aggregate auditing needs no data access. Training reproduction requires independent credentialing, training, and a data-use agreement.
+
+\paragraph*{Institutional Review Board (IRB)}
+This secondary analysis of deidentified, credentialed-access data under the PhysioNet data-use agreements does not require IRB approval.
+\fi
+
+\input{sections/introduction}
+
+\input{sections/related-work}
+
+
+\input{sections/benchmark-design}
+
+\input{sections/experimental-setup}
+
+\input{sections/results}
+
+\input{sections/discussion}
+
+\input{sections/limitations}
+
+\input{sections/ethics}
+
+
+\input{sections/conclusion}
+
+\typeout{ML4H-MAIN-END-PAGE:\thepage}
+
+\acks{We thank the anonymous reviewers and the area chair for comments that led to the converged-probe, loss-matched LOS, per-source, compute, and reproduction analyses. LAC is funded by the National Institutes of Health through DS-I Africa U54 TW012043-01 and Bridge2AI OT2OD032701, the National Science Foundation through ITEST \#2148451, a grant of the Boston-Korea Innovative Research Project (RS-2024-00403047), and a grant of the Korea Health Technology R\&D Project (RS-2024-00439677) through the Korea Health Industry Development Institute (KHIDI), funded by the Ministry of Health \& Welfare, Republic of Korea.}
+
+\bibliography{references}
+
+% ML4H 2026: appendices start on a new page after the bibliography.
+\clearpage
+\appendix
+\input{appendix/benchmark-details}
+
+\input{appendix/secondary-analyses}
+
+\input{appendix/secondary-diagnostics}
+
+\clearpage
+\input{appendix/post-review}
+
+\clearpage
+\input{appendix/evidence}
+
+\end{document}

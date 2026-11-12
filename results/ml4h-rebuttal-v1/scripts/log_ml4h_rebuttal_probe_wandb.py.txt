@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Log converged frozen-probe metrics to the ML4H rebuttal W&B project.
+
+Creates one run per (dataset, paradigm, seed) in a rebuttal-only project and
+writes run-level configs and summary metrics from the exported per-seed table.
+Nothing but scalar metrics and configuration is uploaded: no embeddings,
+predictions, code snapshots or patient-level data. The frozen thesis project
+is refused as a target.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+import pandas as pd
+
+from scripts.diagnostics import run_converged_frozen_probe as probe
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_TABLE = Path("results/ml4h-rebuttal-v1/p1_converged_probe_per_seed.csv")
+DEFAULT_PROJECT = "slices-ml4h-rebuttal"
+FORBIDDEN_PROJECTS = {"slices-final", "slices-thesis"}
+METRIC_PREFIXES = ("converged/", "frozen_capped/test_", "delta_converged_minus_frozen/")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--table", type=Path, default=DEFAULT_TABLE)
+    parser.add_argument("--project", default=DEFAULT_PROJECT)
+    parser.add_argument("--entity", default="hannes-ill")
+    parser.add_argument("--launch-commit", required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args(argv)
+
+
+def run_name(dataset: str, paradigm: str, seed: int) -> str:
+    return f"{probe.EXPERIMENT_CLASS}_{dataset}_{paradigm}_seed{seed}"
+
+
+def build_run_payloads(table: pd.DataFrame, launch_commit: str) -> list[dict[str, Any]]:
+    """One payload (name, group, tags, config, summary) per dataset/paradigm/seed."""
+    payloads = []
+    for (dataset, paradigm, seed), group in table.groupby(
+        ["dataset", "paradigm", "seed"], sort=False
+    ):
+        summary: dict[str, Any] = {}
+        for row in group.to_dict("records"):
+            prefix = f"{row['task']}/{row['probe']}"
+            summary[f"{prefix}/selected_lambda"] = float(row["selected_lambda"])
+            summary[f"{prefix}/selected_converged"] = bool(row["selected_converged"])
+            for column, value in row.items():
+                if not column.startswith(METRIC_PREFIXES) or pd.isna(value):
+                    continue
+                if isinstance(value, str):
+                    continue
+                summary[f"{prefix}/{column}"] = float(value)
+        config = {
+            "experiment_class": probe.EXPERIMENT_CLASS,
+            "revision": probe.REVISION,
+            "phase": "probe",
+            "protocol": "linear_probe_converged",
+            "dataset": dataset,
+            "paradigm": paradigm,
+            "seed": int(seed),
+            "label_fraction": 1.0,
+            "launch_commit": launch_commit,
+            "encoder_sha256": group["encoder_sha256"].iloc[0],
+            "encoder_source": "slices-final thesis-v1 pretrain encoder.pt (final epoch)",
+            "probe": {
+                "standardisation": "train-split mean/std",
+                "classification": "L2 logistic regression, L-BFGS, sqrt-balanced class weights",
+                "logistic_lambda_grid": list(probe.LOGISTIC_LAMBDA_GRID),
+                "ridge_lambda_grid": list(probe.RIDGE_LAMBDA_GRID),
+                "huber_lambda_grid": list(probe.HUBER_LAMBDA_GRID),
+                "huber_delta_days": probe.HUBER_DELTA_DAYS,
+                "selection": "validation split only",
+            },
+        }
+        payloads.append(
+            {
+                "name": run_name(dataset, paradigm, int(seed)),
+                "group": f"{probe.EXPERIMENT_CLASS}_{dataset}_{paradigm}",
+                "tags": [
+                    f"experiment_class:{probe.EXPERIMENT_CLASS}",
+                    f"revision:{probe.REVISION}",
+                    "phase:probe",
+                    "protocol:linear_probe_converged",
+                    f"dataset:{dataset}",
+                    f"paradigm:{paradigm}",
+                    f"seed:{seed}",
+                    f"commit:{launch_commit[:12]}",
+                ],
+                "config": config,
+                "summary": summary,
+            }
+        )
+    return payloads
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.project in FORBIDDEN_PROJECTS:
+        raise SystemExit(f"Refusing to log rebuttal diagnostics to frozen project {args.project}")
+    table = pd.read_csv(REPO_ROOT / args.table)
+    payloads = build_run_payloads(table, args.launch_commit)
+    print(f"Runs to log: {len(payloads)}", flush=True)
+    if args.dry_run:
+        first = payloads[0]
+        print(first["name"], first["tags"], len(first["summary"]), "summary keys")
+        return 0
+
+    import wandb
+
+    existing = {
+        run.name
+        for run in wandb.Api(timeout=120).runs(
+            f"{args.entity}/{args.project}",
+            filters={"tags": {"$all": [f"experiment_class:{probe.EXPERIMENT_CLASS}"]}},
+        )
+    }
+    for payload in payloads:
+        if payload["name"] in existing:
+            print(f"SKIP existing W&B run: {payload['name']}", flush=True)
+            continue
+        run = wandb.init(
+            project=args.project,
+            entity=args.entity,
+            name=payload["name"],
+            group=payload["group"],
+            tags=payload["tags"],
+            config=payload["config"],
+            job_type="converged_frozen_probe",
+            save_code=False,
+            settings=wandb.Settings(disable_git=True, disable_code=True, console="off"),
+        )
+        run.summary.update(payload["summary"])
+        run.finish()
+        print(f"LOGGED {payload['name']}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

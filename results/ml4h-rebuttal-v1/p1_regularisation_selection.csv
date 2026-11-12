@@ -1,0 +1,7 @@
+task,probe,n_cells,n_selected_converged,n_all_grid_converged,n_grid_fits,n_grid_fits_converged,max_n_iter,lambda_grid_min,lambda_grid_max,selected_lambda_min,selected_lambda_median,selected_lambda_max,n_selected_interior,n_selected_weakest_edge,n_selected_strongest_edge
+mortality_24h,logreg_l2,45,45,45,765,765,179,1e-07,10.0,1e-07,0.0001,0.0031622776601683794,44,1,0
+mortality_hospital,logreg_l2,45,45,45,765,765,167,1e-07,10.0,1e-07,0.0001,0.0031622776601683794,43,2,0
+aki_kdigo,logreg_l2,45,45,45,765,765,166,1e-07,10.0,1e-07,3.1622776601683795e-05,0.001,42,3,0
+los_remaining,huber_valmae,45,45,45,360,360,706,1e-06,10.0,1e-06,0.0001,0.001,24,21,0
+los_remaining,ridge_valmae,45,45,45,945,945,0,1e-06,10000.0,0.001,0.0031622776601683794,0.1,45,0,0
+los_remaining,ridge_valmse,45,45,45,945,945,0,1e-06,10000.0,1e-06,0.00031622776601683794,0.01,30,15,0

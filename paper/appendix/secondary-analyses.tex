@@ -1,0 +1,100 @@
+\section{Secondary Analyses}
+\label{app:secondary}
+
+\subsection{Classification Results with Seed Variation}
+
+\tableref{tab:classification-full} gives sample SDs for the capped probe and fine-tuning, and \tableref{tab:converged-probe} (Appendix~\ref{app:converged}) gives them for the converged probe. Figure~\ref{fig:seed-differences} shows matched-seed paired differences, \MAE{} minus each comparator.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:classification-full}
+  {\caption{Core classification AUPRC, mean (sample SD) over five matched seeds. Probe rows use the capped linear probe. Bold marks the highest unrounded mean in each row. The supervised Transformer is defined only for full fine-tuning.}}
+  {\scriptsize
+  \input{generated/classification.tex}}
+\end{table*}
+
+\begin{figure*}[htbp]
+\floatconts
+  {fig:seed-differences}
+  {\caption{Matched-seed classification AUPRC differences, MAE minus comparator. Positive values favor MAE. Points are mean paired differences. Bars span the five observed differences, not a confidence interval. Supervised appears only for full fine-tuning.}}
+  {\includegraphics[width=.92\textwidth]{generated/seed-variance.pdf}}
+\end{figure*}
+
+\subsection{Label Efficiency}
+\label{app:label-efficiency}
+
+\begin{figure*}[htbp]
+\floatconts
+  {fig:label-efficiency}
+  {\caption{Hospital-mortality label efficiency under full fine-tuning, including the supervised Transformer at each label fraction. Points are five-seed means. Bars are sample SD across seeds. Only training labels are reduced.}}
+  {\includegraphics[width=.94\textwidth]{generated/label-efficiency.pdf}}
+\end{figure*}
+
+Only the labeled training subset is reduced. Validation and test partitions remain unchanged. Each seed draws its subsets as prefixes of one random permutation of the labeled training stays, keeping $\lfloor fn \rfloor$ of $n$ stays at fraction $f$. Subsets are therefore nested across fractions within a seed and are not class-stratified. Hospital mortality uses 1\%, 5\%, 10\%, 25\%, 50\%, and the full-label reference. Twenty-four-hour mortality starts at 5\%. AKI and LOS use 10\% and full-label references. Each cell contains five seeds.
+
+
+At the lowest exported fraction for \Combined{} hospital mortality (1\%), fine-tuned AUPRC means are .419 for \MAE{}, .341 for \JEPA{}, .377 for contrastive learning, and .386 for supervised training. At 5\% labels for 24-hour mortality, the corresponding means are .277, .241, .245, and .267. When full-label references are included, MAE leads 39/45 fine-tuning cells among SSL methods, 35/45 with supervised included, and 37/39 classification probe cells among SSL methods (LOS probe cells use the superseded capped probe). Section~\ref{sec:results} instead counts only fractions below 100\%. Comparator sets and denominators must be stated together.
+
+\begin{table*}[htbp]
+\floatconts{tab:low-label}{\caption{Lowest exported label fractions, full fine-tuning. MAE and supervised means use AUPRC for classification and absolute error in days for LOS. $\Delta$ is MAE minus supervised. Positive favors MAE only for classification. SD is computed from five paired differences, not from independent error propagation.}}
+{\scriptsize\input{generated/low-label.tex}}
+\end{table*}
+
+Figure~\ref{fig:label-efficiency} shows hospital mortality. \tableref{tab:label-fraction-delta} extends the comparison to every label fraction. For hospital mortality, fine-tuned \MAE{} exceeds supervised training at every fraction in every regime. The difference is largest at low fractions on \Combined{} and \EICU{} and does not vanish at full labels. For 24-hour mortality it is also positive at every fraction on \EICU{} and \Combined{}. On \MIMIC{}, the smallest cohort, the 24-hour-mortality differences above 5\% labels change sign. For AKI, supervised training leads at full labels in all three regimes. The answer to when pretraining stops paying off therefore depends on endpoint and cohort more than on the label fraction.
+
+Because subsets are drawn without class stratification, their positive counts vary by seed (\tableref{tab:low-label-positives}). The counts were recomputed after review from the same split and subset rules. The same rules reproduce the exported test support exactly. \MIMIC{} 24-hour mortality at 5\% labels has 31--43 training positives and also the largest AUPRC paired-difference SD in \tableref{tab:low-label}.
+
+\begin{table*}[htbp]
+\floatconts{tab:label-fraction-delta}{\caption{Mean paired difference between fine-tuned \MAE{} and the supervised Transformer at each label fraction, five seeds. Classification uses AUPRC, where positive favors \MAE{}. LOS uses absolute error in days, where negative favors \MAE{}. Dashes mark fractions that were not run.}}
+{\scriptsize\input{generated/label-fraction-delta.tex}}
+\end{table*}
+
+\begin{table*}[htbp]
+\floatconts{tab:low-label-positives}{\caption{Positive training labels in each reduced-label subset, by seed, with the mean number of labeled training stays. Only the labeled training subset is reduced. Subsets are drawn per seed without class stratification. Counts were recomputed after review.}}
+{\scriptsize\input{generated/low-label-positives.tex}}
+\end{table*}
+
+\subsection{Cross-Database Adaptation}
+\label{app:transfer}
+
+Cross-database rows pretrain on one database and then fully fine-tune using labels from the other. They test whether a representation pretrained under one site's measurement practice can be adapted with target labels. They are not out-of-domain validation: no model is evaluated on a database without training on its labels. MAE has the best mean primary metric on three of four \MIMIC{}-to-\EICU{} tasks and ties contrastive learning on the fourth, AKI (.532 each). It leads three of four reverse-direction tasks, and contrastive learning leads reverse-direction 24-hour mortality (\tableref{tab:transfer}).
+
+\tableref{tab:transfer-context} places cross-database \MAE{} beside \MAE{} pretrained on the target database and the supervised Transformer trained on the target. These comparators come from the core comparison with matched seeds. For mortality, cross-database encoders stay within .004--.010 AUPRC of target-database pretraining. For AKI, supervised training leads regardless of pretraining source. These are five-seed means, not tests of equivalence, and do not establish a general transfer advantage.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:transfer}
+  {\caption{Cross-database full-fine-tuning means over five seeds. Classification uses AUPRC. LOS uses absolute error in days. Bold marks the best mean within each row, and every mean that ties it at three decimals.}}
+  {\scriptsize
+  \input{generated/transfer.tex}}
+\end{table*}
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:transfer-context}
+  {\caption{Fine-tuned \MAE{} on each target database, by pretraining source, beside the supervised Transformer trained from scratch on the target. Means over five seeds. Classification uses AUPRC. LOS uses absolute error in days. Bold marks the best mean in each row.}}
+  {\scriptsize
+  \input{generated/transfer-context.tex}}
+\end{table*}
+
+\subsection{Encoder Capacity and Subgroup Auditing}
+\label{app:capacity-subgroups}
+
+The capacity analysis compares MAE and supervised Transformers on \MIMIC{} 24-hour mortality at 5\%, 10\%, and 50\% labels. Under full fine-tuning, medium and large MAE models exceed their corresponding supervised models by .013--.028 mean AUPRC across the six size--fraction cells, each with five seeds. This one-task, one-database slice does not test larger JEPA or contrastive encoders and cannot establish a general scaling rule.
+
+Subgroup auditing records maximum-minus-minimum performance gaps across eligible gender, age, and race groups, requiring at least 50 unique patients and a defined metric per group. In the core full-label classification cells, across-seed mean AUPRC gaps range from .004 to .095 for gender, .033 to .172 for age, and .080 to .513 for race. These ranges cover 63 gender cells, 63 age cells, and 42 race cells. Race metrics are unavailable for \EICU{}, and \Combined{} race analyses use \MIMIC{}-origin records. A 50-patient threshold does not ensure enough positive outcomes for stable AUPRC. These summaries describe gaps without ranking methods by fairness or attributing their causes. They do not assess intersectional groups or subgroup calibration.
+
+\subsection{TS2Vec Context}
+
+\label{app:ts2vec}
+
+Our TS2Vec-style extension retains the SLICES Transformer and value--mask interface, rather than the original dilated convolutional encoder. It adds Gaussian noise of SD .01 to observed values, independently masks half the hours in each view, and uses no temporal crop in the reference configuration. A width-256/output-64 projection precedes temperature-.05 NT-Xent over overlapping timestep pairs. Negatives combine other times and other instances in one denominator. This differs from original TS2Vec's separate temporal and instance losses. Four max-pooling scales (1, 2, 4, 8 hours) use mask-aware validity and an average over active scales. Thus these results characterize this extension, not original TS2Vec's performance \citep{yue2022ts2vec}.
+
+\begin{table*}[htbp]
+\floatconts
+  {tab:ts2vec}
+  {\caption{TS2Vec-style extension versus the core contrastive implementation. Entries count dataset--task cells with the better unrounded mean among 12 cells per protocol.}}
+  {\input{generated/ts2vec.tex}}
+\end{table*}
+
+\tableref{tab:ts2vec} counts the cells each implementation wins. The full-fine-tuning split is task dependent. For example, TS2Vec is higher on \MIMIC{} 24-hour mortality (.465 versus .456), while core contrastive is lower on \MIMIC{} LOS (2.359 versus 2.370). Under the capped probe, the core contrastive mean is better in every cell, including \MIMIC{} AKI (.478 versus .441) and LOS (2.592 versus 2.722). The TS2Vec-style encoders were not refit with converged or loss-matched probes. These five-seed differences do not establish equivalence or general dominance.

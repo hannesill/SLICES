@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Export aggregate tables for the ML4H rebuttal converged frozen probe (P1).
+
+Reads per-cell JSON written by ``run_converged_frozen_probe.py`` and the frozen
+thesis export (read-only) and writes aggregate CSV tables: per-seed values,
+5-seed means/SDs side by side with the frozen capped probe, objective
+rankings, paired per-seed MAE-vs-other deltas and the loss-matched LOS table.
+
+No patient-level data is written; only run-level metrics.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import sys
+from pathlib import Path
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FROZEN_DIR = REPO_ROOT / "results" / "slices-thesis-v1"
+DEFAULT_INPUT = Path("outputs/ml4h-rebuttal/converged_probe")
+DEFAULT_OUTPUT = Path("results/ml4h-rebuttal-v1")
+PARADIGMS = ("mae", "jepa", "contrastive")
+DATASETS = ("miiv", "eicu", "combined")
+TASKS = ("mortality_24h", "mortality_hospital", "aki_kdigo", "los_remaining")
+KEYS = ["dataset", "task", "seed", "paradigm"]
+# metric -> True when higher is better
+METRIC_DIRECTION = {"auprc": True, "auroc": True, "mae": False, "mse": False, "r2": True}
+PRIMARY_METRIC = {
+    "logreg_l2": "auprc",
+    "ridge_valmse": "mse",
+    "ridge_valmae": "mae",
+    "huber_valmae": "mae",
+}
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--input-root", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    return parser.parse_args(argv)
+
+
+def load_cells(input_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    records, paths = [], []
+    for file in sorted(glob.glob(str(input_root / "cells" / "*" / "*" / "*" / "*.json"))):
+        payload = json.loads(Path(file).read_text())
+        if not payload["evaluate_test"]:
+            raise RuntimeError(f"Cell without test evaluation in export input: {file}")
+        records.extend(payload["records"])
+        paths.extend(payload["regularisation_path"])
+    return pd.DataFrame(records), pd.DataFrame(paths)
+
+
+def load_frozen_probe() -> pd.DataFrame:
+    frame = pd.read_parquet(FROZEN_DIR / "per_seed_results.parquet")
+    frame = frame[
+        (frame.experiment_class == "core_ssl_benchmark")
+        & (frame.protocol == "linear_probe")
+        & (frame.label_fraction == 1.0)
+        & (frame.paradigm.isin(PARADIGMS))
+    ]
+    columns = KEYS + [f"test/{m}" for m in METRIC_DIRECTION] + ["epoch", "wandb_run_id"]
+    frozen = frame[columns].copy()
+    frozen = frozen.rename(
+        columns={
+            **{f"test/{m}": f"frozen_capped/test_{m}" for m in METRIC_DIRECTION},
+            "epoch": "frozen_capped/last_epoch",
+            "wandb_run_id": "frozen_capped/wandb_run_id",
+        }
+    )
+    if frozen.duplicated(KEYS).any():
+        raise RuntimeError("Duplicate frozen linear-probe rows")
+    return frozen
+
+
+def summarise(values: pd.Series) -> dict[str, float]:
+    values = values.dropna().astype(float)
+    return {
+        "mean": float(values.mean()) if len(values) else np.nan,
+        "sd": float(values.std(ddof=1)) if len(values) > 1 else np.nan,
+        "n": int(len(values)),
+    }
+
+
+def build_per_seed(records: pd.DataFrame, frozen: pd.DataFrame) -> pd.DataFrame:
+    keep = KEYS + [
+        "probe",
+        "selection_metric",
+        "selected_lambda",
+        "selected_grid_edge",
+        "selected_converged",
+        "all_grid_converged",
+        "selected_n_iter",
+        "n_train",
+        "n_val",
+        "n_test",
+        "n_test_positive",
+        "test_prevalence",
+        "class_weight_0",
+        "class_weight_1",
+        "val/auprc",
+        "val/auroc",
+        "val/mae",
+        "val/mse",
+        "test/auprc",
+        "test/auroc",
+        "test/mae",
+        "test/mse",
+        "test/r2",
+        "const/train_median_test_mae",
+        "const/train_mean_test_mse",
+        "encoder_sha256",
+    ]
+    keep = [c for c in keep if c in records.columns]
+    per_seed = records[keep].merge(frozen, on=KEYS, how="left", validate="many_to_one")
+    per_seed = per_seed.rename(
+        columns={c: f"converged/{c.replace('/', '_')}" for c in keep if "/" in c}
+    )
+    for metric in METRIC_DIRECTION:
+        conv, froz = f"converged/test_{metric}", f"frozen_capped/test_{metric}"
+        if conv in per_seed:
+            per_seed[f"delta_converged_minus_frozen/test_{metric}"] = (
+                per_seed[conv] - per_seed[froz]
+            )
+    order = {name: i for i, name in enumerate(DATASETS)}
+    task_order = {name: i for i, name in enumerate(TASKS)}
+    par_order = {name: i for i, name in enumerate(PARADIGMS)}
+    per_seed = per_seed.assign(
+        _d=per_seed.dataset.map(order),
+        _t=per_seed.task.map(task_order),
+        _p=per_seed.paradigm.map(par_order),
+    ).sort_values(["_d", "_t", "probe", "seed", "_p"])
+    return per_seed.drop(columns=["_d", "_t", "_p"]).reset_index(drop=True)
+
+
+def build_aggregated(per_seed: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (dataset, task, probe, paradigm), group in per_seed.groupby(
+        ["dataset", "task", "probe", "paradigm"], sort=False
+    ):
+        row = {
+            "dataset": dataset,
+            "task": task,
+            "probe": probe,
+            "paradigm": paradigm,
+            "n_seeds": int(group.seed.nunique()),
+        }
+        for metric in METRIC_DIRECTION:
+            for source in ("converged", "frozen_capped", "delta_converged_minus_frozen"):
+                column = f"{source}/test_{metric}"
+                if column not in group or group[column].notna().sum() == 0:
+                    continue
+                stats = summarise(group[column])
+                row[f"{column}_mean"] = stats["mean"]
+                row[f"{column}_sd"] = stats["sd"]
+        for column in (
+            "converged/const_train_median_test_mae",
+            "converged/const_train_mean_test_mse",
+        ):
+            if column in group and group[column].notna().any():
+                row[f"{column.split('/', 1)[1]}_mean"] = float(group[column].mean())
+        row["frozen_capped/last_epoch_mean"] = float(group["frozen_capped/last_epoch"].mean())
+        row["frozen_capped/n_seeds_at_epoch_cap"] = int(
+            (group["frozen_capped/last_epoch"] >= 49).sum()
+        )
+        row["selected_lambda_median"] = float(group["selected_lambda"].median())
+        row["n_selected_converged"] = int(group["selected_converged"].sum())
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _ranking(means: dict[str, float], higher_is_better: bool) -> str:
+    ordered = sorted(means, key=lambda name: means[name], reverse=higher_is_better)
+    return " > ".join(ordered)
+
+
+def build_rankings(per_seed: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (dataset, task, probe), group in per_seed.groupby(["dataset", "task", "probe"], sort=False):
+        metrics = ("auprc", "auroc") if probe == "logreg_l2" else ("mae", "mse")
+        for metric in metrics:
+            higher = METRIC_DIRECTION[metric]
+            conv = group.groupby("paradigm")[f"converged/test_{metric}"].mean().to_dict()
+            froz = group.groupby("paradigm")[f"frozen_capped/test_{metric}"].mean().to_dict()
+            conv_rank = _ranking(conv, higher)
+            froz_rank = _ranking(froz, higher)
+            rows.append(
+                {
+                    "dataset": dataset,
+                    "task": task,
+                    "probe": probe,
+                    "metric": metric,
+                    "is_primary_metric": PRIMARY_METRIC[probe] == metric,
+                    "higher_is_better": higher,
+                    "ranking_converged": conv_rank,
+                    "ranking_frozen_capped": froz_rank,
+                    "best_converged": conv_rank.split(" > ")[0],
+                    "best_frozen_capped": froz_rank.split(" > ")[0],
+                    "mae_best_converged": conv_rank.startswith("mae"),
+                    "mae_best_frozen_capped": froz_rank.startswith("mae"),
+                    "same_ranking": conv_rank == froz_rank,
+                    **{f"converged_mean_{p}": conv[p] for p in PARADIGMS},
+                    **{f"frozen_capped_mean_{p}": froz[p] for p in PARADIGMS},
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def build_paired_deltas(per_seed: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (dataset, task, probe), group in per_seed.groupby(["dataset", "task", "probe"], sort=False):
+        metrics = ("auprc", "auroc") if probe == "logreg_l2" else ("mae", "mse")
+        for metric in metrics:
+            higher = METRIC_DIRECTION[metric]
+            for source in ("converged", "frozen_capped"):
+                wide = group.pivot(
+                    index="seed", columns="paradigm", values=f"{source}/test_{metric}"
+                )
+                for other in ("contrastive", "jepa"):
+                    delta = (wide["mae"] - wide[other]).dropna()
+                    mae_better = delta > 0 if higher else delta < 0
+                    rows.append(
+                        {
+                            "dataset": dataset,
+                            "task": task,
+                            "probe": probe,
+                            "metric": metric,
+                            "is_primary_metric": PRIMARY_METRIC[probe] == metric,
+                            "higher_is_better": higher,
+                            "source": source,
+                            "comparison": f"mae_minus_{other}",
+                            "delta_mean": float(delta.mean()),
+                            "delta_sd": float(delta.std(ddof=1)),
+                            "delta_min": float(delta.min()),
+                            "delta_max": float(delta.max()),
+                            "n_seeds": int(len(delta)),
+                            "n_seeds_delta_positive": int((delta > 0).sum()),
+                            "n_seeds_mae_better": int(mae_better.sum()),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def build_los_table(per_seed: pd.DataFrame) -> pd.DataFrame:
+    los = per_seed[per_seed.task == "los_remaining"]
+    rows = []
+    for (dataset, paradigm), group in los.groupby(["dataset", "paradigm"], sort=False):
+        first = group[group.probe == "ridge_valmse"]
+        median_mae = first["converged/const_train_median_test_mae"]
+        mean_mse = first["converged/const_train_mean_test_mse"]
+        row = {
+            "dataset": dataset,
+            "paradigm": paradigm,
+            "n_seeds": int(first.seed.nunique()),
+            "const_train_median_test_mae_mean": float(median_mae.mean()),
+            "const_train_mean_test_mse_mean": float(mean_mse.mean()),
+        }
+        sources = {"frozen_capped": first}
+        sources.update({probe: group[group.probe == probe] for probe in group.probe.unique()})
+        for name, sub in sources.items():
+            prefix = "frozen_capped" if name == "frozen_capped" else "converged"
+            for metric in ("mae", "mse", "r2"):
+                stats = summarise(sub[f"{prefix}/test_{metric}"])
+                row[f"{name}/test_{metric}_mean"] = stats["mean"]
+                row[f"{name}/test_{metric}_sd"] = stats["sd"]
+            mae = sub.set_index("seed")[f"{prefix}/test_mae"]
+            mse = sub.set_index("seed")[f"{prefix}/test_mse"]
+            c_mae = sub.set_index("seed")["converged/const_train_median_test_mae"]
+            c_mse = sub.set_index("seed")["converged/const_train_mean_test_mse"]
+            row[f"{name}/mae_skill_vs_median_mean"] = float((1.0 - mae / c_mae).mean())
+            row[f"{name}/n_seeds_mae_beats_median"] = int((mae < c_mae).sum())
+            row[f"{name}/mse_skill_vs_mean_mean"] = float((1.0 - mse / c_mse).mean())
+            row[f"{name}/n_seeds_mse_beats_mean"] = int((mse < c_mse).sum())
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_selection_summary(per_seed: pd.DataFrame, paths: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (task, probe), group in per_seed.groupby(["task", "probe"], sort=False):
+        grid = paths[(paths.task == task) & (paths.probe == probe)]
+        rows.append(
+            {
+                "task": task,
+                "probe": probe,
+                "n_cells": int(len(group)),
+                "n_selected_converged": int(group.selected_converged.sum()),
+                "n_all_grid_converged": int(group.all_grid_converged.sum()),
+                "n_grid_fits": int(len(grid)),
+                "n_grid_fits_converged": int(grid.converged.sum()),
+                "max_n_iter": int(grid.n_iter.max()),
+                "lambda_grid_min": float(grid["lambda"].min()),
+                "lambda_grid_max": float(grid["lambda"].max()),
+                "selected_lambda_min": float(group.selected_lambda.min()),
+                "selected_lambda_median": float(group.selected_lambda.median()),
+                "selected_lambda_max": float(group.selected_lambda.max()),
+                "n_selected_interior": int((group.selected_grid_edge == "interior").sum()),
+                "n_selected_weakest_edge": int((group.selected_grid_edge == "weakest").sum()),
+                "n_selected_strongest_edge": int((group.selected_grid_edge == "strongest").sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    records, paths = load_cells(REPO_ROOT / args.input_root)
+    expected = len(DATASETS) * 5 * len(PARADIGMS) * (3 + 3)
+    if len(records) != expected:
+        raise RuntimeError(f"Expected {expected} probe records, found {len(records)}")
+    frozen = load_frozen_probe()
+    per_seed = build_per_seed(records, frozen)
+    if per_seed["frozen_capped/wandb_run_id"].isna().any():
+        raise RuntimeError("Converged probe rows without a frozen same-seed linear-probe row")
+
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables = {
+        "p1_converged_probe_per_seed": per_seed,
+        "p1_converged_probe_aggregated": build_aggregated(per_seed),
+        "p1_objective_ranking": build_rankings(per_seed),
+        "p1_paired_deltas_mae_vs_others": build_paired_deltas(per_seed),
+        "p1_los_loss_matched": build_los_table(per_seed),
+        "p1_regularisation_selection": build_selection_summary(per_seed, paths),
+        "p1_regularisation_path_validation": paths,
+    }
+    for name, table in tables.items():
+        table.to_csv(out_dir / f"{name}.csv", index=False)
+        print(f"WROTE {out_dir.relative_to(REPO_ROOT)}/{name}.csv rows={len(table)}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use SLICES, please cite the ML4H 2026 paper below."
+title: "SLICES: Self-Supervised Learning for Intensive Care Embeddings"
+type: software
+version: ml4h-2026
+authors:
+  - family-names: Ill
+    given-names: Hannes
+repository-code: "https://github.com/hannesill/SLICES"
+url: "https://github.com/hannesill/SLICES/tree/ml4h-2026"
+license: MIT
+keywords:
+  - self-supervised learning
+  - ICU time series
+  - benchmark
+  - MIMIC-IV
+  - eICU
+preferred-citation:
+  type: conference-paper
+  title: "SLICES: A Benchmark and Evaluation Framework for Self-Supervised Learning on Sparse ICU Time Series"
+  authors:
+    - family-names: Ill
+      given-names: Hannes
+    - family-names: Proios
+      given-names: Dimitrios
+    - family-names: Celi
+      given-names: Leo Anthony
+    - family-names: Schüffler
+      given-names: Peter J.
+  conference:
+    name: "Machine Learning for Health (ML4H) 2026"
+  collection-title: "Proceedings of Machine Learning Research"
+  volume: 346
+  publisher:
+    name: PMLR
+  year: 2026

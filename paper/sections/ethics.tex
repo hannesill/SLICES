@@ -1,0 +1,6 @@
+\section{Ethics, Access, and Reproducibility}
+\label{sec:ethics}
+
+The study analyzes retrospective, deidentified ICU records under the credentialing and data-use terms of PhysioNet. It involves no prospective intervention, patient contact, or automated clinical decision. Benchmark results come from the unchanged archived run aggregates; diagnostics are stored separately.
+
+We reran a \MIMIC{} slice with the maintained framework, starting from the processed tensors (Appendix~\ref{app:reproduction}). From archived reference encoders, 12 frozen probes reproduce every reference test metric to numerical precision, and 12 fine-tuning runs lie within one across-seed SD. The full pipeline, with 6 pretraining and 48 downstream runs over two seeds, differs from the reference by .008 mean absolute AUPRC for probes and .010 for fine-tuning, all within two SDs, and keeps the objective order in 13 of 16 cells. LOS fine-tuning error was higher in all nine comparisons, by .03--.04 days on average, for reasons we have not identified, and other databases and seeds were not rerun.

@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Exclusive-device timing microbenchmark for the core SSL objectives.
+
+ML4H rebuttal diagnostic. Runs a few hundred real optimisation steps per SSL
+objective with the thesis pretraining configuration (same encoder, SSL config,
+batch size, optimiser and gradient clipping) on real training batches and
+reports steps/s, seconds per training epoch and the projected time for the
+fixed 100-epoch schedule on the device it is run on.
+
+Nothing is trained to completion, saved or logged to W&B. Run it on an
+otherwise idle device: the thesis corpus W&B runtimes come from a GPU shared by
+several concurrent runs and are not exclusive-device timings.
+"""
+
+from __future__ import annotations
+
+import argparse
+import platform
+import sys
+import time
+from pathlib import Path
+from typing import Any, Sequence
+
+import hydra
+import pandas as pd
+import torch
+from omegaconf import DictConfig, OmegaConf
+
+from slices.data.datamodule import ICUDataModule
+from slices.training.pretrain_module import SSLPretrainModule
+from slices.training.utils import build_optimizer
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT = Path("outputs/ml4h-rebuttal/compute/local_step_timing.csv")
+PARADIGMS = ("mae", "jepa", "contrastive")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--processed-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-view-root",
+        type=Path,
+        default=None,
+        help="If set, read the processed data through a symlink view created here.",
+    )
+    parser.add_argument("--dataset", default="miiv")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--paradigms", nargs="+", default=list(PARADIGMS), choices=PARADIGMS)
+    parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda", "mps"))
+    parser.add_argument("--warmup-steps", type=int, default=20)
+    parser.add_argument("--timed-steps", type=int, default=300)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    return parser.parse_args(argv)
+
+
+def compose_pretrain_cfg(dataset: str, paradigm: str, seed: int, processed_dir: Path) -> DictConfig:
+    overrides = [
+        f"dataset={dataset}",
+        f"ssl={paradigm}",
+        f"seed={seed}",
+        f"data.processed_dir={processed_dir.as_posix()}",
+        "logging.use_wandb=false",
+        "output_dir=outputs/ml4h-rebuttal/_unused",
+        "checkpoint_dir=outputs/ml4h-rebuttal/_unused/checkpoints",
+    ]
+    with hydra.initialize_config_dir(config_dir=str(REPO_ROOT / "configs"), version_base=None):
+        return hydra.compose(config_name="pretrain", overrides=overrides)
+
+
+def resolve_device(name: str) -> torch.device:
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(name)
+
+
+def device_label(device: torch.device) -> str:
+    if device.type == "cuda":
+        return torch.cuda.get_device_name(device)
+    return f"{device.type}:{platform.processor() or platform.machine()}"
+
+
+def summarise_timing(
+    elapsed_sec: float, timed_steps: int, steps_per_epoch: int, max_epochs: int
+) -> dict[str, float]:
+    sec_per_step = elapsed_sec / timed_steps
+    return {
+        "ms_per_step": 1000.0 * sec_per_step,
+        "steps_per_sec": 1.0 / sec_per_step,
+        "sec_per_train_epoch": sec_per_step * steps_per_epoch,
+        "projected_train_hours_full_schedule": sec_per_step * steps_per_epoch * max_epochs / 3600.0,
+    }
+
+
+def time_objective(args: argparse.Namespace, paradigm: str, device: torch.device) -> dict[str, Any]:
+    processed_dir = (args.processed_root / args.dataset).resolve()
+    cfg = compose_pretrain_cfg(args.dataset, paradigm, args.seed, processed_dir)
+    torch.manual_seed(args.seed)
+    datamodule = ICUDataModule(
+        processed_dir=processed_dir,
+        task_name=None,
+        batch_size=cfg.training.batch_size,
+        num_workers=args.num_workers,
+        seed=args.seed,
+    )
+    datamodule.setup()
+    OmegaConf.set_struct(cfg, False)
+    cfg.encoder.d_input = datamodule.get_feature_dim()
+    cfg.encoder.max_seq_length = datamodule.get_seq_length()
+    OmegaConf.set_struct(cfg, True)
+    module = SSLPretrainModule(cfg).to(device)
+    module.train()
+    optimizer = build_optimizer(module.parameters(), cfg.optimizer)
+    loader = datamodule.train_dataloader()
+    steps_per_epoch = len(loader)
+    total_steps = steps_per_epoch * int(cfg.training.max_epochs)
+    clip = cfg.training.get("gradient_clip_val", None)
+
+    def sync() -> None:
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
+
+    step = 0
+    start = None
+    target = args.warmup_steps + args.timed_steps
+    while step < target:
+        for batch in loader:
+            if step == args.warmup_steps:
+                sync()
+                start = time.perf_counter()
+            loss, _ = module(batch["timeseries"].to(device), batch["mask"].to(device))
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            if clip:
+                torch.nn.utils.clip_grad_norm_(module.parameters(), clip)
+            optimizer.step()
+            if hasattr(module.ssl_objective, "momentum_update"):
+                module.ssl_objective.momentum_update(progress=min(step / total_steps, 1.0))
+            step += 1
+            if step >= target:
+                break
+    sync()
+    assert start is not None
+    elapsed = time.perf_counter() - start
+    return {
+        "paradigm": paradigm,
+        "dataset": args.dataset,
+        "seed": args.seed,
+        "device": device_label(device),
+        "torch_threads": torch.get_num_threads(),
+        "dataloader_workers": args.num_workers,
+        "batch_size": int(cfg.training.batch_size),
+        "precision": str(cfg.training.precision),
+        "warmup_steps": args.warmup_steps,
+        "timed_steps": args.timed_steps,
+        "steps_per_epoch": steps_per_epoch,
+        "max_epochs": int(cfg.training.max_epochs),
+        **summarise_timing(
+            elapsed, args.timed_steps, steps_per_epoch, int(cfg.training.max_epochs)
+        ),
+        "note": "training steps only (no validation, checkpointing or logging)",
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.data_view_root is not None:
+        from scripts.diagnostics.eval_combined_per_source import build_data_view
+
+        build_data_view(
+            (args.processed_root / args.dataset).resolve(),
+            REPO_ROOT / args.data_view_root / args.dataset,
+        )
+        args.processed_root = REPO_ROOT / args.data_view_root
+    device = resolve_device(args.device)
+    rows = [time_objective(args, paradigm, device) for paradigm in args.paradigms]
+    table = pd.DataFrame(rows)
+    reference = table.loc[table.paradigm == "mae", "ms_per_step"]
+    if len(reference):
+        table["step_cost_relative_to_mae"] = table["ms_per_step"] / float(reference.iloc[0])
+    output = REPO_ROOT / args.output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(output, index=False)
+    pd.set_option("display.width", 220)
+    pd.set_option("display.max_columns", 30)
+    print(table.round(4).to_string(index=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

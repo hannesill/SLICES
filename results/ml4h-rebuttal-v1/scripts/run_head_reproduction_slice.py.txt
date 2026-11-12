@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Rerun a slice of the core SSL benchmark at the current checkout (ML4H rebuttal P4).
+
+Builds the same Hydra commands the thesis launcher generated for
+``core_ssl_benchmark`` (pretraining, then frozen linear probe and full
+fine-tune on every thesis task, downstream from the final ``encoder.pt``) and
+executes them sequentially for a filtered (dataset, seed, paradigm) subset.
+
+The thesis launcher (``scripts/internal/run_experiments.py``) can only launch
+whole experiment classes and keeps global scheduler state, so this runner calls
+the training entry points directly. Runs go to a separate W&B project/revision
+and a separate output root; nothing is written to the frozen thesis corpus.
+
+Only these overrides differ from the frozen launch arguments:
+``revision``/``rerun_reason``/W&B target/``launch_commit`` (provenance),
+``hydra.run.dir`` (output location), ``data.processed_dir`` (data location) and
+any explicit ``--extra-override`` values such as the accelerator.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shlex
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Sequence
+
+from slices.constants import FULL_FINETUNE_PROTOCOL, LINEAR_PROBE_PROTOCOL, THESIS_TASKS
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EXPERIMENT_CLASS = "core_ssl_benchmark"
+DEFAULT_REVISION = "ml4h-rebuttal-v1"
+DEFAULT_PROJECT = "slices-ml4h-rebuttal"
+DEFAULT_REASON = "ml4h rebuttal HEAD reproduction slice"
+DEFAULT_OUTPUT_ROOT = Path("outputs/ml4h-rebuttal/head_reproduction")
+PARADIGMS = ("mae", "jepa", "contrastive")
+COMPLETION_MARKER = "reproduction_complete.json"
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--dataset", default="miiv")
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42])
+    parser.add_argument("--paradigms", nargs="+", default=list(PARADIGMS), choices=PARADIGMS)
+    parser.add_argument("--tasks", nargs="+", default=list(THESIS_TASKS))
+    parser.add_argument("--processed-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-view-root",
+        type=Path,
+        default=None,
+        help=(
+            "If set, read the processed data through a symlink view created here, so cache "
+            "files written by the data module never land in --processed-root."
+        ),
+    )
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--project", default=DEFAULT_PROJECT)
+    parser.add_argument("--entity", default="hannes-ill")
+    parser.add_argument("--revision", default=DEFAULT_REVISION)
+    parser.add_argument("--reason", default=DEFAULT_REASON)
+    parser.add_argument("--launch-commit", required=True)
+    parser.add_argument(
+        "--extra-override",
+        action="append",
+        default=[],
+        help="Additional Hydra override applied to every run (repeatable).",
+    )
+    parser.add_argument("--phases", nargs="+", default=["pretrain", "probe", "finetune"])
+    parser.add_argument(
+        "--encoder-root",
+        type=Path,
+        default=None,
+        help=(
+            "Take downstream encoders from <encoder-root>/pretrain_{paradigm}_{dataset}_seed{seed}/"
+            "encoder.pt (e.g. the frozen thesis encoder archive) instead of this slice's own "
+            "pretraining runs. Use with --phases probe finetune."
+        ),
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args(argv)
+
+
+def run_dir(args: argparse.Namespace, run_key: str) -> Path:
+    return args.output_root / f"{EXPERIMENT_CLASS}_rev-{args.revision}" / run_key
+
+
+def shared_overrides(args: argparse.Namespace, phase: str) -> list[str]:
+    return [
+        f"experiment_class={EXPERIMENT_CLASS}",
+        f"+phase={phase}",
+    ]
+
+
+def provenance_overrides(args: argparse.Namespace) -> list[str]:
+    return [
+        f"revision={args.revision}",
+        f"rerun_reason={args.reason}",
+        f"project_name={args.project}",
+        f"logging.wandb_project={args.project}",
+        f"logging.wandb_entity={args.entity}",
+        f"+launch_commit={args.launch_commit}",
+        f"data.processed_dir={(args.processed_root / args.dataset).resolve().as_posix()}",
+        *args.extra_override,
+    ]
+
+
+def pretrain_command(args: argparse.Namespace, paradigm: str, seed: int) -> tuple[Path, list[str]]:
+    out = run_dir(args, f"pretrain_{paradigm}_{args.dataset}_seed{seed}")
+    cmd = [
+        "uv",
+        "run",
+        "python",
+        "scripts/training/pretrain.py",
+        f"dataset={args.dataset}",
+        f"ssl={paradigm}",
+        f"seed={seed}",
+        f"hydra.run.dir={out.as_posix()}",
+        *shared_overrides(args, "pretrain"),
+        *provenance_overrides(args),
+    ]
+    return out, cmd
+
+
+def downstream_command(
+    args: argparse.Namespace, paradigm: str, seed: int, task: str, protocol: str
+) -> tuple[Path, list[str]]:
+    prefix = "probe" if protocol == LINEAR_PROBE_PROTOCOL else "finetune"
+    out = run_dir(args, f"{prefix}_{paradigm}_{task}_{args.dataset}_seed{seed}")
+    pretrain_key = f"pretrain_{paradigm}_{args.dataset}_seed{seed}"
+    if args.encoder_root is not None:
+        encoder = args.encoder_root / pretrain_key / "encoder.pt"
+    else:
+        encoder = run_dir(args, pretrain_key) / "encoder.pt"
+    cmd = [
+        "uv",
+        "run",
+        "python",
+        "scripts/training/finetune.py",
+        f"dataset={args.dataset}",
+        f"checkpoint={encoder.as_posix()}",
+        f"tasks={task}",
+        f"seed={seed}",
+        f"hydra.run.dir={out.as_posix()}",
+        *shared_overrides(args, "finetune"),
+        f"protocol={protocol}",
+        *provenance_overrides(args),
+    ]
+    return out, cmd
+
+
+def build_plan(args: argparse.Namespace) -> list[dict]:
+    plan = []
+    for seed in args.seeds:
+        for paradigm in args.paradigms:
+            if "pretrain" in args.phases:
+                out, cmd = pretrain_command(args, paradigm, seed)
+                plan.append(
+                    {
+                        "phase": "pretrain",
+                        "paradigm": paradigm,
+                        "seed": seed,
+                        "out": out,
+                        "cmd": cmd,
+                    }
+                )
+            for phase, protocol in (
+                ("probe", LINEAR_PROBE_PROTOCOL),
+                ("finetune", FULL_FINETUNE_PROTOCOL),
+            ):
+                if phase not in args.phases:
+                    continue
+                for task in args.tasks:
+                    out, cmd = downstream_command(args, paradigm, seed, task, protocol)
+                    plan.append(
+                        {
+                            "phase": phase,
+                            "protocol": protocol,
+                            "paradigm": paradigm,
+                            "seed": seed,
+                            "task": task,
+                            "out": out,
+                            "cmd": cmd,
+                        }
+                    )
+    return plan
+
+
+def execute(item: dict) -> int:
+    out: Path = REPO_ROOT / item["out"]
+    marker = out / COMPLETION_MARKER
+    if marker.exists():
+        print(f"SKIP complete: {item['out']}", flush=True)
+        return 0
+    out.mkdir(parents=True, exist_ok=True)
+    log_path = out / "run.log"
+    start = time.perf_counter()
+    print(f"START {item['out']}\n  {shlex.join(item['cmd'])}", flush=True)
+    with log_path.open("w", encoding="utf-8") as log:
+        result = subprocess.run(item["cmd"], cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT)
+    elapsed = time.perf_counter() - start
+    if result.returncode == 0:
+        marker.write_text(
+            json.dumps(
+                {
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "command": item["cmd"],
+                    "elapsed_sec": elapsed,
+                    "phase": item["phase"],
+                },
+                indent=1,
+            )
+            + "\n"
+        )
+    print(f"END   {item['out']} rc={result.returncode} elapsed={elapsed:.0f}s", flush=True)
+    return result.returncode
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.encoder_root is not None and "pretrain" in args.phases:
+        raise SystemExit("--encoder-root replaces pretraining; drop 'pretrain' from --phases")
+    if args.data_view_root is not None:
+        from scripts.diagnostics.eval_combined_per_source import build_data_view
+
+        build_data_view(
+            (args.processed_root / args.dataset).resolve(),
+            (REPO_ROOT / args.data_view_root / args.dataset),
+        )
+        args.processed_root = REPO_ROOT / args.data_view_root
+    plan = build_plan(args)
+    print(f"Planned runs: {len(plan)}", flush=True)
+    for item in plan:
+        if args.dry_run:
+            print(shlex.join(item["cmd"]), flush=True)
+            continue
+        code = execute(item)
+        if code != 0:
+            print(f"FAILED: {item['out']} (see run.log)", file=sys.stderr, flush=True)
+            return code
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

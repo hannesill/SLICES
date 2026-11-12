@@ -1,0 +1,14 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What can be reused.}
+Researchers can audit run aggregates or add an objective while retaining clinical inputs, encoder transfer, and evaluation. A new objective then faces two references: the three SSL implementations and the supervised, recurrent, and tabular baselines, which lead half of the full-label cells. The diagnostics also show which evaluation choices move a ranking: a loss-matched probe changed the capped-probe LOS ordering, while a converged probe confirmed the classification ranking.
+
+\paragraph{Why reconstruction may fit the interface.}
+The tensor exposes a value and observation mask at each hour. MAE reconstructs observed cells, JEPA predicts an evolving target embedding, and core contrastive learning compares pooled stay vectors. An interface preference for reconstruction is one hypothesis for the classification ordering. The controls do not identify the learned information or establish that continuous values are better than quantization.
+
+\paragraph{Interpreting missingness.}
+Measurement patterns carry outcome signal: masks alone give a linear model .301 AUPRC for \MIMIC{} hospital mortality at 11.7\% prevalence. The signal is ambiguous, because an unmeasured laboratory value may reflect clinical judgment, workflow, availability, or data loss, so a model can learn site-specific measurement policy, not only physiology. Preserving the mask avoids treating missing cells as observed zeros but does not make missingness causal or transportable. The frozen classification ranking held on both source portions of \Combined{}, while absolute AUROC differed by source, which does not show transfer to a hospital with different ordering practices.
+
+\paragraph{Evaluation practice.}
+Both probes and fine-tuning remain necessary because they test different representation properties, and baselines show whether an SSL ordering matters for task performance. Frozen probes should be trained to convergence, and regression probes should use a loss matched to the reported metric. Checkpoint and cost policies must be explicit, because equal epochs do not imply equal compute and checkpoint selection affected JEPA.

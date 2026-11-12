@@ -1,0 +1,697 @@
+#!/usr/bin/env python3
+"""Converged, regularisation-tuned linear probes on cached frozen SSL embeddings.
+
+ML4H rebuttal diagnostic. The frozen thesis linear probe trains a linear head
+with AdamW for at most 50 epochs. This script answers whether the frozen-probe
+ranking of SSL objectives survives a linear classifier that is fit to actual
+convergence with its L2 strength tuned on the validation split.
+
+Protocol (fixed before any test metric was computed):
+
+* Inputs are the pooled frozen-encoder embeddings cached by
+  ``extract_frozen_ssl_embeddings.py`` (benchmark ``FineTuneModule`` forward).
+* Splits and label filtering come from the benchmark's own
+  ``compute_patient_level_splits`` (patient-level 70/15/15, task rows with
+  missing labels dropped after the global patient assignment).
+* Embeddings are standardised with train-split mean/std.
+* Classification: L2 logistic regression, L-BFGS to convergence, sqrt-balanced
+  class weights (the benchmark probe's ``class_weight=balanced`` resolution),
+  no label smoothing. L2 strength on a log grid, selected on validation AUPRC.
+* ``los_remaining`` (raw target in days, as in the benchmark):
+  - ``ridge_valmse``: ridge least squares, selected on validation MSE.
+  - ``ridge_valmae``: same ridge path, selected on validation MAE (the
+    benchmark's checkpoint-selection metric for LOS).
+  - ``huber_valmae``: absolute-error-type probe (Huber/smooth-L1 with a small
+    fixed delta, L-BFGS), selected on validation MAE.
+* Test rows are scored once, for the selected setting of each probe variant.
+
+Diagnostic-only: writes under ``outputs/`` and never touches the frozen thesis
+result export.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import warnings
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import polars as pl
+import torch
+from scipy.optimize import minimize
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, roc_auc_score
+
+from slices.constants import TEST_RATIO, TRAIN_RATIO, VAL_RATIO
+from slices.data.splits import compute_patient_level_splits
+from slices.eval import MetricConfig, build_metrics
+from slices.training.utils import resolve_balanced_class_weights
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_EMBEDDING_ROOT = Path("outputs/ml4h-rebuttal/embeddings")
+DEFAULT_OUTPUT_ROOT = Path("outputs/ml4h-rebuttal/converged_probe")
+DEFAULT_DATASETS = ("miiv", "eicu", "combined")
+DEFAULT_PARADIGMS = ("mae", "jepa", "contrastive")
+DEFAULT_SEEDS = (42, 123, 456, 789, 1011)
+CLASSIFICATION_TASKS = ("mortality_24h", "mortality_hospital", "aki_kdigo")
+REGRESSION_TASKS = ("los_remaining",)
+DEFAULT_TASKS = CLASSIFICATION_TASKS + REGRESSION_TASKS
+
+PROBE_SCHEMA_VERSION = "ml4h-rebuttal-converged-probe-v1"
+EXPERIMENT_CLASS = "converged_frozen_probe"
+REVISION = "ml4h-rebuttal-v1"
+
+# L2 strength grids. All strengths are on the mean-loss scale:
+#   objective = mean_i(loss_i) + (lambda / 2) * ||w||^2   (intercept unpenalised)
+LOGISTIC_LAMBDA_GRID = tuple(float(v) for v in 10.0 ** np.arange(-7.0, 1.0 + 1e-9, 0.5))
+RIDGE_LAMBDA_GRID = tuple(float(v) for v in 10.0 ** np.arange(-6.0, 4.0 + 1e-9, 0.5))
+HUBER_LAMBDA_GRID = tuple(float(v) for v in 10.0 ** np.arange(-6.0, 1.0 + 1e-9, 1.0))
+HUBER_DELTA_DAYS = 0.01
+HUBER_DELTA_CONTINUATION = (1.0, 0.1, HUBER_DELTA_DAYS)
+LOGISTIC_MAX_ITER = 20000
+LOGISTIC_TOL = 1e-6
+HUBER_MAX_ITER = 20000
+HUBER_GTOL = 1e-6
+HUBER_CONVERGED_GRAD = 1e-4
+
+
+# ---------------------------------------------------------------------------
+# Pure probe utilities (unit-tested)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Standardizer:
+    mean: np.ndarray
+    std: np.ndarray
+
+    @classmethod
+    def fit(cls, x_train: np.ndarray) -> "Standardizer":
+        x64 = x_train.astype(np.float64)
+        mean = x64.mean(axis=0)
+        std = x64.std(axis=0)
+        std = np.where(std < 1e-12, 1.0, std)
+        return cls(mean=mean, std=std)
+
+    def transform(self, x: np.ndarray) -> np.ndarray:
+        return (x.astype(np.float64) - self.mean) / self.std
+
+
+def sqrt_balanced_class_weights(
+    y_train: np.ndarray, task_name: str = "task"
+) -> tuple[float, float]:
+    """Benchmark probe class weights: sqrt of sklearn-style balanced weights."""
+    n_pos = int((y_train == 1).sum())
+    n_neg = int((y_train == 0).sum())
+    resolved = resolve_balanced_class_weights(
+        task_name=task_name,
+        task_type="binary",
+        train_label_stats={task_name: {"positive": n_pos, "negative": n_neg}},
+    )
+    assert resolved is not None
+    return float(resolved[0]), float(resolved[1])
+
+
+def fit_logistic_path(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    lambdas: Sequence[float],
+    class_weights: tuple[float, float],
+    *,
+    max_iter: int = LOGISTIC_MAX_ITER,
+    tol: float = LOGISTIC_TOL,
+) -> list[dict[str, Any]]:
+    """Fit weighted L2 logistic regression for each lambda (strong -> weak)."""
+    sample_weight_sum = float(
+        class_weights[0] * (y_train == 0).sum() + class_weights[1] * (y_train == 1).sum()
+    )
+    fits: list[dict[str, Any]] = []
+    clf: LogisticRegression | None = None
+    for lam in sorted(lambdas, reverse=True):
+        c_value = 1.0 / (lam * sample_weight_sum)
+        if clf is None:
+            clf = LogisticRegression(
+                C=c_value,
+                solver="lbfgs",
+                max_iter=max_iter,
+                tol=tol,
+                class_weight={0: class_weights[0], 1: class_weights[1]},
+                fit_intercept=True,
+                warm_start=True,
+            )
+        else:
+            clf.set_params(C=c_value)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ConvergenceWarning)
+            clf.fit(x_train, y_train)
+        n_iter = int(np.max(clf.n_iter_))
+        hit_cap = n_iter >= max_iter
+        warned = any(issubclass(w.category, ConvergenceWarning) for w in caught)
+        fits.append(
+            {
+                "lambda": float(lam),
+                "coef": clf.coef_.ravel().copy(),
+                "intercept": float(clf.intercept_[0]),
+                "n_iter": n_iter,
+                "converged": bool(not hit_cap and not warned),
+            }
+        )
+    return fits
+
+
+def logistic_scores(fit: dict[str, Any], x: np.ndarray) -> np.ndarray:
+    """Positive-class probability for a fitted logistic probe."""
+    logits = x @ fit["coef"] + fit["intercept"]
+    return 1.0 / (1.0 + np.exp(-logits))
+
+
+def fit_ridge_path(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    lambdas: Sequence[float],
+) -> list[dict[str, Any]]:
+    """Exact ridge solutions of mean((y - Xw - b)^2) + lambda * ||w||^2."""
+    n = x_train.shape[0]
+    x_mean = x_train.mean(axis=0)
+    y_mean = float(y_train.mean())
+    xc = x_train - x_mean
+    gram = xc.T @ xc / n
+    cov = xc.T @ (y_train - y_mean) / n
+    eye = np.eye(gram.shape[0])
+    fits = []
+    for lam in sorted(lambdas, reverse=True):
+        coef = np.linalg.solve(gram + lam * eye, cov)
+        intercept = y_mean - float(x_mean @ coef)
+        fits.append(
+            {
+                "lambda": float(lam),
+                "coef": coef,
+                "intercept": intercept,
+                "n_iter": 0,
+                "converged": True,
+            }
+        )
+    return fits
+
+
+def _huber_objective(
+    theta: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    lam: float,
+    delta: float,
+) -> tuple[float, np.ndarray]:
+    """Smooth-L1 objective mean(huber_delta(r) / delta) + (lam / 2) ||w||^2."""
+    coef = theta[:-1]
+    resid = x @ coef + theta[-1] - y
+    abs_resid = np.abs(resid)
+    quad = abs_resid <= delta
+    loss = np.where(quad, 0.5 * resid * resid / delta, abs_resid - 0.5 * delta)
+    grad_resid = np.where(quad, resid / delta, np.sign(resid))
+    value = float(loss.mean() + 0.5 * lam * (coef @ coef))
+    grad = np.empty_like(theta)
+    grad[:-1] = x.T @ grad_resid / x.shape[0] + lam * coef
+    grad[-1] = grad_resid.mean()
+    return value, grad
+
+
+def fit_huber_path(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    lambdas: Sequence[float],
+    *,
+    delta: float = HUBER_DELTA_DAYS,
+    continuation: Sequence[float] = HUBER_DELTA_CONTINUATION,
+    max_iter: int = HUBER_MAX_ITER,
+    gtol: float = HUBER_GTOL,
+) -> list[dict[str, Any]]:
+    """Fit absolute-error-type (small-delta Huber) probes for each lambda."""
+    theta = np.zeros(x_train.shape[1] + 1)
+    theta[-1] = float(np.median(y_train))
+    fits = []
+    for lam in sorted(lambdas, reverse=True):
+        total_iter = 0
+        result = None
+        for stage_delta in continuation:
+            result = minimize(
+                _huber_objective,
+                theta,
+                args=(x_train, y_train, lam, stage_delta),
+                jac=True,
+                method="L-BFGS-B",
+                options={"maxiter": max_iter, "maxfun": 4 * max_iter, "gtol": gtol, "ftol": 1e-15},
+            )
+            theta = result.x
+            total_iter += int(result.nit)
+        assert result is not None
+        _, grad = _huber_objective(theta, x_train, y_train, lam, delta)
+        grad_max = float(np.max(np.abs(grad)))
+        fits.append(
+            {
+                "lambda": float(lam),
+                "coef": theta[:-1].copy(),
+                "intercept": float(theta[-1]),
+                "n_iter": total_iter,
+                "grad_max": grad_max,
+                "optimizer_message": str(result.message),
+                "converged": bool(grad_max <= HUBER_CONVERGED_GRAD and total_iter < 3 * max_iter),
+            }
+        )
+    return fits
+
+
+def linear_predict(fit: dict[str, Any], x: np.ndarray) -> np.ndarray:
+    return x @ fit["coef"] + fit["intercept"]
+
+
+def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    resid = y_pred - y_true
+    mse = float(np.mean(resid**2))
+    mae = float(np.mean(np.abs(resid)))
+    sst = float(np.sum((y_true - y_true.mean()) ** 2))
+    r2 = float(1.0 - np.sum(resid**2) / sst) if sst > 0 else float("nan")
+    return {"mae": mae, "mse": mse, "r2": r2}
+
+
+def select_fit(
+    fits: Sequence[dict[str, Any]],
+    val_values: Sequence[float],
+    *,
+    mode: str,
+) -> int:
+    """Index of the selected fit; ties resolve to the stronger regularisation.
+
+    ``fits`` must be ordered from strongest to weakest regularisation, which is
+    how the ``fit_*_path`` helpers return them.
+    """
+    values = np.asarray(val_values, dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("Non-finite validation metric in probe selection")
+    lambdas = [fit["lambda"] for fit in fits]
+    if lambdas != sorted(lambdas, reverse=True):
+        raise ValueError("fits must be ordered from strongest to weakest regularisation")
+    if mode == "max":
+        return int(np.argmax(values))
+    if mode == "min":
+        return int(np.argmin(values))
+    raise ValueError(f"Unknown selection mode: {mode}")
+
+
+def grid_edge(index: int, n_fits: int) -> str:
+    """Which end of a strongest-to-weakest regularisation path was selected."""
+    if index == 0:
+        return "strongest"
+    if index == n_fits - 1:
+        return "weakest"
+    return "interior"
+
+
+def benchmark_binary_metrics(y_true: np.ndarray, prob: np.ndarray) -> dict[str, float]:
+    """AUROC/AUPRC through the benchmark's torchmetrics collection."""
+    metrics = build_metrics(
+        MetricConfig(task_type="binary", n_classes=2, metrics=["auroc", "auprc"]), prefix=""
+    )
+    metrics.update(torch.from_numpy(prob.astype(np.float32)), torch.from_numpy(y_true).long())
+    return {key: float(value) for key, value in metrics.compute().items()}
+
+
+# ---------------------------------------------------------------------------
+# Data access
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TaskSplit:
+    stay_ids: dict[str, np.ndarray]
+    labels: dict[str, np.ndarray]
+    n_excluded: int
+    n_total_raw: int
+
+
+def load_task_split(processed_dir: Path, task: str, seed: int) -> TaskSplit:
+    """Task rows per split via the benchmark's patient-level split function."""
+    (
+        train_idx,
+        val_idx,
+        test_idx,
+        _static_df,
+        labels_df,
+        all_stay_ids,
+        filtered_stay_ids,
+        excluded_stay_ids,
+        _norm_idx,
+    ) = compute_patient_level_splits(processed_dir, task, seed, TRAIN_RATIO, VAL_RATIO, TEST_RATIO)
+    label_frame = labels_df.select(["stay_id", task]).filter(pl.col(task).is_not_null())
+    label_by_stay = dict(zip(label_frame["stay_id"].to_list(), label_frame[task].to_list()))
+    filtered = np.asarray(filtered_stay_ids, dtype=np.int64)
+    stay_ids: dict[str, np.ndarray] = {}
+    labels: dict[str, np.ndarray] = {}
+    for split, indices in (("train", train_idx), ("val", val_idx), ("test", test_idx)):
+        ids = filtered[np.asarray(indices, dtype=np.int64)]
+        stay_ids[split] = ids
+        # The benchmark dataset stores labels as float32 tensors.
+        labels[split] = np.asarray([label_by_stay[int(s)] for s in ids], dtype=np.float32)
+    return TaskSplit(
+        stay_ids=stay_ids,
+        labels=labels,
+        n_excluded=len(excluded_stay_ids),
+        n_total_raw=len(all_stay_ids),
+    )
+
+
+def load_embedding_file(path: Path) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    with np.load(path, allow_pickle=False) as payload:
+        return (
+            payload["embeddings"],
+            payload["stay_ids"],
+            json.loads(str(payload["metadata"])),
+        )
+
+
+def rows_for(stay_ids: np.ndarray, row_by_stay: dict[int, int]) -> np.ndarray:
+    return np.asarray([row_by_stay[int(s)] for s in stay_ids], dtype=np.int64)
+
+
+# ---------------------------------------------------------------------------
+# Probe runners
+# ---------------------------------------------------------------------------
+
+
+def _base_record(
+    *,
+    paradigm: str,
+    dataset: str,
+    task: str,
+    seed: int,
+    split: TaskSplit,
+    embedding_meta: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": PROBE_SCHEMA_VERSION,
+        "experiment_class": EXPERIMENT_CLASS,
+        "revision": REVISION,
+        "paradigm": paradigm,
+        "dataset": dataset,
+        "task": task,
+        "seed": seed,
+        "protocol": "linear_probe_converged",
+        "label_fraction": 1.0,
+        "encoder_sha256": embedding_meta["encoder_sha256"],
+        "embedding_dim": embedding_meta["embedding_dim"],
+        "n_train": int(len(split.labels["train"])),
+        "n_val": int(len(split.labels["val"])),
+        "n_test": int(len(split.labels["test"])),
+        "n_excluded_missing_label": int(split.n_excluded),
+    }
+
+
+def run_classification_cell(
+    *,
+    x: dict[str, np.ndarray],
+    split: TaskSplit,
+    base: dict[str, Any],
+    evaluate_test: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    y = {name: values.astype(np.int64) for name, values in split.labels.items()}
+    weights = sqrt_balanced_class_weights(y["train"], base["task"])
+    start = time.perf_counter()
+    fits = fit_logistic_path(x["train"], y["train"], LOGISTIC_LAMBDA_GRID, weights)
+    fit_sec = time.perf_counter() - start
+
+    val_auprc = [
+        float(average_precision_score(y["val"], logistic_scores(f, x["val"]))) for f in fits
+    ]
+    val_auroc = [float(roc_auc_score(y["val"], logistic_scores(f, x["val"]))) for f in fits]
+    best = select_fit(fits, val_auprc, mode="max")
+    chosen = fits[best]
+
+    path_rows = [
+        {
+            **{k: base[k] for k in ("paradigm", "dataset", "task", "seed")},
+            "probe": "logreg_l2",
+            "lambda": f["lambda"],
+            "val_auprc": val_auprc[i],
+            "val_auroc": val_auroc[i],
+            "n_iter": f["n_iter"],
+            "converged": f["converged"],
+            "selected": i == best,
+        }
+        for i, f in enumerate(fits)
+    ]
+
+    record = {
+        **base,
+        "probe": "logreg_l2",
+        "selection_metric": "val/auprc",
+        "class_weight_0": weights[0],
+        "class_weight_1": weights[1],
+        "selected_lambda": chosen["lambda"],
+        "selected_at_grid_edge": bool(best in (0, len(fits) - 1)),
+        "selected_grid_edge": grid_edge(best, len(fits)),
+        "selected_n_iter": chosen["n_iter"],
+        "selected_converged": chosen["converged"],
+        "all_grid_converged": bool(all(f["converged"] for f in fits)),
+        "max_n_iter": int(max(f["n_iter"] for f in fits)),
+        "val/auprc": val_auprc[best],
+        "val/auroc": val_auroc[best],
+        "train_prevalence": float(y["train"].mean()),
+        "val_prevalence": float(y["val"].mean()),
+        "test_prevalence": float(y["test"].mean()),
+        "n_train_positive": int(y["train"].sum()),
+        "n_test_positive": int(y["test"].sum()),
+        "fit_sec": fit_sec,
+    }
+    if evaluate_test:
+        prob_test = logistic_scores(chosen, x["test"])
+        bench = benchmark_binary_metrics(y["test"], prob_test)
+        record.update(
+            {
+                "test/auprc": bench["auprc"],
+                "test/auroc": bench["auroc"],
+                "test/auprc_sklearn": float(average_precision_score(y["test"], prob_test)),
+                "test/auroc_sklearn": float(roc_auc_score(y["test"], prob_test)),
+            }
+        )
+    return [record], path_rows
+
+
+def run_regression_cell(
+    *,
+    x: dict[str, np.ndarray],
+    split: TaskSplit,
+    base: dict[str, Any],
+    evaluate_test: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    y = {name: values.astype(np.float64) for name, values in split.labels.items()}
+    train_mean = float(y["train"].mean())
+    train_median = float(np.median(y["train"]))
+
+    start = time.perf_counter()
+    ridge_fits = fit_ridge_path(x["train"], y["train"], RIDGE_LAMBDA_GRID)
+    ridge_sec = time.perf_counter() - start
+    start = time.perf_counter()
+    huber_fits = fit_huber_path(x["train"], y["train"], HUBER_LAMBDA_GRID)
+    huber_sec = time.perf_counter() - start
+
+    ridge_val = [regression_metrics(y["val"], linear_predict(f, x["val"])) for f in ridge_fits]
+    huber_val = [regression_metrics(y["val"], linear_predict(f, x["val"])) for f in huber_fits]
+
+    variants = (
+        ("ridge_valmse", ridge_fits, ridge_val, "mse", ridge_sec, "squared_error"),
+        ("ridge_valmae", ridge_fits, ridge_val, "mae", ridge_sec, "squared_error"),
+        ("huber_valmae", huber_fits, huber_val, "mae", huber_sec, "huber_abs_error"),
+    )
+
+    constants: dict[str, float] = {
+        "train_label_mean": train_mean,
+        "train_label_median": train_median,
+        "train_label_std": float(y["train"].std(ddof=1)),
+    }
+    if evaluate_test:
+        mean_const = regression_metrics(y["test"], np.full_like(y["test"], train_mean))
+        median_const = regression_metrics(y["test"], np.full_like(y["test"], train_median))
+        constants.update(
+            {
+                "const/train_mean_test_mse": mean_const["mse"],
+                "const/train_mean_test_mae": mean_const["mae"],
+                "const/train_median_test_mae": median_const["mae"],
+                "const/train_median_test_mse": median_const["mse"],
+            }
+        )
+
+    records: list[dict[str, Any]] = []
+    path_rows: list[dict[str, Any]] = []
+    for probe, fits, val_metrics, select_on, fit_sec, train_loss in variants:
+        best = select_fit(fits, [m[select_on] for m in val_metrics], mode="min")
+        chosen = fits[best]
+        for i, f in enumerate(fits):
+            path_rows.append(
+                {
+                    **{k: base[k] for k in ("paradigm", "dataset", "task", "seed")},
+                    "probe": probe,
+                    "lambda": f["lambda"],
+                    "val_mae": val_metrics[i]["mae"],
+                    "val_mse": val_metrics[i]["mse"],
+                    "val_r2": val_metrics[i]["r2"],
+                    "n_iter": f["n_iter"],
+                    "converged": f["converged"],
+                    "selected": i == best,
+                }
+            )
+        record = {
+            **base,
+            "probe": probe,
+            "train_loss": train_loss,
+            "selection_metric": f"val/{select_on}",
+            "selected_lambda": chosen["lambda"],
+            "selected_at_grid_edge": bool(best in (0, len(fits) - 1)),
+            "selected_grid_edge": grid_edge(best, len(fits)),
+            "selected_n_iter": chosen["n_iter"],
+            "selected_converged": chosen["converged"],
+            "all_grid_converged": bool(all(f["converged"] for f in fits)),
+            "max_n_iter": int(max(f["n_iter"] for f in fits)),
+            "selected_grad_max": chosen.get("grad_max"),
+            "val/mae": val_metrics[best]["mae"],
+            "val/mse": val_metrics[best]["mse"],
+            "val/r2": val_metrics[best]["r2"],
+            "fit_sec": fit_sec,
+            **constants,
+        }
+        if probe == "huber_valmae":
+            record["huber_delta_days"] = HUBER_DELTA_DAYS
+        if evaluate_test:
+            test = regression_metrics(y["test"], linear_predict(chosen, x["test"]))
+            record.update({f"test/{k}": v for k, v in test.items()})
+        records.append(record)
+    return records, path_rows
+
+
+def run_cell(
+    *,
+    embedding_root: Path,
+    processed_root: Path,
+    paradigm: str,
+    dataset: str,
+    task: str,
+    seed: int,
+    split: TaskSplit,
+    evaluate_test: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    emb_path = embedding_root / dataset / f"seed{seed}" / f"{paradigm}.npz"
+    embeddings, emb_stay_ids, meta = load_embedding_file(emb_path)
+    if meta["paradigm"] != paradigm or meta["dataset"] != dataset or int(meta["seed"]) != seed:
+        raise RuntimeError(f"Embedding metadata mismatch for {emb_path}: {meta}")
+    row_by_stay = {int(s): i for i, s in enumerate(emb_stay_ids)}
+    if len(row_by_stay) != len(emb_stay_ids):
+        raise RuntimeError(f"Duplicate stay_ids in {emb_path}")
+    raw = {name: embeddings[rows_for(ids, row_by_stay)] for name, ids in split.stay_ids.items()}
+    scaler = Standardizer.fit(raw["train"])
+    x = {name: scaler.transform(values) for name, values in raw.items()}
+    base = _base_record(
+        paradigm=paradigm, dataset=dataset, task=task, seed=seed, split=split, embedding_meta=meta
+    )
+    if task in CLASSIFICATION_TASKS:
+        return run_classification_cell(x=x, split=split, base=base, evaluate_test=evaluate_test)
+    if task in REGRESSION_TASKS:
+        return run_regression_cell(x=x, split=split, base=base, evaluate_test=evaluate_test)
+    raise ValueError(f"Unsupported task: {task}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--embedding-root", type=Path, default=DEFAULT_EMBEDDING_ROOT)
+    parser.add_argument("--processed-root", type=Path, required=True)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--datasets", nargs="+", default=list(DEFAULT_DATASETS))
+    parser.add_argument("--paradigms", nargs="+", default=list(DEFAULT_PARADIGMS))
+    parser.add_argument("--tasks", nargs="+", default=list(DEFAULT_TASKS))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
+    parser.add_argument(
+        "--no-test",
+        action="store_true",
+        help="Development smoke mode: fit and select on validation only, never score test rows.",
+    )
+    parser.add_argument("--skip-existing", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _cell_path(output_root: Path, paradigm: str, dataset: str, task: str, seed: int) -> Path:
+    return output_root / "cells" / dataset / task / f"seed{seed}" / f"{paradigm}.json"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    embedding_root = (REPO_ROOT / args.embedding_root).resolve()
+    processed_root = args.processed_root.resolve()
+    output_root = REPO_ROOT / args.output_root
+    if args.no_test:
+        output_root = output_root.with_name(output_root.name + "_notest")
+    evaluate_test = not args.no_test
+
+    n_done = 0
+    for dataset in args.datasets:
+        for seed in args.seeds:
+            for task in args.tasks:
+                pending = [
+                    p
+                    for p in args.paradigms
+                    if not (
+                        args.skip_existing
+                        and _cell_path(output_root, p, dataset, task, seed).exists()
+                    )
+                ]
+                if not pending:
+                    continue
+                split = load_task_split(processed_root / dataset, task, seed)
+                for paradigm in pending:
+                    start = time.perf_counter()
+                    records, path_rows = run_cell(
+                        embedding_root=embedding_root,
+                        processed_root=processed_root,
+                        paradigm=paradigm,
+                        dataset=dataset,
+                        task=task,
+                        seed=seed,
+                        split=split,
+                        evaluate_test=evaluate_test,
+                    )
+                    payload = {
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "evaluate_test": evaluate_test,
+                        "records": records,
+                        "regularisation_path": path_rows,
+                    }
+                    out_path = _cell_path(output_root, paradigm, dataset, task, seed)
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = out_path.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps(payload, sort_keys=True, indent=1) + "\n")
+                    tmp.replace(out_path)
+                    n_done += 1
+                    summary = "; ".join(
+                        f"{r['probe']} lam={r['selected_lambda']:.1e} "
+                        f"conv={r['selected_converged']} edge={r['selected_at_grid_edge']}"
+                        for r in records
+                    )
+                    print(
+                        f"[{n_done}] {dataset}/{task}/seed{seed}/{paradigm} "
+                        f"{time.perf_counter() - start:.1f}s :: {summary}",
+                        flush=True,
+                    )
+    print(f"Done. Wrote {n_done} cells to {output_root}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

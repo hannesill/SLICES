@@ -1,0 +1,4 @@
+paradigm,trainable_params,total_params,profile_batch_size,forward_flops_per_step,forward_flops_per_sample,approx_train_flops_per_step
+mae,269460,269460,256,1223688192,4780032.0,3671064576
+jepa,189440,349248,256,2713714688,10600448.0,8141144064
+contrastive,193408,193408,256,1616904192,6316032.0,4850712576

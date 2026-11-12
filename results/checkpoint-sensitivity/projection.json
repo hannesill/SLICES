@@ -1,0 +1,12 @@
+{
+  "source_manifest_sha256": "7a6985429c551353b20c059e45764c71f4667e973523e592a6be47b351de6c30",
+  "source_files_verified": 57,
+  "removed": [
+    "operator paths and instructions",
+    "W&B run identities",
+    "checkout commits from provenance/configuration records",
+    "private data, split, label and normalization fingerprints"
+  ],
+  "retained": "unchanged metrics, validation histories, counts and executed source",
+  "producer_identity_checks": "producer receipts; no public access to private inputs"
+}

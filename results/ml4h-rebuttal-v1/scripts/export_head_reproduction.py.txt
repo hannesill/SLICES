@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+"""Compare the HEAD reproduction slice with the frozen thesis export (ML4H rebuttal P4).
+
+Reads the rerun's metrics/configs from the rebuttal W&B project and from the
+local run logs, and compares them with the frozen same-seed values and the
+frozen 5-seed standard deviation in ``results/slices-thesis-v1``.
+
+Also reports whether each rerun's resolved configuration equals the frozen
+run's exported configuration after removing provenance/location keys.
+
+Read-only for the frozen W&B project and the frozen export.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FROZEN_DIR = REPO_ROOT / "results" / "slices-thesis-v1"
+DEFAULT_RUN_ROOT = Path(
+    "outputs/ml4h-rebuttal/head_reproduction/core_ssl_benchmark_rev-ml4h-rebuttal-v1"
+)
+DEFAULT_OUTPUT = Path("outputs/ml4h-rebuttal/head_reproduction_tables")
+CLASSIFICATION_METRICS = ("auprc", "auroc")
+REGRESSION_METRICS = ("mae", "mse")
+PRIMARY = {"binary": "auprc", "regression": "mae"}
+# Keys that legitimately differ between a rerun and the frozen launch.
+IGNORED_CONFIG_PATHS = (
+    "revision",
+    "rerun_reason",
+    "project_name",
+    "launch_commit",
+    "output_dir",
+    "checkpoint_dir",
+    "checkpoint",
+    "checkpoint_path",
+    "pretrain_checkpoint_path",
+    "config",
+    "logging",
+    "data.processed_dir",
+    "data.num_workers",
+    "training.accelerator",
+    "training.devices",
+)
+RESUME_CONFIG_PATHS = ("ckpt_path",)
+TABLE_LINE = re.compile(r"│\s*(test/[a-z0-9_]+)\s*│\s*([-+0-9.eE]+)\s*│")
+DIR_PATTERN = re.compile(
+    r"^(?P<kind>probe|finetune)_(?P<paradigm>mae|jepa|contrastive)_(?P<task>.+)_"
+    r"(?P<dataset>miiv|eicu|combined)_seed(?P<seed>\d+)$"
+)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--entity", default="hannes-ill")
+    parser.add_argument("--project", default="slices-ml4h-rebuttal")
+    parser.add_argument("--revision", default="ml4h-rebuttal-v1")
+    parser.add_argument("--frozen-project", default="slices-final")
+    parser.add_argument("--frozen-revision", default="thesis-v1")
+    parser.add_argument("--no-wandb", action="store_true", help="Use local run logs only.")
+    return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (unit-tested)
+# ---------------------------------------------------------------------------
+
+
+def parse_test_metrics(log_text: str) -> dict[str, float]:
+    """Full-precision test metrics from the Lightning test table in a run log."""
+    return {name: float(value) for name, value in TABLE_LINE.findall(log_text)}
+
+
+def flatten_config(config: Any, prefix: str = "") -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    if isinstance(config, dict):
+        for key, value in config.items():
+            flat.update(flatten_config(value, f"{prefix}.{key}" if prefix else str(key)))
+    else:
+        flat[prefix] = config
+    return flat
+
+
+def _ignored(path: str) -> bool:
+    return any(path == item or path.startswith(item + ".") for item in IGNORED_CONFIG_PATHS)
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        if isinstance(left, bool) or isinstance(right, bool):
+            return left == right
+        return bool(np.isclose(float(left), float(right), rtol=1e-9, atol=1e-12))
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return len(left) == len(right) and all(_values_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def config_differences(rerun: dict[str, Any], frozen: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+    """Config paths whose values differ, ignoring provenance/location keys."""
+    flat_rerun = {k: v for k, v in flatten_config(rerun).items() if not _ignored(k)}
+    flat_frozen = {k: v for k, v in flatten_config(frozen).items() if not _ignored(k)}
+    diffs = {}
+    for key in sorted(set(flat_rerun) | set(flat_frozen)):
+        left, right = flat_rerun.get(key, "<missing>"), flat_frozen.get(key, "<missing>")
+        if not _values_equal(left, right):
+            diffs[key] = (left, right)
+    return diffs
+
+
+def config_parity_row(
+    run: str, phase: str, rerun_config: dict[str, Any], frozen_config: dict[str, Any]
+) -> dict[str, Any]:
+    """Config comparison for one run, separating trainer-resume keys from training config.
+
+    ``ckpt_path`` is set by the thesis launcher when it resumed an interrupted
+    run from ``last.ckpt``; it records how the frozen run was executed, not a
+    hyperparameter.
+    """
+    diffs = config_differences(rerun_config, frozen_config)
+    training = {key: value for key, value in diffs.items() if key not in RESUME_CONFIG_PATHS}
+    return {
+        "run": run,
+        "phase": phase,
+        "n_training_config_differences": len(training),
+        "training_config_differences": json.dumps(training, default=str, sort_keys=True),
+        "frozen_run_resumed_from_last_ckpt": bool(frozen_config.get("ckpt_path")),
+        "rerun_resumed_from_last_ckpt": bool(rerun_config.get("ckpt_path")),
+    }
+
+
+def compare_metric(rerun: float, frozen_seed: float, frozen_all_seeds: Sequence[float]) -> dict:
+    values = np.asarray(list(frozen_all_seeds), dtype=np.float64)
+    sd = float(values.std(ddof=1)) if len(values) > 1 else float("nan")
+    diff = float(rerun - frozen_seed)
+    return {
+        "rerun": float(rerun),
+        "frozen_same_seed": float(frozen_seed),
+        "diff": diff,
+        "frozen_seed_mean": float(values.mean()),
+        "frozen_seed_sd": sd,
+        "abs_diff_over_seed_sd": abs(diff) / sd if sd and sd > 0 else float("nan"),
+        "within_1_sd": bool(abs(diff) <= sd),
+        "within_2_sd": bool(abs(diff) <= 2 * sd),
+        "within_frozen_seed_range": bool(values.min() <= rerun <= values.max()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Data collection
+# ---------------------------------------------------------------------------
+
+
+def frozen_downstream() -> tuple[pd.DataFrame, pd.DataFrame]:
+    per_seed = pd.read_parquet(FROZEN_DIR / "per_seed_results.parquet")
+    core = per_seed[
+        (per_seed.experiment_class == "core_ssl_benchmark") & (per_seed.label_fraction == 1.0)
+    ]
+    configs = pd.read_parquet(FROZEN_DIR / "run_configs.parquet")[["wandb_run_id", "config_json"]]
+    return core, configs
+
+
+def wandb_runs(entity: str, project: str, revision: str) -> dict[str, Any]:
+    import wandb
+
+    api = wandb.Api(timeout=300)
+    runs = api.runs(
+        f"{entity}/{project}",
+        filters={"tags": {"$all": [f"revision:{revision}", "experiment_class:core_ssl_benchmark"]}},
+    )
+    by_name: dict[str, Any] = {}
+    for run in runs:
+        if run.state != "finished":
+            continue
+        by_name[run.name] = run
+    return by_name
+
+
+def frozen_pretrain_summaries(
+    entity: str, project: str, revision: str, dataset: str
+) -> pd.DataFrame:
+    import wandb
+
+    api = wandb.Api(timeout=300)
+    runs = api.runs(
+        f"{entity}/{project}",
+        filters={
+            "tags": {
+                "$all": [
+                    "phase:pretrain",
+                    f"revision:{revision}",
+                    "experiment_class:core_ssl_benchmark",
+                    f"dataset:{dataset}",
+                ]
+            },
+            "state": "finished",
+        },
+    )
+    rows = []
+    for run in runs:
+        summary = dict(run.summary_metrics or {})
+        config = dict(run.config)
+        rows.append(
+            {
+                "paradigm": (config.get("ssl") or {}).get("name"),
+                "seed": config.get("seed"),
+                "val/loss": summary.get("val/loss"),
+                "train/loss_epoch": summary.get("train/loss_epoch"),
+                "global_step": summary.get("trainer/global_step"),
+                "epoch": summary.get("epoch"),
+                "config": config,
+                "run": run,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def epoch_curve(run: Any, key: str) -> pd.Series:
+    """Per-epoch values of an epoch-level metric from a W&B run history."""
+    history = run.history(keys=["epoch", key], samples=2000, pandas=True)
+    return history.groupby("epoch")[key].last()
+
+
+def compare_curves(rerun: pd.Series, frozen: pd.Series, last_n: int = 50) -> dict[str, float]:
+    """Summarise how closely two per-epoch loss curves track each other."""
+    joined = pd.concat({"rerun": rerun, "frozen": frozen}, axis=1).dropna()
+    diff = joined["rerun"] - joined["frozen"]
+    tail = diff.iloc[-last_n:]
+    return {
+        "n_epochs_compared": int(len(joined)),
+        "tail_epochs": int(len(tail)),
+        "tail_mean_diff": float(tail.mean()),
+        "tail_mean_abs_diff": float(tail.abs().mean()),
+        "tail_max_abs_diff": float(tail.abs().max()),
+        "tail_frozen_mean": float(joined["frozen"].iloc[-last_n:].mean()),
+        "tail_relative_mean_abs_diff": float(
+            tail.abs().mean() / joined["frozen"].iloc[-last_n:].abs().mean()
+        ),
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    run_root = REPO_ROOT / args.run_root
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frozen, frozen_configs = frozen_downstream()
+    reruns = {} if args.no_wandb else wandb_runs(args.entity, args.project, args.revision)
+
+    metric_rows, config_rows = [], []
+    for run_dir in sorted(p for p in run_root.iterdir() if p.is_dir()):
+        match = DIR_PATTERN.match(run_dir.name)
+        if not match or not (run_dir / "reproduction_complete.json").exists():
+            continue
+        info = match.groupdict()
+        seed = int(info["seed"])
+        protocol = "linear_probe" if info["kind"] == "probe" else "full_finetune"
+        cell = frozen[
+            (frozen.paradigm == info["paradigm"])
+            & (frozen.dataset == info["dataset"])
+            & (frozen.task == info["task"])
+            & (frozen.protocol == protocol)
+        ]
+        same_seed = cell[cell.seed == seed]
+        if len(same_seed) != 1:
+            raise RuntimeError(f"No unique frozen row for {run_dir.name}")
+        same_seed = same_seed.iloc[0]
+        log_metrics = parse_test_metrics((run_dir / "run.log").read_text(errors="replace"))
+        wandb_name = (
+            f"core_ssl_benchmark_{info['kind']}_{info['dataset']}_{info['paradigm']}_"
+            f"{info['task']}_seed{seed}"
+        )
+        wandb_run = reruns.get(wandb_name)
+        wandb_summary = dict(wandb_run.summary_metrics or {}) if wandb_run is not None else {}
+        is_regression = info["task"] == "los_remaining"
+        metric_names = REGRESSION_METRICS if is_regression else CLASSIFICATION_METRICS
+        primary = PRIMARY["regression" if is_regression else "binary"]
+        for metric in metric_names:
+            key = f"test/{metric}"
+            value = wandb_summary.get(key, log_metrics.get(key))
+            if value is None:
+                raise RuntimeError(f"Missing {key} for {run_dir.name}")
+            if key in log_metrics and abs(log_metrics[key] - value) > 1e-6:
+                raise RuntimeError(f"W&B/log mismatch for {key} in {run_dir.name}")
+            metric_rows.append(
+                {
+                    "paradigm": info["paradigm"],
+                    "dataset": info["dataset"],
+                    "seed": seed,
+                    "task": info["task"],
+                    "protocol": protocol,
+                    "metric": metric,
+                    "is_primary_metric": metric == primary,
+                    **compare_metric(float(value), float(same_seed[key]), cell[key].tolist()),
+                    "rerun_last_epoch": wandb_summary.get("epoch"),
+                    "frozen_last_epoch": float(same_seed["epoch"]),
+                    "rerun_wandb_run": wandb_run.id if wandb_run is not None else None,
+                    "frozen_wandb_run": same_seed["wandb_run_id"],
+                }
+            )
+        if wandb_run is not None:
+            frozen_cfg = json.loads(
+                frozen_configs.loc[
+                    frozen_configs.wandb_run_id == same_seed["wandb_run_id"], "config_json"
+                ].iloc[0]
+            )
+            config_rows.append(
+                config_parity_row(run_dir.name, info["kind"], dict(wandb_run.config), frozen_cfg)
+            )
+
+    pretrain_rows = []
+    curve_rows = []
+    if not args.no_wandb and any("_pretrain_" in name for name in reruns):
+        dataset = metric_rows[0]["dataset"] if metric_rows else "miiv"
+        frozen_pre = frozen_pretrain_summaries(
+            args.entity, args.frozen_project, args.frozen_revision, dataset
+        )
+        for name, run in reruns.items():
+            if "_pretrain_" not in name:
+                continue
+            config = dict(run.config)
+            summary = dict(run.summary_metrics or {})
+            paradigm = (config.get("ssl") or {}).get("name")
+            seed = config.get("seed")
+            cell = frozen_pre[frozen_pre.paradigm == paradigm]
+            same = cell[cell.seed == seed].iloc[0]
+            for metric in ("val/loss", "train/loss_epoch"):
+                pretrain_rows.append(
+                    {
+                        "paradigm": paradigm,
+                        "dataset": dataset,
+                        "seed": seed,
+                        "metric": metric,
+                        **compare_metric(
+                            float(summary[metric]), float(same[metric]), cell[metric].tolist()
+                        ),
+                        "rerun_global_step": summary.get("trainer/global_step"),
+                        "frozen_global_step": same["global_step"],
+                        "rerun_runtime_sec": summary.get("_runtime"),
+                    }
+                )
+            for metric in ("val/loss", "train/loss_epoch"):
+                curve_rows.append(
+                    {
+                        "paradigm": paradigm,
+                        "dataset": dataset,
+                        "seed": seed,
+                        "metric": metric,
+                        **compare_curves(
+                            epoch_curve(run, metric), epoch_curve(same["run"], metric)
+                        ),
+                    }
+                )
+            config_rows.append(
+                config_parity_row(
+                    f"pretrain_{paradigm}_{dataset}_seed{seed}", "pretrain", config, same["config"]
+                )
+            )
+
+    metrics = pd.DataFrame(metric_rows)
+    metrics.to_csv(out_dir / "head_reproduction_downstream.csv", index=False)
+    pd.DataFrame(pretrain_rows).to_csv(out_dir / "head_reproduction_pretrain.csv", index=False)
+    pd.DataFrame(curve_rows).to_csv(out_dir / "head_reproduction_pretrain_curves.csv", index=False)
+    pd.DataFrame(config_rows).to_csv(out_dir / "head_reproduction_config_parity.csv", index=False)
+    primary = metrics[metrics.is_primary_metric]
+    summary = {
+        "n_downstream_runs": int(primary.shape[0]),
+        "n_primary_within_1_sd": int(primary.within_1_sd.sum()),
+        "n_primary_within_2_sd": int(primary.within_2_sd.sum()),
+        "n_primary_within_frozen_seed_range": int(primary.within_frozen_seed_range.sum()),
+        "primary_abs_diff_over_sd_median": float(primary.abs_diff_over_seed_sd.median()),
+        "primary_abs_diff_over_sd_max": float(primary.abs_diff_over_seed_sd.max()),
+        "n_downstream_runs_same_last_epoch": int(
+            (primary.rerun_last_epoch == primary.frozen_last_epoch).sum()
+        ),
+        "n_all_metrics": int(len(metrics)),
+        "n_all_metrics_within_1_sd": int(metrics.within_1_sd.sum()),
+        "n_all_metrics_within_2_sd": int(metrics.within_2_sd.sum()),
+        "primary_abs_diff_max_auprc": float(
+            primary.loc[primary.metric == "auprc", "diff"].abs().max()
+        ),
+        "primary_abs_diff_max_los_mae": float(
+            primary.loc[primary.metric == "mae", "diff"].abs().max()
+        ),
+        "n_runs_config_checked": len(config_rows),
+        "n_runs_with_training_config_differences": int(
+            sum(row["n_training_config_differences"] > 0 for row in config_rows)
+        ),
+        "n_frozen_runs_resumed_from_last_ckpt": int(
+            sum(row["frozen_run_resumed_from_last_ckpt"] for row in config_rows)
+        ),
+    }
+    (out_dir / "head_reproduction_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
+    pd.set_option("display.width", 220)
+    pd.set_option("display.max_columns", 40)
+    print(
+        metrics[
+            [
+                "paradigm",
+                "task",
+                "protocol",
+                "metric",
+                "rerun",
+                "frozen_same_seed",
+                "diff",
+                "frozen_seed_sd",
+                "abs_diff_over_seed_sd",
+                "within_2_sd",
+            ]
+        ]
+        .round(4)
+        .to_string(index=False)
+    )
+    print(json.dumps(summary, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

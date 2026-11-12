@@ -1,0 +1,18 @@
+\setlength{\tabcolsep}{3.6pt}
+\begin{tabular}{@{}llrrrrrrrrrrrr@{}}
+\toprule
+Data & Endpoint & \multicolumn{3}{c}{Probe, capped} & \multicolumn{3}{c}{Probe, converged} & \multicolumn{3}{c}{Fine-tune} & \multicolumn{3}{c}{Supervised baselines} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-8} \cmidrule(lr){9-11} \cmidrule(lr){12-14}
+ & & MAE & JEPA & Con. & MAE & JEPA & Con. & MAE & JEPA & Con. & Transf. & GRU-D & XGBoost \\
+\midrule
+Combined & 24h mortality & \textbf{0.284} & 0.188 & 0.205 & \textbf{0.309} & 0.208 & 0.239 & 0.409 & 0.391 & 0.399 & 0.389 & \textbf{0.422} & 0.374 \\
+Combined & Hospital mortality & \textbf{0.470} & 0.357 & 0.392 & \textbf{0.470} & 0.363 & 0.395 & \textbf{0.531} & 0.521 & 0.514 & 0.518 & 0.527 & 0.525 \\
+Combined & AKI & \textbf{0.447} & 0.327 & 0.396 & \textbf{0.451} & 0.332 & 0.402 & 0.626 & 0.626 & 0.614 & 0.652 & 0.630 & \textbf{0.668} \\
+eICU-CRD & 24h mortality & \textbf{0.276} & 0.199 & 0.195 & \textbf{0.287} & 0.219 & 0.215 & 0.377 & 0.363 & 0.360 & 0.351 & \textbf{0.397} & 0.315 \\
+eICU-CRD & Hospital mortality & \textbf{0.439} & 0.355 & 0.350 & \textbf{0.439} & 0.359 & 0.356 & \textbf{0.495} & 0.471 & 0.471 & 0.474 & 0.484 & 0.482 \\
+eICU-CRD & AKI & \textbf{0.361} & 0.268 & 0.286 & \textbf{0.366} & 0.275 & 0.293 & 0.519 & 0.515 & 0.494 & 0.554 & 0.510 & \textbf{0.569} \\
+MIMIC-IV & 24h mortality & \textbf{0.312} & 0.236 & 0.254 & \textbf{0.357} & 0.298 & 0.322 & 0.451 & 0.451 & 0.456 & 0.449 & \textbf{0.480} & 0.402 \\
+MIMIC-IV & Hospital mortality & \textbf{0.510} & 0.415 & 0.458 & \textbf{0.520} & 0.440 & 0.471 & \textbf{0.579} & 0.564 & 0.568 & 0.565 & 0.577 & 0.577 \\
+MIMIC-IV & AKI & \textbf{0.504} & 0.410 & 0.478 & \textbf{0.510} & 0.433 & 0.492 & 0.667 & 0.642 & 0.645 & 0.693 & 0.661 & \textbf{0.729} \\
+\bottomrule
+\end{tabular}

@@ -1,0 +1,13 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{ICU benchmarks.}
+The MIMIC-III benchmark formalized common ICU prediction tasks and evaluation procedures \citep{harutyunyan2019multitask}. YAIB provided a modular multi-center clinical framework over several ICU databases using harmonized preprocessing \citep{van_de_water2024yaib}. \SLICES{} builds on explicit cohorts, labels, and leakage controls with a setup designed for SSL comparisons. It holds the clinical inputs, encoder, and downstream evaluation fixed across objectives, reducing variation from these sources.
+
+\paragraph{Clinical time-series SSL.}
+STraTS represents sparse observations as time--variable--value triplets and uses forecasting-style pretraining \citep{tipirneni2022strats}. DuETT uses dual event-time attention and self-supervised prediction tasks \citep{labach2023duett}. Neighborhood and event-based contrastive methods use clinical structure to define positive pairs or anchors \citep{yeche2021ncl,oufattole2024ebcl}. Sequential multi-dimensional SSL evaluates contrastive and non-contrastive losses at multiple levels of clinical trajectories \citep{raghu2023smdssl}. SMART combines missing-aware temporal and variable attention with latent reconstruction \citep{yu2024smart}. AID-MAE is a recent masked-modeling approach for incomplete EHR time series \citep{xiang2026aidmae}. These systems motivate the objectives studied here but change either the representation, architecture, positive-pair rule, or task contract.
+
+\paragraph{Closest comparative work.}
+TS-JEPA compares JEPA, masked autoencoding, autoregression, and TS2Vec-style contrastive pretraining with a common Transformer, on sensor and forecasting datasets, with frozen-head evaluation and a low-label study \citep{ennadir2024tsjepa}. It is the closest objective-level predecessor. \SLICES{} differs in its missingness-preserving ICU interface, patient-level clinical splits, paired probe and fine-tuning evaluation, and matched \MIMIC{}--\EICU{} regimes. Clin-JEPA uses text-serialized hourly states and an LLM-based encoder, so it changes the model and input contract rather than testing a shared small-encoder interface \citep{yang2026clinjepa}. General MAE, I-JEPA, SimCLR, and TS2Vec formulations provide the objective context \citep{he2022mae,assran2023ijepa,chen2020simclr,yue2022ts2vec}.
+
+Scores from these studies are not directly comparable with SLICES because cohorts, representations, and tasks differ.

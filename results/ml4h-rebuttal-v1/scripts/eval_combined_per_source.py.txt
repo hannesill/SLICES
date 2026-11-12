@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""Per-source test metrics for the frozen Combined-regime runs (ML4H rebuttal P3).
+
+For the ``combined`` core benchmark runs (MAE/JEPA/contrastive under linear
+probe and full fine-tune, plus the supervised Transformer) this script re-runs
+test inference from the evaluated checkpoint recorded in the frozen export
+(``_eval_artifact_path`` / ``_eval_artifact_sha256``) and reports metrics
+separately for the MIMIC-IV and eICU portions of the Combined test split
+(``source_dataset`` in the Combined static table).
+
+Strictly read-only:
+
+* run selection, configs and checkpoint provenance come from the local frozen
+  export (``results/slices-thesis-v1``); W&B is never contacted or written;
+* checkpoints are only read, and their SHA256 must match the recorded digest;
+* processed data is accessed through a symlink view so that cache files the
+  data module may create never land in the source data directory.
+
+This is not ``scripts/eval/evaluate_fairness.py`` and writes no summaries back
+to any run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import pandas as pd
+import torch
+from omegaconf import OmegaConf
+
+from slices.eval import MetricConfig, build_metrics
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FROZEN_DIR = REPO_ROOT / "results" / "slices-thesis-v1"
+DEFAULT_OUTPUT = Path("outputs/ml4h-rebuttal/per_source")
+PARADIGMS = ("mae", "jepa", "contrastive", "supervised")
+SOURCE_COLUMN = "source_dataset"
+VIEW_FILES = (
+    "static.parquet",
+    "timeseries.parquet",
+    "labels.parquet",
+    "metadata.yaml",
+    "splits.yaml",
+)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--frozen-dir", type=Path, default=FROZEN_DIR)
+    parser.add_argument(
+        "--outputs-root",
+        type=Path,
+        required=True,
+        help="Directory that holds the frozen run output dirs (the recorded 'outputs/').",
+    )
+    parser.add_argument(
+        "--processed-root",
+        type=Path,
+        required=True,
+        help="Directory that holds the processed 'combined/' folder (read through a view).",
+    )
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--dataset", default="combined")
+    parser.add_argument("--experiment-class", default="core_ssl_benchmark")
+    parser.add_argument("--paradigms", nargs="+", default=list(PARADIGMS))
+    parser.add_argument("--tasks", nargs="+", default=None)
+    parser.add_argument("--seeds", nargs="+", type=int, default=None)
+    parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda", "mps"))
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--check-configs-only",
+        action="store_true",
+        help="Only verify that every selected frozen config builds a model at this checkout.",
+    )
+    return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (unit-tested)
+# ---------------------------------------------------------------------------
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_recorded_path(recorded: str, outputs_root: Path) -> Path:
+    """Rebase a recorded 'outputs/...' (or absolute '.../outputs/...') path."""
+    text = str(recorded)
+    if text.startswith("outputs/"):
+        return outputs_root / text[len("outputs/") :]
+    if text.startswith("/") and "/outputs/" in text:
+        return outputs_root / text.split("/outputs/", 1)[1]
+    return Path(text)
+
+
+def portion_metrics(task_type: str, predictions: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
+    """Benchmark metrics for one portion of the test split."""
+    out: dict[str, Any] = {"n": int(len(labels))}
+    if task_type == "regression":
+        resid = predictions.astype(np.float64) - labels.astype(np.float64)
+        y = labels.astype(np.float64)
+        sst = float(np.sum((y - y.mean()) ** 2)) if len(y) else 0.0
+        out.update(
+            {
+                "mae": float(np.mean(np.abs(resid))) if len(y) else float("nan"),
+                "mse": float(np.mean(resid**2)) if len(y) else float("nan"),
+                "r2": float(1.0 - np.sum(resid**2) / sst) if sst > 0 else float("nan"),
+                "label_mean": float(y.mean()) if len(y) else float("nan"),
+                "label_median": float(np.median(y)) if len(y) else float("nan"),
+            }
+        )
+        return out
+    y_int = labels.astype(np.int64)
+    n_pos = int(y_int.sum())
+    out.update(
+        {
+            "n_positive": n_pos,
+            "prevalence": float(n_pos / len(y_int)) if len(y_int) else float("nan"),
+        }
+    )
+    if n_pos == 0 or n_pos == len(y_int):
+        out.update({"auprc": float("nan"), "auroc": float("nan")})
+        return out
+    metrics = build_metrics(
+        MetricConfig(task_type="binary", n_classes=2, metrics=["auroc", "auprc"]), prefix=""
+    )
+    metrics.update(torch.from_numpy(predictions.astype(np.float32)), torch.from_numpy(y_int))
+    out.update({key: float(value) for key, value in metrics.compute().items()})
+    return out
+
+
+def per_source_metrics(
+    task_type: str,
+    predictions: np.ndarray,
+    labels: np.ndarray,
+    sources: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Metrics for the whole test split and for each source portion."""
+    if not (len(predictions) == len(labels) == len(sources)):
+        raise ValueError("predictions, labels and sources must have the same length")
+    rows = [{"portion": "all", **portion_metrics(task_type, predictions, labels)}]
+    for source in sorted({str(s) for s in sources}):
+        keep = np.asarray([str(s) == source for s in sources])
+        rows.append(
+            {"portion": source, **portion_metrics(task_type, predictions[keep], labels[keep])}
+        )
+    return rows
+
+
+def build_data_view(source_dir: Path, view_dir: Path) -> Path:
+    """Symlink the immutable processed files so caches are written to the view only."""
+    view_dir.mkdir(parents=True, exist_ok=True)
+    (view_dir / ".tensor_cache").mkdir(exist_ok=True)
+    candidates = [source_dir / name for name in VIEW_FILES]
+    candidates += sorted(source_dir.glob("normalization_stats*.yaml"))
+    for path in candidates:
+        link = view_dir / path.name
+        if path.exists() and not link.exists():
+            link.symlink_to(path.resolve())
+    cache_dir = source_dir / ".tensor_cache"
+    if cache_dir.exists():
+        for path in sorted(cache_dir.glob("*.pt")):
+            link = view_dir / ".tensor_cache" / path.name
+            if not link.exists():
+                link.symlink_to(path.resolve())
+    return view_dir
+
+
+def select_runs(
+    frozen_dir: Path,
+    *,
+    dataset: str,
+    experiment_class: str,
+    paradigms: Sequence[str],
+    tasks: Sequence[str] | None,
+    seeds: Sequence[int] | None,
+) -> pd.DataFrame:
+    per_seed = pd.read_parquet(frozen_dir / "per_seed_results.parquet")
+    configs = pd.read_parquet(frozen_dir / "run_configs.parquet")[["wandb_run_id", "config_json"]]
+    runs = per_seed[
+        (per_seed.experiment_class == experiment_class)
+        & (per_seed.dataset == dataset)
+        & (per_seed.label_fraction == 1.0)
+        & (per_seed.paradigm.isin(list(paradigms)))
+    ]
+    if tasks:
+        runs = runs[runs.task.isin(list(tasks))]
+    if seeds:
+        runs = runs[runs.seed.isin(list(seeds))]
+    columns = [
+        "wandb_run_id",
+        "paradigm",
+        "dataset",
+        "task",
+        "seed",
+        "protocol",
+        "phase",
+        "_eval_checkpoint_source",
+        "_eval_artifact_path",
+        "_eval_artifact_sha256",
+        "test/auprc",
+        "test/auroc",
+        "test/mae",
+        "test/mse",
+        "test/r2",
+    ]
+    merged = runs[columns].merge(configs, on="wandb_run_id", how="left", validate="one_to_one")
+    # itertuples() renames columns with a leading underscore or a slash, so use plain names.
+    merged = merged.rename(
+        columns={
+            "_eval_checkpoint_source": "eval_checkpoint_source",
+            "_eval_artifact_path": "eval_artifact_path",
+            "_eval_artifact_sha256": "eval_artifact_sha256",
+            **{f"test/{m}": f"frozen_{m}" for m in ("auprc", "auroc", "mae", "mse", "r2")},
+        }
+    )
+    if merged.config_json.isna().any():
+        raise RuntimeError("Selected runs without an exported config")
+    return merged.sort_values(["task", "seed", "paradigm", "protocol"]).reset_index(drop=True)
+
+
+def build_model_from_frozen_config(
+    config: dict[str, Any],
+    feature_dim: int,
+    seq_length: int,
+    checkpoint_class_weight: Sequence[float] | None = None,
+):
+    """Rebuild the evaluated FineTuneModule from an exported run config.
+
+    ``checkpoint_class_weight`` is the loss-weight buffer stored in the evaluated
+    checkpoint. It only matters when the exported config still carries the
+    unresolved ``class_weight="balanced"`` placeholder; class weights never
+    affect inference.
+    """
+    from slices.training import FineTuneModule
+
+    keep = {
+        key: config[key]
+        for key in ("encoder", "task", "training", "optimizer", "scheduler", "eval")
+        if key in config
+    }
+    cfg = OmegaConf.create(keep)
+    OmegaConf.set_struct(cfg, False)
+    cfg.encoder.d_input = feature_dim
+    cfg.encoder.max_seq_length = seq_length
+    class_weight = (config.get("training") or {}).get("class_weight")
+    if class_weight == "balanced" or class_weight is None:
+        cfg.training.class_weight = (
+            [float(w) for w in checkpoint_class_weight]
+            if checkpoint_class_weight is not None
+            else None
+        )
+    OmegaConf.set_struct(cfg, True)
+    return FineTuneModule(config=cfg, checkpoint_path=None, pretrain_checkpoint_path=None)
+
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
+
+def _device(name: str) -> torch.device:
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(name)
+
+
+def evaluate_run(
+    row: Any,
+    *,
+    datamodule: Any,
+    sources_by_stay: dict[int, str],
+    outputs_root: Path,
+    device: torch.device,
+) -> list[dict[str, Any]]:
+    from slices.eval.inference import run_inference
+
+    base = {
+        "wandb_run_id": row.wandb_run_id,
+        "paradigm": row.paradigm,
+        "protocol": row.protocol,
+        "dataset": row.dataset,
+        "task": row.task,
+        "seed": int(row.seed),
+    }
+    if row.eval_checkpoint_source != "best":
+        return [{**base, "status": f"unsupported_checkpoint_source:{row.eval_checkpoint_source}"}]
+    checkpoint_path = resolve_recorded_path(row.eval_artifact_path, outputs_root)
+    if not checkpoint_path.exists():
+        return [{**base, "status": "checkpoint_missing", "checkpoint": str(checkpoint_path)}]
+    actual_sha = file_sha256(checkpoint_path)
+    if actual_sha != row.eval_artifact_sha256:
+        return [{**base, "status": "sha256_mismatch", "checkpoint": str(checkpoint_path)}]
+
+    config = json.loads(row.config_json)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    stored_weight = state["state_dict"].get("criterion.weight")
+    model = build_model_from_frozen_config(
+        config,
+        datamodule.get_feature_dim(),
+        datamodule.get_seq_length(),
+        checkpoint_class_weight=stored_weight.tolist() if stored_weight is not None else None,
+    )
+    model.load_state_dict(state["state_dict"])
+    model.to(device).eval()
+    predictions, labels, stay_ids = run_inference(
+        model, datamodule.test_dataloader(), device=device
+    )
+    task_type = getattr(model, "task_type", "binary")
+    sources = np.asarray([sources_by_stay[int(s)] for s in stay_ids])
+    rows = per_source_metrics(task_type, predictions.numpy(), labels.numpy(), sources)
+
+    frozen = {
+        name: float(getattr(row, f"frozen_{name}"))
+        for name in ("auprc", "auroc", "mae", "mse", "r2")
+        if pd.notna(getattr(row, f"frozen_{name}"))
+    }
+    overall = rows[0]
+    max_diff = max((abs(overall[name] - value) for name, value in frozen.items()), default=np.nan)
+    return [
+        {
+            **base,
+            "status": "ok",
+            "task_type": task_type,
+            "checkpoint_sha256_verified": True,
+            "overall_max_abs_diff_vs_frozen": float(max_diff),
+            **{f"frozen_overall_{name}": value for name, value in frozen.items()},
+            **portion,
+        }
+        for portion in rows
+    ]
+
+
+def aggregate(per_run: pd.DataFrame) -> pd.DataFrame:
+    ok = per_run[per_run.status == "ok"]
+    metrics = [
+        m
+        for m in ("auprc", "auroc", "mae", "mse", "r2", "n", "n_positive", "prevalence")
+        if m in ok
+    ]
+    grouped = ok.groupby(["task", "paradigm", "protocol", "portion"], sort=False)
+    out = grouped[metrics].agg(["mean", "std"])
+    out.columns = [f"{metric}_{'sd' if stat == 'std' else stat}" for metric, stat in out.columns]
+    out.insert(0, "n_seeds", grouped.seed.nunique())
+    return out.reset_index()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    runs = select_runs(
+        args.frozen_dir,
+        dataset=args.dataset,
+        experiment_class=args.experiment_class,
+        paradigms=args.paradigms,
+        tasks=args.tasks,
+        seeds=args.seeds,
+    )
+    if args.limit is not None:
+        runs = runs.head(args.limit)
+    print(f"Selected runs: {len(runs)}", flush=True)
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.check_configs_only:
+        import yaml
+
+        metadata = yaml.safe_load(
+            (args.processed_root / args.dataset / "metadata.yaml").read_text()
+        )
+        for row in runs.itertuples():
+            build_model_from_frozen_config(
+                json.loads(row.config_json),
+                len(metadata["feature_names"]),
+                int(metadata["seq_length_hours"]),
+            )
+        print(
+            f"All {len(runs)} frozen configs build a FineTuneModule at this checkout.", flush=True
+        )
+        return 0
+
+    from slices.data.datamodule import ICUDataModule
+
+    view = build_data_view(
+        (args.processed_root / args.dataset).resolve(), out_dir / "data_view" / args.dataset
+    )
+    device = _device(args.device)
+    results: list[dict[str, Any]] = []
+    for (task, seed), group in runs.groupby(["task", "seed"], sort=False):
+        datamodule = ICUDataModule(
+            processed_dir=view,
+            task_name=task,
+            batch_size=args.batch_size,
+            num_workers=0,
+            seed=int(seed),
+            label_fraction=1.0,
+        )
+        datamodule.setup()
+        static = datamodule.dataset.static_df
+        if SOURCE_COLUMN not in static.columns:
+            raise RuntimeError(f"{SOURCE_COLUMN} missing from static table of {view}")
+        sources_by_stay = dict(zip(static["stay_id"].to_list(), static[SOURCE_COLUMN].to_list()))
+        for row in group.itertuples():
+            rows = evaluate_run(
+                row,
+                datamodule=datamodule,
+                sources_by_stay=sources_by_stay,
+                outputs_root=args.outputs_root,
+                device=device,
+            )
+            results.extend(rows)
+            head = rows[0]
+            print(
+                f"{task}/seed{seed}/{row.paradigm}/{row.protocol}: {head['status']} "
+                f"max_abs_diff_vs_frozen={head.get('overall_max_abs_diff_vs_frozen')}",
+                flush=True,
+            )
+            pd.DataFrame(results).to_csv(out_dir / "per_run_per_source.csv", index=False)
+    per_run = pd.DataFrame(results)
+    per_run.to_csv(out_dir / "per_run_per_source.csv", index=False)
+    if (per_run.status == "ok").any():
+        aggregate(per_run).to_csv(out_dir / "per_source_aggregated.csv", index=False)
+    summary = {
+        "n_runs_selected": int(len(runs)),
+        "status_counts": per_run.drop_duplicates("wandb_run_id").status.value_counts().to_dict(),
+        "max_overall_abs_diff_vs_frozen": (
+            float(per_run["overall_max_abs_diff_vs_frozen"].max())
+            if "overall_max_abs_diff_vs_frozen" in per_run
+            else None
+        ),
+    }
+    (out_dir / "per_source_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
+    print(json.dumps(summary, indent=1), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

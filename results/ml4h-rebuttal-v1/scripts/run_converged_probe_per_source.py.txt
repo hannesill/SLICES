@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Per-source Combined test metrics for the converged frozen probe (local).
+
+ML4H rebuttal diagnostic, frozen-encoder protocol only. For Combined-regime
+encoders the converged probes of ``run_converged_frozen_probe.py`` are refit
+deterministically with the same grids and validation selection rule, and the
+selected probe's test predictions are scored separately on the MIMIC-IV and
+eICU portions of the Combined test split.
+
+No new selection takes place: the script asserts that the refit reproduces the
+selected regularisation strength and overall test metrics already stored by
+``run_converged_frozen_probe.py``. This does not replace the checkpoint-based
+per-source evaluation in ``eval_combined_per_source.py`` (which also covers
+full fine-tuning and the supervised Transformer); it only needs the archived
+encoders and therefore runs without the training VM.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
+import pandas as pd
+import polars as pl
+from sklearn.metrics import average_precision_score
+
+from scripts.diagnostics import run_converged_frozen_probe as probe
+from scripts.diagnostics.eval_combined_per_source import SOURCE_COLUMN, per_source_metrics
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT = Path("outputs/ml4h-rebuttal/converged_probe_per_source")
+PARITY_TOLERANCE = 1e-9
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--embedding-root", type=Path, default=probe.DEFAULT_EMBEDDING_ROOT)
+    parser.add_argument("--probe-root", type=Path, default=probe.DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--processed-root", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--dataset", default="combined")
+    parser.add_argument("--paradigms", nargs="+", default=list(probe.DEFAULT_PARADIGMS))
+    parser.add_argument("--tasks", nargs="+", default=list(probe.DEFAULT_TASKS))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(probe.DEFAULT_SEEDS))
+    return parser.parse_args(argv)
+
+
+def selected_predictions(
+    task: str, x: dict[str, np.ndarray], split: probe.TaskSplit
+) -> dict[str, tuple[float, np.ndarray]]:
+    """Refit the P1 probes and return {probe: (selected_lambda, test_predictions)}."""
+    if task in probe.CLASSIFICATION_TASKS:
+        y = {name: values.astype(np.int64) for name, values in split.labels.items()}
+        weights = probe.sqrt_balanced_class_weights(y["train"], task)
+        fits = probe.fit_logistic_path(x["train"], y["train"], probe.LOGISTIC_LAMBDA_GRID, weights)
+        val = [
+            float(average_precision_score(y["val"], probe.logistic_scores(f, x["val"])))
+            for f in fits
+        ]
+        best = probe.select_fit(fits, val, mode="max")
+        return {"logreg_l2": (fits[best]["lambda"], probe.logistic_scores(fits[best], x["test"]))}
+
+    y = {name: values.astype(np.float64) for name, values in split.labels.items()}
+    ridge = probe.fit_ridge_path(x["train"], y["train"], probe.RIDGE_LAMBDA_GRID)
+    huber = probe.fit_huber_path(x["train"], y["train"], probe.HUBER_LAMBDA_GRID)
+    ridge_val = [
+        probe.regression_metrics(y["val"], probe.linear_predict(f, x["val"])) for f in ridge
+    ]
+    huber_val = [
+        probe.regression_metrics(y["val"], probe.linear_predict(f, x["val"])) for f in huber
+    ]
+    out = {}
+    for name, fits, val, key in (
+        ("ridge_valmse", ridge, ridge_val, "mse"),
+        ("ridge_valmae", ridge, ridge_val, "mae"),
+        ("huber_valmae", huber, huber_val, "mae"),
+    ):
+        best = probe.select_fit(fits, [m[key] for m in val], mode="min")
+        out[name] = (fits[best]["lambda"], probe.linear_predict(fits[best], x["test"]))
+    return out
+
+
+def stored_records(
+    probe_root: Path, dataset: str, task: str, seed: int, paradigm: str
+) -> dict[str, Any]:
+    path = probe_root / "cells" / dataset / task / f"seed{seed}" / f"{paradigm}.json"
+    payload = json.loads(path.read_text())
+    return {record["probe"]: record for record in payload["records"]}
+
+
+def aggregate(per_seed: pd.DataFrame) -> pd.DataFrame:
+    metrics = [
+        m
+        for m in ("auprc", "auroc", "mae", "mse", "r2", "n", "n_positive", "prevalence")
+        if m in per_seed
+    ]
+    grouped = per_seed.groupby(["task", "probe", "paradigm", "portion"], sort=False)
+    out = grouped[metrics].agg(["mean", "std"])
+    out.columns = [f"{metric}_{'sd' if stat == 'std' else stat}" for metric, stat in out.columns]
+    out.insert(0, "n_seeds", grouped.seed.nunique())
+    return out.reset_index()
+
+
+def paired_deltas(per_seed: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (task, probe_name, portion), group in per_seed.groupby(
+        ["task", "probe", "portion"], sort=False
+    ):
+        if probe_name == "logreg_l2":
+            metric = "auprc"
+        elif probe_name == "ridge_valmse":
+            metric = "mse"
+        else:
+            metric = "mae"
+        higher = metric == "auprc"
+        wide = group.pivot(index="seed", columns="paradigm", values=metric)
+        for other in ("contrastive", "jepa"):
+            delta = (wide["mae"] - wide[other]).dropna()
+            better = delta > 0 if higher else delta < 0
+            rows.append(
+                {
+                    "task": task,
+                    "probe": probe_name,
+                    "portion": portion,
+                    "metric": metric,
+                    "higher_is_better": higher,
+                    "comparison": f"mae_minus_{other}",
+                    "delta_mean": float(delta.mean()),
+                    "delta_sd": float(delta.std(ddof=1)),
+                    "n_seeds": int(len(delta)),
+                    "n_seeds_delta_positive": int((delta > 0).sum()),
+                    "n_seeds_mae_better": int(better.sum()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    embedding_root = (REPO_ROOT / args.embedding_root).resolve()
+    probe_root = REPO_ROOT / args.probe_root
+    processed_dir = (args.processed_root / args.dataset).resolve()
+    static = pl.read_parquet(processed_dir / "static.parquet", columns=["stay_id", SOURCE_COLUMN])
+    source_by_stay = dict(zip(static["stay_id"].to_list(), static[SOURCE_COLUMN].to_list()))
+
+    rows: list[dict[str, Any]] = []
+    for seed in args.seeds:
+        for task in args.tasks:
+            split = probe.load_task_split(processed_dir, task, seed)
+            sources = np.asarray([source_by_stay[int(s)] for s in split.stay_ids["test"]])
+            task_type = "binary" if task in probe.CLASSIFICATION_TASKS else "regression"
+            for paradigm in args.paradigms:
+                embeddings, emb_stay_ids, _ = probe.load_embedding_file(
+                    embedding_root / args.dataset / f"seed{seed}" / f"{paradigm}.npz"
+                )
+                row_by_stay = {int(s): i for i, s in enumerate(emb_stay_ids)}
+                raw = {
+                    name: embeddings[probe.rows_for(ids, row_by_stay)]
+                    for name, ids in split.stay_ids.items()
+                }
+                scaler = probe.Standardizer.fit(raw["train"])
+                x = {name: scaler.transform(values) for name, values in raw.items()}
+                stored = stored_records(probe_root, args.dataset, task, seed, paradigm)
+                for probe_name, (lam, pred) in selected_predictions(task, x, split).items():
+                    portions = per_source_metrics(task_type, pred, split.labels["test"], sources)
+                    overall = portions[0]
+                    reference = stored[probe_name]
+                    if lam != reference["selected_lambda"]:
+                        raise RuntimeError(
+                            f"Selected lambda changed for {task}/{seed}/{paradigm}/{probe_name}"
+                        )
+                    check = "auprc" if task_type == "binary" else "mae"
+                    if abs(overall[check] - reference[f"test/{check}"]) > max(
+                        PARITY_TOLERANCE, 1e-6 * abs(reference[f"test/{check}"])
+                    ):
+                        raise RuntimeError(
+                            f"Overall test {check} changed for "
+                            f"{task}/{seed}/{paradigm}/{probe_name}: "
+                            f"{overall[check]} vs {reference[f'test/{check}']}"
+                        )
+                    for portion in portions:
+                        rows.append(
+                            {
+                                "dataset": args.dataset,
+                                "task": task,
+                                "seed": seed,
+                                "paradigm": paradigm,
+                                "probe": probe_name,
+                                "selected_lambda": lam,
+                                **portion,
+                            }
+                        )
+                print(f"{task}/seed{seed}/{paradigm}: ok", flush=True)
+
+    per_seed = pd.DataFrame(rows)
+    out_dir = REPO_ROOT / args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    per_seed.to_csv(out_dir / "converged_probe_per_source_per_seed.csv", index=False)
+    aggregate(per_seed).to_csv(out_dir / "converged_probe_per_source_aggregated.csv", index=False)
+    paired_deltas(per_seed).to_csv(
+        out_dir / "converged_probe_per_source_paired_deltas.csv", index=False
+    )
+    print(f"Wrote {len(per_seed)} rows to {out_dir}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
